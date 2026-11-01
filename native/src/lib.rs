@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod alphabet;
+pub mod cuts;
 pub mod features;
 pub mod packet;
 pub mod schema;
@@ -17,6 +18,7 @@ pub mod model;
 pub mod cuda;
 
 pub use alphabet::{AlphabetError, CertificateError, CnotAlphabet, WordCertificate};
+pub use cuts::{register_labeled_cuts, LabeledCut, LabeledCutError};
 pub use features::{
     FeatureBuildError, FeatureComputation, FeaturePolicy, FeatureProducer, FeatureRegistry,
     FeatureValue,

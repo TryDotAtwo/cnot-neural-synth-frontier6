@@ -114,6 +114,7 @@ name = "cnot103-native"
 version = "0.1.0"
 dependencies = [
  "cmake",
+ "sha2",
  "tch",
 ]
 
