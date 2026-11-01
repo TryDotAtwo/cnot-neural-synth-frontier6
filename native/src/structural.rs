@@ -1,7 +1,7 @@
 //! Exact ports of selected source feature producers.
 //!
-//! Current built-in coverage is 39 of the canonical 103 IDs: A01-A20,
-//! B01-B12, F01, C01, D03 and H01-H04. Contextual providers add coverage only
+//! Current built-in coverage is 40 of the canonical 103 IDs: A01-A20,
+//! B01-B12, F01-F02, C01, D03 and H01-H04. Contextual providers add coverage only
 //! when their explicit physical input contracts are supplied; no placeholder
 //! values are emitted for unavailable features.
 
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 pub fn is_builtin(id: FeatureId) -> bool {
     match id.family() {
         'A' | 'B' => true,
-        'F' => id.ordinal() == 1,
+        'F' => (1..=2).contains(&id.ordinal()),
         'C' => id.ordinal() == 1,
         'D' => id.ordinal() == 3,
         'H' => (1..=4).contains(&id.ordinal()),
@@ -33,6 +33,11 @@ pub struct BuiltinMetadata {
 pub fn metadata(id: FeatureId) -> Option<BuiltinMetadata> {
     let (version, cost, dependencies) = match (id.family(), id.ordinal()) {
         ('A', 1..=20) | ('B', 1..=12) | ('F', 1) => ("structural_v1", "T1", &["M"][..]),
+        ('F', 2) => (
+            "connectivity_zero_diagonal_v1",
+            "T1",
+            &["M", "off_diagonal_support_components"][..],
+        ),
         ('C', 1) => ("gf2_rank_residual_v1", "T1", &["M"][..]),
         ('D', 3) => (
             "width2_parity_multiplicity_v1",
@@ -436,6 +441,13 @@ pub fn compute(
                 .filter(|value| **value > 0)
                 .count() as f32,
         ],
+    );
+    put_global(
+        &mut output,
+        'F',
+        2,
+        n as i64 - components.len() as i64 + diagonal_residual.iter().sum::<i64>(),
+        1,
     );
 
     let has = |family, ordinal| enabled_ids.contains(&id(family, ordinal));
