@@ -3,8 +3,8 @@
 The canonical packet layout contains 103 feature IDs. Current producer coverage
 is deliberately split by input contract:
 
-- 40 feature IDs have built-in structural producers: A01-A20, B01-B12, F01-F02,
-  C01, D03, and H01-H04.
+- 41 feature IDs have built-in structural producers: A01-A20, B01-B12, F01-F02,
+  G05, C01, D03, and H01-H04.
 - C02, C03, and C04 can be registered for explicit labeled wire cuts. They
   require an `augmentation_only` symmetry policy and are bound to the ordered
   cut set by the producer version. A matrix width with no registered cut is
@@ -29,12 +29,15 @@ is deliberately split by input contract:
   zero-template partial-shear cost, ordered-pair gradient, and gradient
   statistics. They require `augmentation_only` because the source block fixes
   the first half of the physical wires.
-- 58 IDs can produce features under their stated input contracts; the remaining
-  45 IDs have no native producer yet. Their packet rows remain
+- G05 is an exact four-bin histogram of the ordered pair of physical columns;
+  its channel order is `00, 10, 01, 11` and includes diagonal pairs.
+- 59 IDs can produce features under their stated input contracts; the remaining
+  44 IDs have no native producer yet. Their packet rows remain
   unavailable; the native code does not claim complete-103 coverage.
 
 The native feature tests currently exercise exact F02 connectivity/diagonal
-counts, E01/E04/E05 partial-shear gradients and statistics, C02-C05 cut and partial-shear
+counts, G05 ordered column-pair histograms, E01/E04/E05 partial-shear gradients
+and statistics, C02-C05 cut and partial-shear
 ranks, C06/C07 restricted-subspace intersections, C09 candidate-rank increment,
 C10 selected residual ranks, D01/D02/D04-D08 physical-block parity features,
 incidence, pattern budgets, symmetry policy, alphabet mismatch, width mismatch,

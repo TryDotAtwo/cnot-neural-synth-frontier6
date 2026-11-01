@@ -308,7 +308,7 @@ impl FeatureRegistry {
             .is_some_and(|limit| estimated_bytes > limit);
 
         // The source implementation computes its structural bundle once per
-        // state and then serves A/B/F01 from that shared result.
+        // state; selected IDs are read from the shared result.
         let needs_structural = !budget_exhausted_before_compute
             && policy
                 .enabled_ids

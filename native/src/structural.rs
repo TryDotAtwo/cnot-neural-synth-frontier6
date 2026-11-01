@@ -1,9 +1,9 @@
 //! Exact ports of selected source feature producers.
 //!
-//! Current built-in coverage is 40 of the canonical 103 IDs: A01-A20,
-//! B01-B12, F01-F02, C01, D03 and H01-H04. Contextual providers add coverage only
-//! when their explicit physical input contracts are supplied; no placeholder
-//! values are emitted for unavailable features.
+//! Current built-in coverage is 41 of the canonical 103 IDs: A01-A20,
+//! B01-B12, F01-F02, G05, C01, D03 and H01-H04. Contextual providers add
+//! coverage only when their explicit physical input contracts are supplied;
+//! no placeholder values are emitted for unavailable features.
 
 use crate::features::FeatureValue;
 use crate::schema::{feature_spec, FeatureId, FeatureRole};
@@ -14,6 +14,7 @@ pub fn is_builtin(id: FeatureId) -> bool {
     match id.family() {
         'A' | 'B' => true,
         'F' => (1..=2).contains(&id.ordinal()),
+        'G' => id.ordinal() == 5,
         'C' => id.ordinal() == 1,
         'D' => id.ordinal() == 3,
         'H' => (1..=4).contains(&id.ordinal()),
@@ -37,6 +38,11 @@ pub fn metadata(id: FeatureId) -> Option<BuiltinMetadata> {
             "connectivity_zero_diagonal_v1",
             "T1",
             &["M", "off_diagonal_support_components"][..],
+        ),
+        ('G', 5) => (
+            "exact_column_pair_histogram_v1",
+            "T1",
+            &["M", "column_weights", "column_intersections"][..],
         ),
         ('C', 1) => ("gf2_rank_residual_v1", "T1", &["M"][..]),
         ('D', 3) => (
@@ -94,7 +100,7 @@ pub fn compute(
         .map(|index| col_weight[index / n] - col_intersection[index])
         .collect::<Vec<_>>();
 
-    let mut output = HashMap::with_capacity(39);
+    let mut output = HashMap::with_capacity(41);
     put_pair(
         &mut output,
         'A',
@@ -449,6 +455,29 @@ pub fn compute(
         n as i64 - components.len() as i64 + diagonal_residual.iter().sum::<i64>(),
         1,
     );
+
+    if enabled_ids.contains(&id('G', 5)) {
+        let Some(value_count) = cells.checked_mul(4) else {
+            return Err("G05 pair-histogram output size overflow".into());
+        };
+        let mut g05 = Vec::new();
+        g05.try_reserve_exact(value_count)
+            .map_err(|_| "G05 pair-histogram output allocation failed")?;
+        for left in 0..n {
+            for right in 0..n {
+                let overlap = col_intersection[left * n + right];
+                let left_weight = col_weight[left];
+                let right_weight = col_weight[right];
+                g05.extend([
+                    (n as i64 - left_weight - right_weight + overlap) as f32,
+                    (left_weight - overlap) as f32,
+                    (right_weight - overlap) as f32,
+                    overlap as f32,
+                ]);
+            }
+        }
+        put_pair(&mut output, 'G', 5, n, 4, g05);
+    }
 
     let has = |family, ordinal| enabled_ids.contains(&id(family, ordinal));
     if has('C', 1) {
