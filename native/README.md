@@ -25,12 +25,16 @@ is deliberately split by input contract:
 - F02 computes `n - support_components + zero_diagonal_count` exactly. This is
   the descriptor used by the stage-35 lower-bound branch; the feature value
   alone carries no theorem witness or lower-bound claim.
-- 55 IDs can produce features under their stated input contracts; the remaining
-  48 IDs have no native producer yet. Their packet rows remain
+- E01, E04, and E05 can be explicitly registered for the source-defined
+  zero-template partial-shear cost, ordered-pair gradient, and gradient
+  statistics. They require `augmentation_only` because the source block fixes
+  the first half of the physical wires.
+- 58 IDs can produce features under their stated input contracts; the remaining
+  45 IDs have no native producer yet. Their packet rows remain
   unavailable; the native code does not claim complete-103 coverage.
 
 The native feature tests currently exercise exact F02 connectivity/diagonal
-counts, C02-C05 cut and partial-shear
+counts, E01/E04/E05 partial-shear gradients and statistics, C02-C05 cut and partial-shear
 ranks, C06/C07 restricted-subspace intersections, C09 candidate-rank increment,
 C10 selected residual ranks, D01/D02/D04-D08 physical-block parity features,
 incidence, pattern budgets, symmetry policy, alphabet mismatch, width mismatch,

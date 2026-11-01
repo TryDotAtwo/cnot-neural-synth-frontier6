@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod alphabet;
+pub mod basis_gradient;
 pub mod block_parities;
 pub mod features;
 pub mod packet;
@@ -20,6 +21,7 @@ pub mod model;
 pub mod cuda;
 
 pub use alphabet::{AlphabetError, CertificateError, CnotAlphabet, WordCertificate};
+pub use basis_gradient::register_basis_gradient;
 pub use block_parities::{register_block_parities, BlockContext};
 pub use features::{
     FeatureBuildError, FeatureComputation, FeaturePolicy, FeatureProducer, FeatureRegistry,
