@@ -41,6 +41,10 @@ and statistics, C02-C05 cut and partial-shear
 ranks, C06/C07 restricted-subspace intersections, C09 candidate-rank increment,
 C10 selected residual ranks, D01/D02/D04-D08 physical-block parity features,
 incidence, pattern budgets, symmetry policy, alphabet mismatch, width mismatch,
-invalid contexts, relabeling, and transactional provider registration. These
-CPU tests do not establish Torch, CUDA, model checkpoint migration,
-training-loop, or end-to-end search acceptance.
+invalid contexts, relabeling, and transactional provider registration. Native
+training primitives also include a CPython-compatible sampler, checked progress
+counters, and an immutable hash-checked checkpoint container. A separate-process
+test restores the sampler and verifies the next batch. Checkpoint model and
+optimizer payloads are still opaque bytes supplied by a future runtime adapter;
+this is not a model/optimizer training loop. CPU tests do not establish Torch,
+CUDA, Python checkpoint migration, or end-to-end search acceptance.

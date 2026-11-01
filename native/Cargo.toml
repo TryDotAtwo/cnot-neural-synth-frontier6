@@ -14,6 +14,8 @@ torch = ["dep:tch"]
 cuda = ["torch"]
 
 [dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
 sha2 = "=0.10.9"
 tch = { version = "=0.22.0", optional = true }
 

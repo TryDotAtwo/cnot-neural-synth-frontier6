@@ -3,6 +3,7 @@
 pub mod alphabet;
 pub mod basis_gradient;
 pub mod block_parities;
+pub mod checkpoint;
 pub mod features;
 pub mod packet;
 pub mod rank_features;
@@ -10,6 +11,7 @@ pub mod schema;
 pub mod shear;
 pub mod state;
 pub mod structural;
+pub mod training;
 
 #[cfg(feature = "torch")]
 pub mod basis;
@@ -23,6 +25,7 @@ pub mod cuda;
 pub use alphabet::{AlphabetError, CertificateError, CnotAlphabet, WordCertificate};
 pub use basis_gradient::register_basis_gradient;
 pub use block_parities::{register_block_parities, BlockContext};
+pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManifest, CheckpointStore};
 pub use features::{
     FeatureBuildError, FeatureComputation, FeaturePolicy, FeatureProducer, FeatureRegistry,
     FeatureValue,
@@ -35,6 +38,7 @@ pub use rank_features::{
 };
 pub use schema::{all_feature_specs, FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT};
 pub use state::{CnotGate, MatrixState};
+pub use training::{Progress, PythonRandomSnapshot, Sampler, SamplerSnapshot, TrainingError};
 
 #[cfg(feature = "torch")]
 pub use basis::{

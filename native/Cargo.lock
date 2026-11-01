@@ -114,6 +114,8 @@ name = "cnot103-native"
 version = "0.1.0"
 dependencies = [
  "cmake",
+ "serde",
+ "serde_json",
  "sha2",
  "tch",
 ]
