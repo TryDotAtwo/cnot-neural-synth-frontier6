@@ -8,6 +8,9 @@ pub mod state;
 pub mod structural;
 
 #[cfg(feature = "torch")]
+pub mod basis;
+
+#[cfg(feature = "torch")]
 pub mod model;
 
 #[cfg(feature = "cuda")]
@@ -21,3 +24,10 @@ pub use features::{
 pub use packet::{FeatureEntry, FeaturePacket, FeaturePacketError, FeatureStatus, StateIdentity};
 pub use schema::{all_feature_specs, FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT};
 pub use state::{CnotGate, MatrixState};
+
+#[cfg(feature = "torch")]
+pub use basis::{
+    compile_basis, partial_shear, recognize_shear, BasisBinding, BasisCandidate, BasisChoice,
+    BasisChoiceKind, BasisField, BasisFieldOutput, BasisLossAudit, BasisLossBackend, BasisSide,
+    BasisTemplate, ShearDecomposition,
+};
