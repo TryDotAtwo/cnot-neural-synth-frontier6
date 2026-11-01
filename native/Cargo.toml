@@ -1,0 +1,20 @@
+[package]
+name = "cnot103-native"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+name = "cnot103_native"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+torch = ["dep:tch"]
+cuda = ["torch"]
+
+[dependencies]
+tch = { version = "=0.22.0", optional = true }
+
+[build-dependencies]
+cmake = "0.1"
