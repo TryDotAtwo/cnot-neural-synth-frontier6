@@ -1,9 +1,9 @@
 //! Exact ports of selected source feature producers.
 //!
-//! Current coverage is 39 of the canonical 103 IDs: A01-A20, B01-B12, F01,
-//! C01, D03 and H01-H04. The other 64 IDs remain unavailable until their
-//! source computations and dependencies are ported; no placeholder values are
-//! emitted for them.
+//! Current built-in coverage is 39 of the canonical 103 IDs: A01-A20,
+//! B01-B12, F01, C01, D03 and H01-H04. Contextual providers add coverage only
+//! when their explicit physical input contracts are supplied; no placeholder
+//! values are emitted for unavailable features.
 
 use crate::features::FeatureValue;
 use crate::schema::{feature_spec, FeatureId, FeatureRole};

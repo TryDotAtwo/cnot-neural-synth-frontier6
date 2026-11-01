@@ -1,7 +1,8 @@
 use cnot103_native::schema::feature_spec;
 use cnot103_native::{
-    register_labeled_cuts, FeatureComputation, FeatureId, FeaturePolicy, FeatureProducer,
-    FeatureRegistry, FeatureStatus, LabeledCut, MatrixState,
+    register_labeled_cuts, register_rank_increment_probes, register_restricted_intersections,
+    FeatureComputation, FeatureId, FeaturePolicy, FeatureProducer, FeatureRegistry, FeatureStatus,
+    LabeledCut, MatrixState, RankIncrementProbe, RestrictedIntersection,
 };
 
 struct ExistingC03(cnot103_native::FeatureSpec);
@@ -132,5 +133,53 @@ fn labeled_cut_registration_does_not_leave_a_partial_provider_set() {
     assert_eq!(
         specs[FeatureId::new(b'C', 3).unwrap().index()].producer_version,
         "preexisting_c03_v1"
+    );
+}
+
+#[test]
+fn restricted_subspace_features_distinguish_row_column_and_candidate_rank() {
+    // M = [[1,1,0],[0,1,1],[0,0,1]]. On coordinate {1}, rows 0 and 1
+    // coincide, while columns 0 and 1 differ. Candidate e1 adds one rank to
+    // row 0 restricted to coordinates {0,1}.
+    let state =
+        MatrixState::from_packed_rows(3, "all_to_all_unit_cnot:3", vec![0b011, 0b110, 0b100])
+            .unwrap();
+    let intersection = RestrictedIntersection::new(3, vec![0], vec![1], vec![1]).unwrap();
+    let increment = RankIncrementProbe::new(3, vec![0], vec![0, 1], vec![1]).unwrap();
+    let mut registry = FeatureRegistry::new();
+    register_restricted_intersections(&mut registry, vec![intersection]).unwrap();
+    register_rank_increment_probes(&mut registry, vec![increment]).unwrap();
+    let policy = FeaturePolicy {
+        enabled_ids: [6, 7, 9]
+            .into_iter()
+            .map(|ordinal| FeatureId::new(b'C', ordinal).unwrap())
+            .collect(),
+        seed: 0,
+        schema_id: "restricted-subspace-test-v1".into(),
+        solver_assisted: false,
+        symmetry_contract: "augmentation_only".into(),
+        evaluations: None,
+        max_bytes: None,
+    };
+
+    let packet = registry.build(&[state], &policy).unwrap();
+
+    for (ordinal, expected) in [(6, 1.0), (7, 0.0), (9, 1.0)] {
+        let feature = packet.feature(FeatureId::new(b'C', ordinal).unwrap());
+        assert!(feature.row_is_available(0));
+        assert_eq!(feature.values, vec![expected]);
+        assert_eq!(feature.token_valid, Some(vec![1]));
+    }
+    for ordinal in [6, 7] {
+        assert_eq!(
+            packet
+                .feature(FeatureId::new(b'C', ordinal).unwrap())
+                .incidence,
+            Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+        );
+    }
+    assert_eq!(
+        packet.feature(FeatureId::new(b'C', 9).unwrap()).incidence,
+        Some(vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
     );
 }
