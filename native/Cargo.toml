@@ -39,6 +39,11 @@ path = "tests/model_layout.rs"
 required-features = ["torch"]
 
 [[test]]
+name = "builtin_graph_cuda_resume"
+path = "tests/builtin_graph_cuda_resume.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "cuda_children"
 path = "tests/cuda_children.rs"
 required-features = ["cuda"]

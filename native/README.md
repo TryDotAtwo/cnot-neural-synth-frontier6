@@ -329,9 +329,11 @@ GPU, set CNOT103_REQUIRE_CUDA=1 and
 CNOT103_RESUME_DEVICE=cuda:0 or cuda:1 before invoking
 cargo test --features cuda --test tch_training_resume
 fresh_process_resume_matches_uninterrupted. The full current CUDA suite also
-passed on cuda:0 with LD_PRELOAD unset: 155 passed, 0 failed, 1 ignored across
-40 test targets. The second-GPU resume run passed separately. This exercises
+passed on cuda:0 with LD_PRELOAD unset: 156 passed, 0 failed, 2 ignored across
+41 test targets. The second-GPU resume run passed separately. This exercises
 the generic trainer and checkpoint path; it is not a full 103-feature CNOT
 objective run.
 
 The added CUDA integration test constructs a packet using all 41 default built-in producers, runs the native model forward pass, and accepts one AdamW update on device 0. Context-bound features are not included in that test.
+
+The added full-graph CUDA checkpoint test trains with the 41 built-in producers, saves after one Bellman/AdamW update, restores in a new process, applies the next update, and matches uninterrupted parameter values within 1e-6, sampler/progress, objective exposure ledger, and RNG state on cuda:0 and cuda:1. Context-bound providers remain outside this acceptance; it is not a complete-103 training run.
