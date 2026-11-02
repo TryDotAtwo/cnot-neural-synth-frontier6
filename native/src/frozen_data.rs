@@ -733,6 +733,48 @@ mod tests {
         std::fs::remove_file(path.with_extension("sha256")).unwrap();
     }
 
+    #[cfg(feature = "torch")]
+    #[test]
+    fn objective_binding_uses_the_loaded_artifact_and_its_train_panel() {
+        use crate::features::{FeaturePolicy, FeatureRegistry};
+        use crate::objective::{FullGraphObjective, FullGraphObjectiveConfig};
+
+        let unique = format!(
+            "tqp-frozen-bind-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        let pinned = sealed_fixture(&path);
+        let dataset = FrozenDataset::load_pinned(&path, &pinned).unwrap();
+        let registry = FeatureRegistry::new();
+        let policy = FeaturePolicy::all_model_inputs("frozen-data-binding-fixture");
+        let alphabet = CnotAlphabet::all_to_all_unit(4).unwrap();
+        let mut objective = FullGraphObjective::new(
+            vec![alphabet],
+            &registry,
+            policy,
+            Vec::new(),
+            Vec::new(),
+            FullGraphObjectiveConfig::default(),
+        )
+        .unwrap();
+
+        objective.bind_frozen_dataset(&dataset).unwrap();
+        let contract = objective.checkpoint_contract();
+        assert_eq!(
+            contract["frozen_dataset_sha256"].as_str(),
+            Some(pinned.as_str())
+        );
+        assert!(contract["training_records_sha256"].as_str().is_some());
+        assert!(contract["objective_sha256"].as_str().is_some());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("sha256")).unwrap();
+    }
+
     #[test]
     fn packed_rows_above_u64_keep_all_bits() {
         let n = 130u32;

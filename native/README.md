@@ -340,11 +340,12 @@ The sidecar alone is only an integrity check; production callers should pin the
 expected digest in a separately versioned experiment manifest.
 
 Before constructing `FullGraphObjectiveRunner`, call
-`objective.bind_frozen_dataset_sha256(&dataset.sha256)`. Checkpoint contract v3
-then binds the frozen artifact digest and, when the runner is built, the separate
-ordered training-record digest. A resume with a different artifact or record
-sequence is rejected. This is a library path; a complete production training CLI
-and full source/103-feature acceptance are still open.
+`objective.bind_frozen_dataset(&dataset)`. Checkpoint contract v3 binds the
+frozen artifact digest and the exact ordered train-panel digest immediately;
+runner construction rechecks that its records match the frozen panel. A resume
+with a different artifact or record sequence is rejected. This is a library path;
+a complete production training CLI and full source/103-feature acceptance are
+still open.
 
 ## GPU fresh-process checkpoint acceptance
 

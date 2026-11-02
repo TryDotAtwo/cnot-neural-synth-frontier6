@@ -357,9 +357,9 @@ impl FullGraphObjective {
         })
     }
 
-    /// Bind the exact sealed frozen-data artifact before constructing a runner.
-    /// The ordered TrainingRecord digest is bound separately when the runner is
-    /// created; both identities are required to resume the same training run.
+    /// Bind only the artifact identity before constructing a runner.
+    /// Prefer `bind_frozen_dataset` when the loaded dataset is available so its
+    /// train-panel digest is bound at the same time.
     pub fn bind_frozen_dataset_sha256(&mut self, sha256: &str) -> Result<(), String> {
         if !is_sha256_hex(sha256) {
             return Err("frozen dataset fingerprint must be lowercase SHA-256 hex".into());
@@ -386,6 +386,44 @@ impl FullGraphObjective {
             Some(sha256),
         );
         self.frozen_dataset_sha256 = Some(sha256.to_owned());
+        Ok(())
+    }
+
+    /// Bind the dataset artifact and the exact training records obtained from
+    /// its sealed train panel. Runner construction rechecks this record digest.
+    pub fn bind_frozen_dataset(
+        &mut self,
+        dataset: &crate::frozen_data::FrozenDataset,
+    ) -> Result<(), String> {
+        if !is_sha256_hex(&dataset.sha256) {
+            return Err("frozen dataset fingerprint must be lowercase SHA-256 hex".into());
+        }
+        if let Some(bound) = &self.frozen_dataset_sha256 {
+            if bound != &dataset.sha256 {
+                return Err("objective is already bound to a different frozen dataset".into());
+            }
+        } else if self.training_records_sha256.is_some() {
+            return Err("frozen dataset must be bound before constructing the runner".into());
+        }
+        let records_digest = training_records_digest(dataset.train.records());
+        if let Some(bound) = &self.training_records_sha256 {
+            if bound != &records_digest {
+                return Err("frozen dataset train panel differs from the bound record set".into());
+            }
+        }
+        let policy_id = self.policy.id().map_err(|error| error.to_string())?;
+        self.config_sha256 = objective_config_digest(
+            &self.alphabets,
+            &self.exact_catalogs,
+            &policy_id,
+            &self.feature_contract_sha256,
+            &self.forbidden,
+            &self.config,
+            Some(&records_digest),
+            Some(&dataset.sha256),
+        );
+        self.training_records_sha256 = Some(records_digest);
+        self.frozen_dataset_sha256 = Some(dataset.sha256.clone());
         Ok(())
     }
 
