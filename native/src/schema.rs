@@ -2,7 +2,7 @@ use std::fmt;
 
 pub const FEATURE_COUNT: usize = 103;
 pub const FEATURE_ID_MANIFEST_ID: &str = "cnot_feature_ids_a01_i11_v1";
-pub const FEATURE_LAYOUT_ID: &str = "runtime_packet_layout_v22";
+pub const FEATURE_LAYOUT_ID: &str = "runtime_packet_layout_v24";
 
 pub const FAMILY_COUNTS: [(u8, u8); 9] = [
     (b'A', 20),
@@ -122,7 +122,25 @@ fn in_set(value: u8, values: &[u8]) -> bool {
     values.contains(&value)
 }
 
+pub(crate) fn is_reserved_native_layout(id: FeatureId) -> bool {
+    matches!(
+        (id.family, id.ordinal),
+        (b'C', 8)
+            | (b'D', 9..=14)
+            | (b'E', 3)
+            | (b'E', 6..=9)
+            | (b'F', 3..=10)
+            | (b'H', 6..=7)
+            | (b'I', 1..=11)
+    )
+}
+
 fn role_channels(id: FeatureId) -> (FeatureRole, usize) {
+    if is_reserved_native_layout(id) {
+        // Static fallback only: a concrete provider must declare its shape and
+        // identity before the feature can enter a model.
+        return (FeatureRole::Group, 1);
+    }
     let family = id.family;
     let ordinal = id.ordinal;
     match family {
@@ -157,6 +175,7 @@ fn role_channels(id: FeatureId) -> (FeatureRole, usize) {
             }
         }
         b'D' => match ordinal {
+            3 => (FeatureRole::Pair, 3),
             5 => (FeatureRole::Node, 2),
             7 => (FeatureRole::Group, 5),
             9 | 10 => (FeatureRole::Group, 1),
@@ -218,6 +237,14 @@ fn role_channels(id: FeatureId) -> (FeatureRole, usize) {
     }
 }
 
+fn default_wire_roles(id: FeatureId, role: FeatureRole) -> Vec<String> {
+    if role == FeatureRole::Group && !is_reserved_native_layout(id) {
+        vec!["source".into(), "target".into()]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn all_feature_specs() -> Vec<FeatureSpec> {
     (0..FEATURE_COUNT)
         .map(|index| {
@@ -232,11 +259,7 @@ pub fn all_feature_specs() -> Vec<FeatureSpec> {
                 dependencies: vec!["M".into()],
                 exactness: "unknown".into(),
                 cost_tier: "T1".into(),
-                wire_roles: if role == FeatureRole::Group {
-                    vec!["source".into(), "target".into()]
-                } else {
-                    Vec::new()
-                },
+                wire_roles: default_wire_roles(id, role),
                 requires_solver_assisted: false,
             }
         })
@@ -254,11 +277,7 @@ pub fn feature_spec(id: FeatureId) -> FeatureSpec {
         dependencies: vec!["M".into()],
         exactness: "unknown".into(),
         cost_tier: "T1".into(),
-        wire_roles: if role == FeatureRole::Group {
-            vec!["source".into(), "target".into()]
-        } else {
-            Vec::new()
-        },
+        wire_roles: default_wire_roles(id, role),
         requires_solver_assisted: false,
     }
 }

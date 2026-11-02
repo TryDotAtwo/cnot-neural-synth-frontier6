@@ -9,6 +9,7 @@
 
 use crate::model::{EncodedState, FieldOutput, FusionDistanceField, ModelConfig, ModelError};
 use crate::packet::FeaturePacket;
+pub use crate::paid_basis::BasisSide;
 use crate::schema::FeatureSpec;
 use crate::state::MatrixState;
 use std::collections::HashSet;
@@ -21,12 +22,6 @@ mod objective;
 pub use compiler::{compile_basis, BasisCandidate};
 pub use decomposition::{partial_shear, recognize_shear, BasisBinding, ShearDecomposition};
 pub use objective::{BasisLossAudit, BasisLossBackend};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BasisSide {
-    Source,
-    Target,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BasisChoiceKind {
@@ -275,7 +270,7 @@ impl BasisField {
         let proposer = BasisProposal::new(
             &(path / "proposer"),
             config.wire_dim,
-            config.proposal_hidden_dim,
+            config.basis_proposal_hidden_dim,
         );
         Ok(Self { field, proposer })
     }

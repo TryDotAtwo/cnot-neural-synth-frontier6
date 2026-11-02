@@ -1,0 +1,21 @@
+{
+  "compiler_file": "code/shared_synth.py",
+  "compiler_source_sha256": "c2e0d974d3ea44451ac2e79d0fd89f20429aa80e5eb88790e22999ea3a1fed3a",
+  "local_atlas_file": "code/exact_basis.py",
+  "local_atlas_source_sha256": "96b826d1d1d0e91f14ffd5349069254335521b505596059026eeb1da77db424d",
+  "block": [[0, 0, 1, 0], [1, 0, 1, 0], [1, 1, 1, 1], [1, 1, 1, 0], [0, 0, 1, 1], [1, 0, 1, 0]],
+  "source_wires": [0, 1, 2, 3],
+  "target_wires": [4, 5, 6, 7, 8, 9],
+  "dimension": 10,
+  "direct_cost": 14,
+  "paid_cost": 12,
+  "preparation": [[2, 0]],
+  "restoration": [[2, 0]],
+  "core": [[2, 4], [0, 5], [0, 6], [1, 6], [3, 6], [0, 7], [1, 7], [2, 8], [3, 8], [0, 9]],
+  "word": [[2, 0], [2, 4], [0, 5], [0, 6], [1, 6], [3, 6], [0, 7], [1, 7], [2, 8], [3, 8], [0, 9], [2, 0]],
+  "transformed_block": [[0, 0, 1, 0], [1, 0, 0, 0], [1, 1, 0, 1], [1, 1, 0, 0], [0, 0, 1, 1], [1, 0, 0, 0]],
+  "source_basis": [[1, 0, 1, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+  "target_basis": [[1, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0], [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1]],
+  "tested_groups": 10,
+  "accepted_moves": [{"sweep": 0, "side": "source", "group_indices": [0, 1, 2, 3], "cost_before": 14, "cost_after": 12}]
+}

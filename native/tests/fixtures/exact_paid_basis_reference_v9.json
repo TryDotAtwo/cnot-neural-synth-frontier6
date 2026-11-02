@@ -1,0 +1,61 @@
+{
+  "reference_file": "code/exact_basis.py",
+  "reference_source_sha256": "96b826d1d1d0e91f14ffd5349069254335521b505596059026eeb1da77db424d",
+  "algorithm": "atlas(width, side) followed by optimize(vectors, side)",
+  "cases": [
+    {
+      "width": 2,
+      "side": "source",
+      "vectors": [[1, 1], [1, 1], [1, 0], [1, 1]],
+      "operations": [[0, 1]],
+      "direct_cost": 7,
+      "paid_cost": 6,
+      "transformed_vectors": [[0, 1], [0, 1], [1, 0], [0, 1]]
+    },
+    {
+      "width": 2,
+      "side": "target",
+      "vectors": [[1, 1], [1, 1], [1, 0], [1, 1]],
+      "operations": [[1, 0]],
+      "direct_cost": 7,
+      "paid_cost": 6,
+      "transformed_vectors": [[0, 1], [0, 1], [1, 0], [0, 1]]
+    },
+    {
+      "width": 3,
+      "side": "source",
+      "vectors": [[0, 0, 1], [1, 1, 0], [1, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]],
+      "operations": [[1, 0]],
+      "direct_cost": 12,
+      "paid_cost": 10,
+      "transformed_vectors": [[0, 0, 1], [1, 0, 0], [1, 0, 1], [1, 0, 1], [1, 0, 0], [0, 1, 0]]
+    },
+    {
+      "width": 3,
+      "side": "target",
+      "vectors": [[0, 0, 1], [1, 1, 0], [1, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]],
+      "operations": [[0, 1]],
+      "direct_cost": 12,
+      "paid_cost": 10,
+      "transformed_vectors": [[0, 0, 1], [1, 0, 0], [1, 0, 1], [1, 0, 1], [1, 0, 0], [0, 1, 0]]
+    },
+    {
+      "width": 4,
+      "side": "source",
+      "vectors": [[0, 0, 1, 0], [1, 0, 1, 0], [1, 1, 1, 1], [1, 1, 1, 0], [0, 0, 1, 1], [1, 0, 1, 0]],
+      "operations": [[2, 0]],
+      "direct_cost": 14,
+      "paid_cost": 12,
+      "transformed_vectors": [[0, 0, 1, 0], [1, 0, 0, 0], [1, 1, 0, 1], [1, 1, 0, 0], [0, 0, 1, 1], [1, 0, 0, 0]]
+    },
+    {
+      "width": 4,
+      "side": "target",
+      "vectors": [[0, 0, 1, 0], [1, 0, 1, 0], [1, 1, 1, 1], [1, 1, 1, 0], [0, 0, 1, 1], [1, 0, 1, 0]],
+      "operations": [[0, 2]],
+      "direct_cost": 14,
+      "paid_cost": 12,
+      "transformed_vectors": [[0, 0, 1, 0], [1, 0, 0, 0], [1, 1, 0, 1], [1, 1, 0, 0], [0, 0, 1, 1], [1, 0, 0, 0]]
+    }
+  ]
+}

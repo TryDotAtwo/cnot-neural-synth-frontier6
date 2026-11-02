@@ -1,7 +1,7 @@
 //! Exact ports of selected source feature producers.
 //!
 //! Current built-in coverage is 41 of the canonical 103 IDs: A01-A20,
-//! B01-B12, F01-F02, G05, C01, D03 and H01-H04. Contextual providers add
+//! B01-B12, F01, G05, C01, D03 and H01-H05. Contextual providers add
 //! coverage only when their explicit physical input contracts are supplied;
 //! no placeholder values are emitted for unavailable features.
 
@@ -13,11 +13,11 @@ use std::collections::HashMap;
 pub fn is_builtin(id: FeatureId) -> bool {
     match id.family() {
         'A' | 'B' => true,
-        'F' => (1..=2).contains(&id.ordinal()),
+        'F' => id.ordinal() == 1,
         'G' => id.ordinal() == 5,
         'C' => id.ordinal() == 1,
         'D' => id.ordinal() == 3,
-        'H' => (1..=4).contains(&id.ordinal()),
+        'H' => (1..=5).contains(&id.ordinal()),
         _ => false,
     }
 }
@@ -34,11 +34,6 @@ pub struct BuiltinMetadata {
 pub fn metadata(id: FeatureId) -> Option<BuiltinMetadata> {
     let (version, cost, dependencies) = match (id.family(), id.ordinal()) {
         ('A', 1..=20) | ('B', 1..=12) | ('F', 1) => ("structural_v1", "T1", &["M"][..]),
-        ('F', 2) => (
-            "connectivity_zero_diagonal_v1",
-            "T1",
-            &["M", "off_diagonal_support_components"][..],
-        ),
         ('G', 5) => (
             "exact_column_pair_histogram_v1",
             "T1",
@@ -54,6 +49,11 @@ pub fn metadata(id: FeatureId) -> Option<BuiltinMetadata> {
         ('H', 2) => ("matrix_transpose_view_v1", "T0", &["M"][..]),
         ('H', 3) => ("matrix_inverse_view_v1", "T1", &["M"][..]),
         ('H', 4) => ("matrix_inverse_transpose_view_v1", "T1", &["M"][..]),
+        ('H', 5) => (
+            "aligned_four_matrix_views_pair_tokens_v1",
+            "T2",
+            &["M", "transpose", "inverse", "inverse_transpose"][..],
+        ),
         _ => return None,
     };
     Some(BuiltinMetadata {
@@ -448,14 +448,6 @@ pub fn compute(
                 .count() as f32,
         ],
     );
-    put_global(
-        &mut output,
-        'F',
-        2,
-        n as i64 - components.len() as i64 + diagonal_residual.iter().sum::<i64>(),
-        1,
-    );
-
     if enabled_ids.contains(&id('G', 5)) {
         let Some(value_count) = cells.checked_mul(4) else {
             return Err("G05 pair-histogram output size overflow".into());
@@ -501,10 +493,12 @@ pub fn compute(
         let mut d03 = Vec::with_capacity(cells * 3);
         for i in 0..n {
             for j in 0..n {
-                let shared = col_intersection[i * n + j];
+                // Source contract: ordered pairs of physical rows, binned by
+                // column pattern 10, 01, 11.
+                let shared = row_intersection[i * n + j];
                 d03.extend([
-                    (col_weight[i] - shared) as f32,
-                    (col_weight[j] - shared) as f32,
+                    (row_weight[i] - shared) as f32,
+                    (row_weight[j] - shared) as f32,
                     shared as f32,
                 ]);
             }
@@ -532,9 +526,14 @@ pub fn compute(
             transpose.iter().map(|v| *v as f32).collect(),
         );
     }
-    if has('H', 3) || has('H', 4) {
+    if has('H', 3) || has('H', 4) || has('H', 5) {
         let inverse_packed = gf2_inverse(state.packed_rows(), n)?;
         let inverse_dense = packed_to_dense(&inverse_packed, n);
+        let inverse_transpose = if has('H', 4) || has('H', 5) {
+            Some(transpose_dense(&inverse_dense, n))
+        } else {
+            None
+        };
         if has('H', 3) {
             put_pair(
                 &mut output,
@@ -546,15 +545,42 @@ pub fn compute(
             );
         }
         if has('H', 4) {
-            let inverse_transpose = transpose_dense(&inverse_dense, n);
             put_pair(
                 &mut output,
                 'H',
                 4,
                 n,
                 1,
-                inverse_transpose.iter().map(|v| *v as f32).collect(),
+                inverse_transpose
+                    .as_ref()
+                    .expect("inverse transpose was requested")
+                    .iter()
+                    .map(|v| *v as f32)
+                    .collect(),
             );
+        }
+        if has('H', 5) {
+            // H05 supplies aligned raw pair inputs to the model's learned
+            // pair-token projection. It does not claim the four views are
+            // interchangeable under an arbitrary CNOT alphabet.
+            let value_count = cells
+                .checked_mul(4)
+                .ok_or("H05 aligned-view output size overflow")?;
+            let mut h05 = Vec::new();
+            h05.try_reserve_exact(value_count)
+                .map_err(|_| "H05 aligned-view output allocation failed")?;
+            let inverse_transpose = inverse_transpose
+                .as_ref()
+                .expect("inverse transpose was requested");
+            for index in 0..cells {
+                h05.extend([
+                    matrix[index] as f32,
+                    transpose[index] as f32,
+                    inverse_dense[index] as f32,
+                    inverse_transpose[index] as f32,
+                ]);
+            }
+            put_pair(&mut output, 'H', 5, n, 4, h05);
         }
     }
     Ok(output)
@@ -684,7 +710,7 @@ fn gf2_rank(rows: &[u64], n: usize) -> usize {
     rank
 }
 
-fn gf2_inverse(rows: &[u64], n: usize) -> Result<Vec<u64>, String> {
+pub(crate) fn gf2_inverse(rows: &[u64], n: usize) -> Result<Vec<u64>, String> {
     let words = n.div_ceil(64);
     let mut matrix = rows.to_vec();
     let mut inverse = zeroed(n.checked_mul(words).ok_or("inverse size overflow")?)?;

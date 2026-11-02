@@ -12,13 +12,11 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new() -> Self {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "cnot103-checkpoint-{}-{}",
-                std::process::id(),
-                NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
-            ));
+        let path = std::env::temp_dir().join(format!(
+            "cnot103-checkpoint-{}-{}",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -78,6 +76,29 @@ fn checkpoint_is_immutable_and_round_trips_exact_state() {
 }
 
 #[test]
+fn idempotent_save_validates_and_repairs_snapshot_and_honors_best_pointer() {
+    let directory = TempDir::new();
+    let store = CheckpointStore::new(&directory.0);
+    let mut sampler = Sampler::new(5, 13).unwrap();
+    sampler.next(3).unwrap();
+    let state = checkpoint(sampler.snapshot());
+
+    let manifest = store.save(&state, false).unwrap();
+    assert!(!directory.0.join("best.json").exists());
+
+    // Repeating the same update with update_best=true must still publish best.
+    assert_eq!(store.save(&state, true).unwrap(), manifest);
+    assert!(directory.0.join("best.json").is_file());
+
+    // If the immutable payload disappeared, an idempotent save must restore it
+    // instead of returning a manifest that points to a missing checkpoint.
+    fs::remove_file(directory.0.join(&manifest.file)).unwrap();
+    assert_eq!(store.save(&state, true).unwrap(), manifest);
+    assert_eq!(store.load_latest(&contract()).unwrap(), state);
+    assert_eq!(store.load_best(&contract()).unwrap(), state);
+}
+
+#[test]
 fn checkpoint_refuses_contract_mismatch_conflict_and_corruption() {
     let directory = TempDir::new();
     let store = CheckpointStore::new(&directory.0);
@@ -103,6 +124,7 @@ fn checkpoint_refuses_contract_mismatch_conflict_and_corruption() {
         .write_all(b"tamper")
         .unwrap();
     assert!(store.load_latest(&contract()).is_err());
+    assert!(store.save(&state, false).is_err());
 }
 
 #[test]

@@ -6,10 +6,12 @@
 
 use crate::packet::{FeatureEntry, FeaturePacket, FeaturePacketError, FeatureStatus};
 use crate::schema::{
-    all_feature_specs, feature_spec, FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT,
+    all_feature_specs, feature_spec, is_reserved_native_layout, FeatureId, FeatureRole,
+    FeatureSpec, FEATURE_COUNT, FEATURE_ID_MANIFEST_ID, FEATURE_LAYOUT_ID,
 };
 use crate::state::MatrixState;
 use crate::structural;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -55,6 +57,14 @@ impl FeaturePolicy {
             evaluations: None,
             max_bytes: None,
         }
+    }
+
+    /// Selects the canonical 103-ID manifest with the weaker symmetry
+    /// contract needed by seeded Monte Carlo and physical-wire probes.
+    pub fn complete_103_augmentation_only(schema_id: impl Into<String>) -> Self {
+        let mut policy = Self::complete_103(schema_id);
+        policy.symmetry_contract = "augmentation_only".into();
+        policy
     }
 
     pub fn id(&self) -> Result<String, FeatureBuildError> {
@@ -132,6 +142,12 @@ pub struct FeatureValue {
 #[derive(Clone, Debug)]
 pub enum FeatureComputation {
     Computed(FeatureValue),
+    /// A computed tensor plus non-numeric per-row provenance that is retained
+    /// in the packet sidecar and never appended to model inputs.
+    ComputedWithProvenance {
+        value: FeatureValue,
+        provenance: Vec<String>,
+    },
     Unavailable {
         status: FeatureStatus,
         reason: String,
@@ -186,10 +202,35 @@ impl FeatureRegistry {
         producer: Box<dyn FeatureProducer>,
     ) -> Result<(), FeatureBuildError> {
         let spec = producer.spec().clone();
-        let canonical = feature_spec(spec.id);
-        if spec.role != canonical.role || spec.channels != canonical.channels {
+        if !is_reserved_native_layout(spec.id) {
+            let canonical = feature_spec(spec.id);
+            if spec.role != canonical.role || spec.channels != canonical.channels {
+                return Err(FeatureBuildError(format!(
+                    "{} provider differs from the canonical feature layout",
+                    spec.id
+                )));
+            }
+        }
+        if spec.channels == 0 {
             return Err(FeatureBuildError(format!(
-                "{} provider differs from canonical layout",
+                "{} provider must declare at least one channel",
+                spec.id
+            )));
+        }
+        if spec.role == FeatureRole::Group {
+            let unique_roles: std::collections::HashSet<_> = spec.wire_roles.iter().collect();
+            if spec.wire_roles.is_empty()
+                || spec.wire_roles.iter().any(|role| role.trim().is_empty())
+                || unique_roles.len() != spec.wire_roles.len()
+            {
+                return Err(FeatureBuildError(format!(
+                    "{} group provider must declare unique physical wire roles",
+                    spec.id
+                )));
+            }
+        } else if !spec.wire_roles.is_empty() {
+            return Err(FeatureBuildError(format!(
+                "{} non-group provider cannot declare wire roles",
                 spec.id
             )));
         }
@@ -238,6 +279,105 @@ impl FeatureRegistry {
                     .unwrap_or_else(|| feature_spec(id))
             })
             .collect()
+    }
+
+    /// Stable digest of every feature layout/provider contract in canonical
+    /// manifest order. Provider configuration belongs in `producer_version`.
+    pub fn contract_sha256(&self) -> String {
+        let mut digest = Sha256::new();
+        hash_contract_field(&mut digest, b"cnot103_feature_registry_contract_v1");
+        hash_contract_field(&mut digest, FEATURE_ID_MANIFEST_ID.as_bytes());
+        hash_contract_field(&mut digest, FEATURE_LAYOUT_ID.as_bytes());
+        for spec in self.specs() {
+            hash_contract_field(&mut digest, spec.id.to_string().as_bytes());
+            hash_contract_field(&mut digest, feature_role_name(spec.role).as_bytes());
+            hash_contract_field(&mut digest, &(spec.channels as u64).to_le_bytes());
+            hash_contract_field(&mut digest, spec.scope.as_bytes());
+            hash_contract_field(&mut digest, spec.producer_version.as_bytes());
+            hash_contract_field(&mut digest, &(spec.dependencies.len() as u64).to_le_bytes());
+            for dependency in &spec.dependencies {
+                hash_contract_field(&mut digest, dependency.as_bytes());
+            }
+            hash_contract_field(&mut digest, spec.exactness.as_bytes());
+            hash_contract_field(&mut digest, spec.cost_tier.as_bytes());
+            hash_contract_field(&mut digest, &(spec.wire_roles.len() as u64).to_le_bytes());
+            for role in &spec.wire_roles {
+                hash_contract_field(&mut digest, role.as_bytes());
+            }
+            hash_contract_field(&mut digest, &[u8::from(spec.requires_solver_assisted)]);
+            let symmetry = self
+                .providers
+                .get(&spec.id)
+                .map(|provider| provider.symmetry_contract())
+                .unwrap_or_else(|| {
+                    if structural::is_builtin(spec.id) {
+                        "exact_relabel"
+                    } else {
+                        "unavailable"
+                    }
+                });
+            hash_contract_field(&mut digest, symmetry.as_bytes());
+        }
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// Returns the policy's selected feature contracts in policy order.
+    ///
+    /// A model must not be constructed for a selected feature that has no
+    /// executable native provider. All selected contract failures are returned
+    /// together so one missing provider does not hide the rest. Built-in
+    /// structural features are computed by the shared structural engine and
+    /// therefore count as implemented.
+    pub fn selected_specs(
+        &self,
+        policy: &FeaturePolicy,
+    ) -> Result<Vec<FeatureSpec>, FeatureBuildError> {
+        validate_policy(policy)?;
+        let mut selected = Vec::with_capacity(policy.enabled_ids.len());
+        let mut failures = Vec::new();
+        for id in &policy.enabled_ids {
+            let Some(spec) = self.specs.get(id) else {
+                failures.push(format!("{id}: unknown feature ID"));
+                continue;
+            };
+
+            let mut reasons = Vec::new();
+            if spec.requires_solver_assisted && !policy.solver_assisted {
+                reasons.push("requires solver-assisted policy");
+            }
+            if policy.symmetry_contract == "exact_relabel"
+                && self
+                    .providers
+                    .get(id)
+                    .is_some_and(|provider| provider.symmetry_contract() != "exact_relabel")
+            {
+                reasons.push("provider symmetry contract mismatch");
+            }
+            if spec.producer_version.trim().is_empty()
+                || spec.producer_version == "unconfigured"
+                || (!self.providers.contains_key(id) && !structural::is_builtin(*id))
+            {
+                reasons.push("no executable native provider");
+            }
+
+            if reasons.is_empty() {
+                selected.push(spec.clone());
+            } else {
+                failures.push(format!("{id}: {}", reasons.join(", ")));
+            }
+        }
+        if failures.is_empty() {
+            Ok(selected)
+        } else {
+            Err(FeatureBuildError(format!(
+                "feature policy is not executable: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
     pub fn build(
@@ -412,10 +552,20 @@ impl FeatureRegistry {
                 }
                 producer.expect("checked above").compute(state, policy)
             };
-            if let FeatureComputation::Computed(value) = &result {
+            if let FeatureComputation::Computed(value)
+            | FeatureComputation::ComputedWithProvenance { value, .. } = &result
+            {
                 validate_value(&spec, state.dimension() as usize, value)?;
                 if spec.role == FeatureRole::Group {
                     max_groups = max_groups.max(value.shape[0]);
+                }
+                if let FeatureComputation::ComputedWithProvenance { provenance, .. } = &result {
+                    if provenance.iter().any(|item| item.trim().is_empty()) {
+                        return Err(FeatureBuildError(format!(
+                            "{} returned empty provenance metadata",
+                            spec.id
+                        )));
+                    }
                 }
             } else if let FeatureComputation::Unavailable { status, reason } = &result {
                 if *status == FeatureStatus::Computed || reason.trim().is_empty() {
@@ -434,6 +584,7 @@ impl FeatureRegistry {
         let mut available = Vec::with_capacity(states.len());
         let mut status = Vec::with_capacity(states.len());
         let mut reason = Vec::with_capacity(states.len());
+        let mut provenance = vec![Vec::new(); states.len()];
         let mut token_valid = if spec.role == FeatureRole::Group {
             vec![
                 0u8;
@@ -484,6 +635,26 @@ impl FeatureRegistry {
                         &mut incidence,
                     )?;
                 }
+                FeatureComputation::ComputedWithProvenance {
+                    value,
+                    provenance: row_provenance,
+                } => {
+                    available.push(1);
+                    status.push(FeatureStatus::Computed);
+                    reason.push(String::new());
+                    provenance[batch_index] = row_provenance;
+                    copy_feature_row(
+                        &spec,
+                        &value,
+                        batch_index,
+                        state.dimension() as usize,
+                        nodes,
+                        max_groups,
+                        &mut values,
+                        &mut token_valid,
+                        &mut incidence,
+                    )?;
+                }
             }
         }
 
@@ -494,11 +665,26 @@ impl FeatureRegistry {
             available,
             status,
             reason,
+            provenance,
             wire_roles: spec.wire_roles.clone(),
             token_valid: (spec.role == FeatureRole::Group).then_some(token_valid),
             incidence: (spec.role == FeatureRole::Group).then_some(incidence),
         })
     }
+}
+
+fn feature_role_name(role: FeatureRole) -> &'static str {
+    match role {
+        FeatureRole::Node => "node",
+        FeatureRole::Pair => "pair",
+        FeatureRole::Global => "global",
+        FeatureRole::Group => "group",
+    }
+}
+
+fn hash_contract_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
 }
 
 fn validate_value(

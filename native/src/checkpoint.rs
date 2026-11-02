@@ -192,10 +192,23 @@ impl CheckpointStore {
                 return Err(CheckpointError::ProgressRegression);
             }
             if previous.progress.attempted == manifest.progress.attempted {
-                if previous.sha256 == manifest.sha256 {
-                    return Ok(previous);
+                if previous.sha256 != manifest.sha256 {
+                    return Err(CheckpointError::ConflictingProgress);
                 }
-                return Err(CheckpointError::ConflictingProgress);
+                match self.load_manifest(&previous, &header.contract) {
+                    Ok(_) => {
+                        if update_best {
+                            self.write_pointer("best.json", &previous)?;
+                        }
+                        return Ok(previous);
+                    }
+                    // The caller still has the complete in-memory state, so a
+                    // missing immutable file can be reconstructed below. A
+                    // present but invalid file must remain a hard failure.
+                    Err(CheckpointError::Io(error))
+                        if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
             }
         }
 

@@ -5,14 +5,13 @@
 //! is selected by the tensor device, while `crate::cuda` contains project-owned
 //! kernels for exact GF(2) state operations.
 
+use crate::features::{FeaturePolicy, FeatureRegistry};
 use crate::packet::{FeaturePacket, FeaturePacketError};
-use crate::schema::{feature_spec, FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT};
+use crate::schema::{FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT, FEATURE_ID_MANIFEST_ID};
 use std::collections::HashMap;
 use std::fmt;
 use tch::nn::{self, Module};
 use tch::{Device, Kind, Tensor};
-
-const FAMILY_ORDER: [char; 9] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelError(pub String);
@@ -39,8 +38,10 @@ pub struct ModelConfig {
     pub attention_heads: i64,
     pub feedforward_dim: i64,
     pub fusion_blocks: usize,
-    pub proposal_hidden_dim: i64,
+    pub basis_proposal_hidden_dim: i64,
 }
+
+const AUXILIARY_HIDDEN_DIM: i64 = 128;
 
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -51,7 +52,7 @@ impl Default for ModelConfig {
             attention_heads: 4,
             feedforward_dim: 256,
             fusion_blocks: 2,
-            proposal_hidden_dim: 128,
+            basis_proposal_hidden_dim: 128,
         }
     }
 }
@@ -62,7 +63,7 @@ impl ModelConfig {
             || self.pair_dim < 1
             || self.attention_heads < 1
             || self.feedforward_dim < 1
-            || self.proposal_hidden_dim < 1
+            || self.basis_proposal_hidden_dim < 1
             || self.wire_dim % self.attention_heads != 0
         {
             return Err(ModelError(
@@ -70,6 +71,27 @@ impl ModelConfig {
             ));
         }
         Ok(())
+    }
+}
+
+fn xavier_uniform(input: i64, output: i64) -> nn::Init {
+    let bound = (6.0 / (input + output) as f64).sqrt();
+    nn::Init::Uniform {
+        lo: -bound,
+        up: bound,
+    }
+}
+
+fn pytorch_linear_config(input: i64) -> nn::LinearConfig {
+    // torch.nn.Linear.reset_parameters uses kaiming_uniform_(a=sqrt(5)),
+    // whose effective uniform bound is 1/sqrt(fan_in).
+    let bound = 1.0 / (input as f64).sqrt();
+    nn::LinearConfig {
+        ws_init: nn::Init::Uniform {
+            lo: -bound,
+            up: bound,
+        },
+        ..Default::default()
     }
 }
 
@@ -90,8 +112,8 @@ struct Mlp {
 impl Mlp {
     fn new(path: &nn::Path<'_>, input: i64, hidden: i64, output: i64) -> Self {
         Self {
-            first: nn::linear(path / "first", input, hidden, Default::default()),
-            second: nn::linear(path / "second", hidden, output, Default::default()),
+            first: nn::linear(path / "0", input, hidden, pytorch_linear_config(input)),
+            second: nn::linear(path / "2", hidden, output, pytorch_linear_config(hidden)),
         }
     }
 
@@ -102,21 +124,31 @@ impl Mlp {
 
 #[derive(Debug)]
 struct MultiHeadAttention {
-    query: nn::Linear,
-    key: nn::Linear,
-    value: nn::Linear,
-    output: nn::Linear,
+    in_proj_weight: Tensor,
+    in_proj_bias: Tensor,
+    out_proj: nn::Linear,
     heads: i64,
     width: i64,
 }
 
 impl MultiHeadAttention {
     fn new(path: &nn::Path<'_>, width: i64, heads: i64) -> Self {
+        let out_proj_config = nn::LinearConfig {
+            bs_init: Some(nn::Init::Const(0.0)),
+            ..pytorch_linear_config(width)
+        };
         Self {
-            query: nn::linear(path / "query", width, width, Default::default()),
-            key: nn::linear(path / "key", width, width, Default::default()),
-            value: nn::linear(path / "value", width, width, Default::default()),
-            output: nn::linear(path / "output", width, width, Default::default()),
+            // PyTorch MultiheadAttention stores the three input projections as
+            // one [3 * width, width] parameter and names it `in_proj_weight`.
+            // Keeping that exact layout makes reference state_dict conversion
+            // a byte-for-byte tensor mapping instead of a semantic guess.
+            in_proj_weight: path.var(
+                "in_proj_weight",
+                &[3 * width, width],
+                xavier_uniform(width, 3 * width),
+            ),
+            in_proj_bias: path.var("in_proj_bias", &[3 * width], nn::Init::Const(0.0)),
+            out_proj: nn::linear(path / "out_proj", width, width, out_proj_config),
             heads,
             width,
         }
@@ -140,9 +172,15 @@ impl MultiHeadAttention {
                 .view([batch, length, self.heads, head_dim])
                 .transpose(1, 2)
         };
-        let q = split(query.apply(&self.query), query_len);
-        let k = split(key.apply(&self.key), key_len);
-        let v = split(value.apply(&self.value), key_len);
+        let q_weight = self.in_proj_weight.narrow(0, 0, self.width);
+        let k_weight = self.in_proj_weight.narrow(0, self.width, self.width);
+        let v_weight = self.in_proj_weight.narrow(0, 2 * self.width, self.width);
+        let q_bias = self.in_proj_bias.narrow(0, 0, self.width);
+        let k_bias = self.in_proj_bias.narrow(0, self.width, self.width);
+        let v_bias = self.in_proj_bias.narrow(0, 2 * self.width, self.width);
+        let q = split(query.matmul(&q_weight.transpose(0, 1)) + q_bias, query_len);
+        let k = split(key.matmul(&k_weight.transpose(0, 1)) + k_bias, key_len);
+        let v = split(value.matmul(&v_weight.transpose(0, 1)) + v_bias, key_len);
         let mut logits = q.matmul(&k.transpose(-2, -1)) / (head_dim as f64).sqrt();
         if let Some(bias) = pair_bias {
             logits += bias;
@@ -156,7 +194,7 @@ impl MultiHeadAttention {
             .transpose(1, 2)
             .contiguous()
             .view([batch, query_len, self.width]);
-        attended.apply(&self.output)
+        attended.apply(&self.out_proj)
     }
 }
 
@@ -172,7 +210,6 @@ struct StructuralBlock {
     feedforward: Mlp,
     feedforward_norm: nn::LayerNorm,
     wire_dim: i64,
-    pair_dim: i64,
     heads: i64,
 }
 
@@ -188,24 +225,19 @@ impl StructuralBlock {
                 p,
             ),
             pair_norm: nn::layer_norm(path / "pair_norm", vec![p], Default::default()),
-            qkv: nn::linear(path / "qkv", d, 3 * d, Default::default()),
+            qkv: nn::linear(path / "qkv", d, 3 * d, pytorch_linear_config(d)),
             pair_bias: nn::linear(
-                path / "pair_bias",
+                path / "bias",
                 p,
                 config.attention_heads,
-                Default::default(),
+                pytorch_linear_config(p),
             ),
-            attention_out: nn::linear(path / "attention_out", d, d, Default::default()),
-            relations: nn::linear(path / "relations", 2 * p, d, Default::default()),
-            wire_norm: nn::layer_norm(path / "wire_norm", vec![d], Default::default()),
-            feedforward: Mlp::new(&(path / "feedforward"), d, config.feedforward_dim, d),
-            feedforward_norm: nn::layer_norm(
-                path / "feedforward_norm",
-                vec![d],
-                Default::default(),
-            ),
+            attention_out: nn::linear(path / "out", d, d, pytorch_linear_config(d)),
+            relations: nn::linear(path / "relations", 2 * p, d, pytorch_linear_config(2 * p)),
+            wire_norm: nn::layer_norm(path / "norm", vec![d], Default::default()),
+            feedforward: Mlp::new(&(path / "ff"), d, config.feedforward_dim, d),
+            feedforward_norm: nn::layer_norm(path / "ff_norm", vec![d], Default::default()),
             wire_dim: d,
-            pair_dim: p,
             heads: config.attention_heads,
         }
     }
@@ -285,7 +317,6 @@ struct StructuralStem {
     context_value: nn::Linear,
     blocks: Vec<StructuralBlock>,
     wire_dim: i64,
-    pair_dim: i64,
 }
 
 #[derive(Debug)]
@@ -313,24 +344,22 @@ impl StructuralStem {
             projections.insert(
                 spec.id,
                 nn::linear(
-                    path / "features" / name.as_str(),
+                    path / "projections" / name.as_str(),
                     spec.channels as i64,
                     out_dim,
-                    Default::default(),
+                    pytorch_linear_config(spec.channels as i64),
                 ),
             );
             if spec.role == FeatureRole::Group {
                 let mut role_layers = Vec::with_capacity(spec.wire_roles.len());
                 for role_index in 0..spec.wire_roles.len() {
                     role_layers.push(nn::linear(
-                        path / "group_roles"
-                            / name.as_str()
-                            / format!("role_{role_index}").as_str(),
+                        path / "group_roles" / name.as_str() / role_index.to_string().as_str(),
                         config.wire_dim,
                         config.wire_dim,
                         nn::LinearConfig {
                             bias: false,
-                            ..Default::default()
+                            ..pytorch_linear_config(config.wire_dim)
                         },
                     ));
                 }
@@ -342,31 +371,41 @@ impl StructuralStem {
             specs: specs.to_vec(),
             projections,
             group_role_projections,
-            raw_matrix: nn::linear(path / "raw_matrix", 3, config.pair_dim, Default::default()),
+            raw_matrix: nn::linear(
+                path / "raw_matrix",
+                3,
+                config.pair_dim,
+                pytorch_linear_config(3),
+            ),
             pair_to_wire: nn::linear(
-                path / "pair_to_wire",
+                path / "pair_to_node",
                 2 * config.pair_dim,
                 config.wire_dim,
-                Default::default(),
+                pytorch_linear_config(2 * config.pair_dim),
             ),
-            size_projection: nn::linear(path / "size", 2, config.wire_dim, Default::default()),
+            size_projection: nn::linear(
+                path / "size_projection",
+                2,
+                config.wire_dim,
+                pytorch_linear_config(2),
+            ),
             context_query: nn::linear(
-                path / "context_query",
+                path / "context_q",
                 config.wire_dim,
                 config.wire_dim,
-                Default::default(),
+                pytorch_linear_config(config.wire_dim),
             ),
             context_key: nn::linear(
-                path / "context_key",
+                path / "context_k",
                 config.wire_dim,
                 config.wire_dim,
-                Default::default(),
+                pytorch_linear_config(config.wire_dim),
             ),
             context_value: nn::linear(
-                path / "context_value",
+                path / "context_v",
                 config.wire_dim,
                 config.wire_dim,
-                Default::default(),
+                pytorch_linear_config(config.wire_dim),
             ),
             blocks: (0..config.structural_blocks)
                 .map(|index| {
@@ -375,7 +414,6 @@ impl StructuralStem {
                 })
                 .collect(),
             wire_dim: config.wire_dim,
-            pair_dim: config.pair_dim,
         }
     }
 
@@ -557,7 +595,7 @@ impl FamilyHeads {
             heads.insert(
                 *family,
                 Mlp::new(
-                    &(path / family.to_string().as_str()),
+                    &(path / "heads" / family.to_string().as_str()),
                     config.wire_dim + 2 * config.pair_dim,
                     config.wire_dim,
                     config.wire_dim,
@@ -630,29 +668,29 @@ impl TransformerEncoderLayer {
     fn new(path: &nn::Path<'_>, config: &ModelConfig) -> Self {
         Self {
             attention: MultiHeadAttention::new(
-                &(path / "attention"),
+                &(path / "self_attn"),
                 config.wire_dim,
                 config.attention_heads,
             ),
             attention_norm: nn::layer_norm(
-                path / "attention_norm",
+                path / "norm1",
                 vec![config.wire_dim],
                 Default::default(),
             ),
             first: nn::linear(
-                path / "first",
+                path / "linear1",
                 config.wire_dim,
                 config.feedforward_dim,
-                Default::default(),
+                pytorch_linear_config(config.wire_dim),
             ),
             second: nn::linear(
-                path / "second",
+                path / "linear2",
                 config.feedforward_dim,
                 config.wire_dim,
-                Default::default(),
+                pytorch_linear_config(config.feedforward_dim),
             ),
             feedforward_norm: nn::layer_norm(
-                path / "feedforward_norm",
+                path / "norm2",
                 vec![config.wire_dim],
                 Default::default(),
             ),
@@ -682,16 +720,16 @@ struct FusionTransformer {
 
 impl FusionTransformer {
     fn new(path: &nn::Path<'_>, config: &ModelConfig, family_count: usize) -> Self {
-        let family_type = (path / "family_type").var(
-            "embedding",
+        let family_type = path.var(
+            "family_type",
             &[family_count as i64, config.wire_dim],
             nn::Init::Randn {
                 mean: 0.0,
                 stdev: 0.02,
             },
         );
-        let distance_query = (path / "distance_query").var(
-            "embedding",
+        let distance_query = path.var(
+            "dist",
             &[1, 1, config.wire_dim],
             nn::Init::Randn {
                 mean: 0.0,
@@ -700,24 +738,20 @@ impl FusionTransformer {
         );
         Self {
             family_type,
-            family_encoder: TransformerEncoderLayer::new(&(path / "family_encoder"), config),
+            family_encoder: TransformerEncoderLayer::new(&(path / "family_attention"), config),
             structural_blocks: (0..config.fusion_blocks)
                 .map(|index| {
                     let name = index.to_string();
-                    StructuralBlock::new(&(path / "structural_blocks" / name.as_str()), config)
+                    StructuralBlock::new(&(path / "blocks" / name.as_str()), config)
                 })
                 .collect(),
             distance_query,
             readout: MultiHeadAttention::new(
-                &(path / "readout"),
+                &(path / "read"),
                 config.wire_dim,
                 config.attention_heads,
             ),
-            readout_norm: nn::layer_norm(
-                path / "readout_norm",
-                vec![config.wire_dim],
-                Default::default(),
-            ),
+            readout_norm: nn::layer_norm(path / "norm", vec![config.wire_dim], Default::default()),
             output: Mlp::new(
                 &(path / "output"),
                 config.wire_dim + 2,
@@ -803,8 +837,8 @@ impl AuxiliaryHeads {
     fn new(path: &nn::Path<'_>, config: &ModelConfig) -> Self {
         let input = 2 * config.wire_dim + 2 * config.pair_dim + 1;
         Self {
-            proposal: Mlp::new(&(path / "proposal"), input, config.proposal_hidden_dim, 1),
-            qhat: Mlp::new(&(path / "qhat"), input, config.proposal_hidden_dim, 1),
+            proposal: Mlp::new(&(path / "proposal"), input, AUXILIARY_HIDDEN_DIM, 1),
+            qhat: Mlp::new(&(path / "qhat"), input, AUXILIARY_HIDDEN_DIM, 1),
             wire_dim: config.wire_dim,
         }
     }
@@ -853,11 +887,16 @@ impl AuxiliaryHeads {
     }
 }
 
-/// The exact structural distance-field topology used by research_v3.
+/// The selected-feature structural distance field used by research_v3.
 ///
-/// The model refuses packets whose IDs, per-feature metadata, policy, or row
-/// availability differ from the schema selected at construction. It never
-/// replaces an unavailable feature with a numeric default.
+/// `specs` is the selected subset of the canonical 103-ID manifest. Built-in
+/// shapes are fixed; a reserved ID receives its role and channel count from
+/// its registered provider. The packet still carries all 103 manifest rows.
+/// The model rejects packets whose selected IDs, producer metadata, or policy
+/// differ from the schema selected at construction. Row availability is an
+/// input mask: unavailable rows stay zero-masked and do not block other states
+/// in a batch. This v24 contract is distinct from the legacy fixed-shape v22
+/// packet adapter.
 #[derive(Debug)]
 pub struct FusionDistanceField {
     specs: Vec<FeatureSpec>,
@@ -871,6 +910,29 @@ pub struct FusionDistanceField {
 }
 
 impl FusionDistanceField {
+    /// Constructs a model directly from the registry and feature policy used
+    /// to build its packets, so the model contract cannot drift from either.
+    pub fn new_for_policy(
+        path: &nn::Path<'_>,
+        registry: &FeatureRegistry,
+        policy: &FeaturePolicy,
+        device: Device,
+        config: ModelConfig,
+    ) -> Result<Self, ModelError> {
+        let specs = registry
+            .selected_specs(policy)
+            .map_err(|error| ModelError(error.0))?;
+        let policy_id = policy.id().map_err(|error| ModelError(error.0))?;
+        Self::new(
+            path,
+            &specs,
+            policy.schema_id.clone(),
+            policy_id,
+            device,
+            config,
+        )
+    }
+
     pub fn new(
         path: &nn::Path<'_>,
         specs: &[FeatureSpec],
@@ -879,6 +941,7 @@ impl FusionDistanceField {
         device: Device,
         config: ModelConfig,
     ) -> Result<Self, ModelError> {
+        crate::torch_device::require_device(device).map_err(ModelError)?;
         config.validate()?;
         let schema_id = schema_id.into();
         let policy_id = policy_id.into();
@@ -887,21 +950,23 @@ impl FusionDistanceField {
                 "model requires explicit schema and policy identities".into(),
             ));
         }
-        if specs.len() != FEATURE_COUNT {
-            return Err(ModelError(format!(
-                "model requires all {FEATURE_COUNT} feature specs"
-            )));
+        if specs.is_empty() {
+            return Err(ModelError(
+                "model requires at least one selected feature spec".into(),
+            ));
         }
-        for (index, spec) in specs.iter().enumerate() {
-            let expected_id = FeatureId::from_index(index)
-                .ok_or_else(|| ModelError("feature manifest index is invalid".into()))?;
-            let expected = feature_spec(expected_id);
-            if spec.id != expected_id
-                || spec.role != expected.role
-                || spec.channels != expected.channels
-            {
+        let mut seen = std::collections::HashSet::with_capacity(specs.len());
+        let mut families: Vec<_> = specs.iter().map(|spec| spec.id.family()).collect();
+        for spec in specs {
+            if !seen.insert(spec.id) {
                 return Err(ModelError(format!(
-                    "{} differs from canonical feature layout",
+                    "{} appears more than once in the model feature schema",
+                    spec.id
+                )));
+            }
+            if spec.channels == 0 || i64::try_from(spec.channels).is_err() {
+                return Err(ModelError(format!(
+                    "{} has an invalid channel count",
                     spec.id
                 )));
             }
@@ -921,14 +986,9 @@ impl FusionDistanceField {
                     spec.id
                 )));
             }
-            if spec.requires_solver_assisted {
-                return Err(ModelError(format!(
-                    "{} requires a solver-assisted policy",
-                    spec.id
-                )));
-            }
             if spec.role == FeatureRole::Group
-                && (spec.wire_roles.iter().any(|role| role.trim().is_empty())
+                && (spec.wire_roles.is_empty()
+                    || spec.wire_roles.iter().any(|role| role.trim().is_empty())
                     || spec
                         .wire_roles
                         .iter()
@@ -948,8 +1008,9 @@ impl FusionDistanceField {
                 )));
             }
         }
+        families.sort_unstable();
+        families.dedup();
 
-        let families = FAMILY_ORDER.to_vec();
         Ok(Self {
             specs: specs.to_vec(),
             expected_schema_id: schema_id,
@@ -970,19 +1031,51 @@ impl FusionDistanceField {
                 "feature packet schema or policy differs from model contract".into(),
             ));
         }
-        if packet.entries.len() != self.specs.len()
+        if packet.feature_id_manifest_id != FEATURE_ID_MANIFEST_ID
+            || packet.entries.len() != FEATURE_COUNT
             || packet
                 .entries
                 .iter()
-                .zip(&self.specs)
-                .any(|(entry, spec)| &entry.spec != spec)
+                .enumerate()
+                .any(|(index, entry)| FeatureId::from_index(index) != Some(entry.spec.id))
         {
+            return Err(ModelError(format!(
+                "feature packet must preserve the canonical {FEATURE_COUNT}-ID manifest"
+            )));
+        }
+        let model_ids: std::collections::HashSet<_> =
+            self.specs.iter().map(|spec| spec.id).collect();
+        let packet_ids: std::collections::HashSet<_> = packet
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .status
+                    .iter()
+                    .any(|status| *status != crate::packet::FeatureStatus::NotRequested)
+            })
+            .map(|entry| entry.spec.id)
+            .collect();
+        if model_ids != packet_ids {
+            return Err(ModelError(
+                "selected packet feature IDs differ from model input schema".into(),
+            ));
+        }
+        if self.specs.iter().any(|spec| {
+            packet
+                .entries
+                .get(spec.id.index())
+                .is_none_or(|entry| entry.spec != *spec)
+        }) {
             return Err(ModelError(
                 "feature packet producer schema differs from model contract".into(),
             ));
         }
-        packet.require_complete_103()?;
         self.stem.forward(packet, self.device)
+    }
+
+    pub fn device(&self) -> Device {
+        self.device
     }
 
     pub(crate) fn forward_encoded(&self, encoded: &EncodedState) -> FieldOutput {

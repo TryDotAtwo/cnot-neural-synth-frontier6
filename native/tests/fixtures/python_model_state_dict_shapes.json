@@ -1,0 +1,346 @@
+{
+  "feature_specs": [
+    {
+      "channels": 3,
+      "id": "I11",
+      "role": "pair",
+      "wire_roles": []
+    }
+  ],
+  "model_config": {
+    "auxiliary_hidden": 128,
+    "blocks": 1,
+    "d": 8,
+    "ffn": 16,
+    "fusion_blocks": 1,
+    "heads": 2,
+    "pair_d": 4
+  },
+  "reference_archive": "v13_recovery_candidate_v17_20261001.zip",
+  "reference_archive_sha256": "9947df2dc27080b38eb34e7551be39ce0536f2409aa733c5f201c317ed1a4866",
+  "reference_model": "research_v3.model.field.FusionDistanceField",
+  "state_dict": {
+    "auxiliary.proposal.0.bias": [
+      128
+    ],
+    "auxiliary.proposal.0.weight": [
+      128,
+      25
+    ],
+    "auxiliary.proposal.2.bias": [
+      1
+    ],
+    "auxiliary.proposal.2.weight": [
+      1,
+      128
+    ],
+    "auxiliary.qhat.0.bias": [
+      128
+    ],
+    "auxiliary.qhat.0.weight": [
+      128,
+      25
+    ],
+    "auxiliary.qhat.2.bias": [
+      1
+    ],
+    "auxiliary.qhat.2.weight": [
+      1,
+      128
+    ],
+    "family_heads.heads.I.0.bias": [
+      8
+    ],
+    "family_heads.heads.I.0.weight": [
+      8,
+      16
+    ],
+    "family_heads.heads.I.2.bias": [
+      8
+    ],
+    "family_heads.heads.I.2.weight": [
+      8,
+      8
+    ],
+    "fusion.blocks.0.bias.bias": [
+      2
+    ],
+    "fusion.blocks.0.bias.weight": [
+      2,
+      4
+    ],
+    "fusion.blocks.0.ff.0.bias": [
+      16
+    ],
+    "fusion.blocks.0.ff.0.weight": [
+      16,
+      8
+    ],
+    "fusion.blocks.0.ff.2.bias": [
+      8
+    ],
+    "fusion.blocks.0.ff.2.weight": [
+      8,
+      16
+    ],
+    "fusion.blocks.0.ff_norm.bias": [
+      8
+    ],
+    "fusion.blocks.0.ff_norm.weight": [
+      8
+    ],
+    "fusion.blocks.0.norm.bias": [
+      8
+    ],
+    "fusion.blocks.0.norm.weight": [
+      8
+    ],
+    "fusion.blocks.0.out.bias": [
+      8
+    ],
+    "fusion.blocks.0.out.weight": [
+      8,
+      8
+    ],
+    "fusion.blocks.0.pair_norm.bias": [
+      4
+    ],
+    "fusion.blocks.0.pair_norm.weight": [
+      4
+    ],
+    "fusion.blocks.0.pair_update.0.bias": [
+      16
+    ],
+    "fusion.blocks.0.pair_update.0.weight": [
+      16,
+      24
+    ],
+    "fusion.blocks.0.pair_update.2.bias": [
+      4
+    ],
+    "fusion.blocks.0.pair_update.2.weight": [
+      4,
+      16
+    ],
+    "fusion.blocks.0.qkv.bias": [
+      24
+    ],
+    "fusion.blocks.0.qkv.weight": [
+      24,
+      8
+    ],
+    "fusion.blocks.0.relations.bias": [
+      8
+    ],
+    "fusion.blocks.0.relations.weight": [
+      8,
+      8
+    ],
+    "fusion.dist": [
+      1,
+      1,
+      8
+    ],
+    "fusion.family_attention.linear1.bias": [
+      16
+    ],
+    "fusion.family_attention.linear1.weight": [
+      16,
+      8
+    ],
+    "fusion.family_attention.linear2.bias": [
+      8
+    ],
+    "fusion.family_attention.linear2.weight": [
+      8,
+      16
+    ],
+    "fusion.family_attention.norm1.bias": [
+      8
+    ],
+    "fusion.family_attention.norm1.weight": [
+      8
+    ],
+    "fusion.family_attention.norm2.bias": [
+      8
+    ],
+    "fusion.family_attention.norm2.weight": [
+      8
+    ],
+    "fusion.family_attention.self_attn.in_proj_bias": [
+      24
+    ],
+    "fusion.family_attention.self_attn.in_proj_weight": [
+      24,
+      8
+    ],
+    "fusion.family_attention.self_attn.out_proj.bias": [
+      8
+    ],
+    "fusion.family_attention.self_attn.out_proj.weight": [
+      8,
+      8
+    ],
+    "fusion.family_type": [
+      1,
+      8
+    ],
+    "fusion.norm.bias": [
+      8
+    ],
+    "fusion.norm.weight": [
+      8
+    ],
+    "fusion.output.0.bias": [
+      16
+    ],
+    "fusion.output.0.weight": [
+      16,
+      10
+    ],
+    "fusion.output.2.bias": [
+      1
+    ],
+    "fusion.output.2.weight": [
+      1,
+      16
+    ],
+    "fusion.read.in_proj_bias": [
+      24
+    ],
+    "fusion.read.in_proj_weight": [
+      24,
+      8
+    ],
+    "fusion.read.out_proj.bias": [
+      8
+    ],
+    "fusion.read.out_proj.weight": [
+      8,
+      8
+    ],
+    "stem.blocks.0.bias.bias": [
+      2
+    ],
+    "stem.blocks.0.bias.weight": [
+      2,
+      4
+    ],
+    "stem.blocks.0.ff.0.bias": [
+      16
+    ],
+    "stem.blocks.0.ff.0.weight": [
+      16,
+      8
+    ],
+    "stem.blocks.0.ff.2.bias": [
+      8
+    ],
+    "stem.blocks.0.ff.2.weight": [
+      8,
+      16
+    ],
+    "stem.blocks.0.ff_norm.bias": [
+      8
+    ],
+    "stem.blocks.0.ff_norm.weight": [
+      8
+    ],
+    "stem.blocks.0.norm.bias": [
+      8
+    ],
+    "stem.blocks.0.norm.weight": [
+      8
+    ],
+    "stem.blocks.0.out.bias": [
+      8
+    ],
+    "stem.blocks.0.out.weight": [
+      8,
+      8
+    ],
+    "stem.blocks.0.pair_norm.bias": [
+      4
+    ],
+    "stem.blocks.0.pair_norm.weight": [
+      4
+    ],
+    "stem.blocks.0.pair_update.0.bias": [
+      16
+    ],
+    "stem.blocks.0.pair_update.0.weight": [
+      16,
+      24
+    ],
+    "stem.blocks.0.pair_update.2.bias": [
+      4
+    ],
+    "stem.blocks.0.pair_update.2.weight": [
+      4,
+      16
+    ],
+    "stem.blocks.0.qkv.bias": [
+      24
+    ],
+    "stem.blocks.0.qkv.weight": [
+      24,
+      8
+    ],
+    "stem.blocks.0.relations.bias": [
+      8
+    ],
+    "stem.blocks.0.relations.weight": [
+      8,
+      8
+    ],
+    "stem.context_k.bias": [
+      8
+    ],
+    "stem.context_k.weight": [
+      8,
+      8
+    ],
+    "stem.context_q.bias": [
+      8
+    ],
+    "stem.context_q.weight": [
+      8,
+      8
+    ],
+    "stem.context_v.bias": [
+      8
+    ],
+    "stem.context_v.weight": [
+      8,
+      8
+    ],
+    "stem.pair_to_node.bias": [
+      8
+    ],
+    "stem.pair_to_node.weight": [
+      8,
+      8
+    ],
+    "stem.projections.I11.bias": [
+      4
+    ],
+    "stem.projections.I11.weight": [
+      4,
+      3
+    ],
+    "stem.raw_matrix.bias": [
+      4
+    ],
+    "stem.raw_matrix.weight": [
+      4,
+      3
+    ],
+    "stem.size_projection.bias": [
+      8
+    ],
+    "stem.size_projection.weight": [
+      8,
+      2
+    ]
+  }
+}

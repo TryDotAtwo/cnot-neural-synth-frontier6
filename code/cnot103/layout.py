@@ -70,7 +70,9 @@ _put("pair", 7, "G10")
 _put("pair", 1, *_series("H", 1, 4))
 _put("pair", 4, "H05")
 _put("pair", 15, "H06")
-_put("global", 6, "H07")
+# The pinned feature schema leaves H07 unimplemented. Its group/1 entry is
+# only the schema placeholder; it is not an executable producer contract.
+_put("group", 1, "H07")
 
 _put("group", 2, "I01", "I03")
 _put("group", 3, "I02")
@@ -88,5 +90,5 @@ if set(_layout) != set(FEATURE_IDS):
         f"extra={sorted(set(_layout) - set(FEATURE_IDS))}"
     )
 
-FEATURE_LAYOUT_ID = "runtime_packet_layout_v22"
+FEATURE_LAYOUT_ID = "runtime_packet_layout_v23"
 FEATURE_LAYOUT = MappingProxyType(_layout)
