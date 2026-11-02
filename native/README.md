@@ -278,12 +278,10 @@ compiled and linked the Rust FFI against the project CUDA library. GPU smoke
 coverage includes the Rust FFI successor output and a real CUDA
 `FusionDistanceField` forward pass followed by one AdamW update on device 0.
 `CNOT103_REQUIRE_CUDA=1` makes those smoke tests fail instead of silently
-skipping if CUDA is unavailable. On the Vast.ai Linux image used for this
-run, the Rust executable omitted `libtorch_cuda.so` from its dynamic
-dependencies under the default `--as-needed` linker behavior. Set
-`LD_PRELOAD="$LIBTORCH/lib/libtorch_cuda.so"` when running CUDA tests; without
-it, LibTorch reports no device even though `nvidia-smi` sees both GPUs. The
-current full CUDA-feature suite passed with this preload enabled. The model
+skipping if CUDA is unavailable. The first Vast.ai CUDA run exposed a link issue: the Rust executable omitted
+`libtorch_cuda.so` under the default `--as-needed` linker behavior. The initial
+workaround used `LD_PRELOAD`; the loader fix described below removes that
+requirement. The model
 fixture uses a synthetic I11
 producer and a small model; it is not production 103-feature training. No
 throughput claim was measured, and I08 CUDA integration remains open.
@@ -330,5 +328,8 @@ sampler, progress, objective bytes, and caller RNG bytes. To run it on either
 GPU, set CNOT103_REQUIRE_CUDA=1 and
 CNOT103_RESUME_DEVICE=cuda:0 or cuda:1 before invoking
 cargo test --features cuda --test tch_training_resume
-fresh_process_resume_matches_uninterrupted. This exercises the generic trainer
-and checkpoint path; it is not a full 103-feature CNOT objective run.
+fresh_process_resume_matches_uninterrupted. The full current CUDA suite also
+passed on cuda:0 with LD_PRELOAD unset: 154 passed, 0 failed, 1 ignored across
+40 test targets. The second-GPU resume run passed separately. This exercises
+the generic trainer and checkpoint path; it is not a full 103-feature CNOT
+objective run.
