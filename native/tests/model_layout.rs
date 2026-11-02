@@ -310,9 +310,8 @@ fn model_forward_and_adamw_update_execute_on_cuda_when_available() {
         .any(|(name, value)| !value.equal(&after[name])));
 }
 
-#[test]
-fn identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan() {
-    let (variables, model, registry, policy, _packet) = dynamic_model_fixture(Device::Cpu);
+fn assert_nan_identity_value_is_exactly_zero(device: Device) {
+    let (variables, model, registry, policy, _packet) = dynamic_model_fixture(device);
     let alphabet = CnotAlphabet::all_to_all_unit(2).unwrap();
     let identity = MatrixState::identity(2, alphabet.id()).unwrap();
     let packet = registry.build(&[identity], &policy).unwrap();
@@ -329,4 +328,18 @@ fn identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan() {
         0.0,
         "the distance field must enforce V(I)=0 even when its raw output is NaN"
     );
+}
+
+#[test]
+fn identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan() {
+    assert_nan_identity_value_is_exactly_zero(Device::Cpu);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan_on_cuda() {
+    tch::set_num_threads(1);
+    cnot103_native::torch_device::require_cuda_device(0)
+        .expect("initialize CUDA for the identity-distance regression");
+    assert_nan_identity_value_is_exactly_zero(Device::Cuda(0));
 }
