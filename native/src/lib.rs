@@ -66,6 +66,9 @@ pub use training_session::{
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+#[cfg(feature = "cuda")]
+pub mod run_config;
+
 pub use alphabet::{AlphabetError, CertificateError, CnotAlphabet, WordCertificate};
 pub use basis_gradient::register_basis_gradient;
 pub use bilinear::{

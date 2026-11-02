@@ -8,6 +8,16 @@ build = "build.rs"
 name = "cnot103_native"
 crate-type = ["rlib", "cdylib"]
 
+[[bin]]
+name = "cnot103-train"
+path = "src/bin/cnot103_train.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "run_manifest"
+path = "tests/run_manifest.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 torch = ["dep:tch"]

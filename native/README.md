@@ -403,3 +403,48 @@ separately on cuda:1.
 This acceptance uses small synthetic inputs. It does not establish exact
 parity for the archived-unimplemented source features, production data
 coverage, held-out quality, or completion of the 1000x10000 campaign.
+
+
+## Bounded CUDA training command
+
+Build and run a bounded invocation on a CUDA host:
+
+```sh
+cargo run --locked --manifest-path native/Cargo.toml --features cuda --bin cnot103-train -- run.json
+```
+
+The strict JSON manifest schema is `cnot103_training_run_v1`. Its required
+top-level keys are `dataset`, `exact_catalogs`, `checkpoint_dir`, `resume`,
+`training`, `feature_policy`, `model`, `optimizer`, `objective`,
+`alphabets`, and `feature_contexts`, plus the schema string. Unknown keys
+and omitted context fields are errors. Relative artifact and checkpoint paths
+are resolved from the manifest file. Dataset and exact-catalog artifacts each
+need an adjacent `.sha256` sidecar and a caller-supplied lowercase SHA-256 pin.
+
+`training` explicitly sets the seed, CUDA device index, attempted updates,
+batch size, and checkpoint interval. `feature_policy` explicitly sets the
+feature schema identity, solver-assisted setting, evaluation limit, and byte
+limit; use JSON `null` to state that a limit is unbounded. The launcher always
+selects the complete 102 model inputs and keeps the full exposure audit enabled.
+It does not offer a reduced-input or compact-audit mode. `model`,
+`optimizer`, and `objective` expose their dimensions and numeric parameters;
+none are silently defaulted by the launcher.
+
+`feature_contexts` must supply the validated cuts, intersections, rank probes,
+alphabet, residual gates, parity blocks and budgets, boundaries and budgets,
+paid-basis blocks and shear config, template choices/probe points/budgets,
+bilinear matrices, shared-relation frames, Fourier partitions, optional-gate
+packets, I09 horizons/limits, and I10 horizon/budgets. Constructors validate
+every context before a model is created. Exact-catalog input currently supports
+all-to-all unit CNOT alphabets only and requires one catalog for every configured
+alphabet. Any context or feature that is unavailable for a training example
+fails the full-input objective; it is not replaced with a fabricated value.
+
+A fresh invocation refuses to use a nonempty checkpoint directory. A resumed
+invocation requires `last.json` and lets the checkpoint contract reject changed
+data, feature contexts, or objective settings. Each invocation writes a final
+checkpoint and prints JSON with input hashes, split sizes, update counts,
+exposure audit, and checkpoint manifest. The repository contains no production
+frozen training panel or matching exact-catalog bundle, so the launcher is
+infrastructure until those pinned artifacts and their real physical feature
+contexts are supplied; it does not make a training or quality claim by itself.
