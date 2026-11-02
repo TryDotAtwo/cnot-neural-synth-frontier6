@@ -296,8 +296,8 @@ requirement. The model
 fixture uses a synthetic I11
 producer and a small model; it is not production 103-feature training. No
 throughput claim was measured, and I08 CUDA integration remains open.
-Full feature coverage, production 103-feature training, complete-objective
-fresh-process resume, and end-to-end search acceptance remain open.
+Source-parity for the unimplemented feature contracts, production-scale
+training, held-out integrity, and end-to-end search acceptance remain open.
 
 On 2026-11-02, the current native tree passed
 `cargo test --no-default-features` on Vast.ai: 137 tests passed, 0 failed,
@@ -345,6 +345,30 @@ passed on cuda:0 with LD_PRELOAD unset: 156 passed, 0 failed, 2 ignored across
 the generic trainer and checkpoint path; it is not a full 103-feature CNOT
 objective run.
 
-The added CUDA integration test constructs a packet using all 41 default built-in producers, runs the native model forward pass, and accepts one AdamW update on device 0. Context-bound features are not included in that test.
+The 41-feature CUDA smoke and fresh-process resume tests remain as a regression
+profile. A second profile now executes all 102 registered model-input features
+through the small Bellman objective, saves after one update, restores in a child
+process, applies the next update, and matches the uninterrupted model, optimizer,
+sampler, objective, progress, and RNG state. The 102-input resume test passed on
+cuda:0 and cuda:1. These are synthetic three-wire fixtures, not production
+training or quality acceptance.
 
-The added full-graph CUDA checkpoint test trains with the 41 built-in producers, saves after one Bellman/AdamW update, restores in a new process, applies the next update, and matches uninterrupted parameter values within 1e-6, sampler/progress, objective exposure ledger, and RNG state on cuda:0 and cuda:1. Context-bound providers remain outside this acceptance; it is not a complete-103 training run.
+H07 now has a Torch-gated evaluator that runs the model value head on
+caller-built canonical, equivalent-view, and relabel packets, then records the
+population variance and probe provenance. Its CUDA regression executes an
+inverse view and an all-to-all unit-cost wire swap. The exact source probe
+schedule and availability contract remain unspecified; H07 remains outside the
+102 model inputs.
+
+
+## Current Vast acceptance — 2026-11-03
+
+At the current branch tip, the full CUDA Cargo suite passed after adding the
+102-input checkpoint profile and real H07 forwards. After the H07 producer
+identity was versioned, the H07 unit tests and complete CUDA resume target were
+rerun successfully on cuda:0. The 102-input fresh-process resume also passed
+separately on cuda:1.
+
+This acceptance uses small synthetic inputs. It does not establish exact
+parity for the archived-unimplemented source features, production data
+coverage, held-out quality, or completion of the 1000x10000 campaign.
