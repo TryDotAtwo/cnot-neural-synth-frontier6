@@ -54,6 +54,15 @@ pub mod nn_training;
 #[cfg(feature = "torch")]
 pub mod torch_device;
 
+#[cfg(feature = "torch")]
+pub mod training_session;
+
+#[cfg(feature = "torch")]
+pub use training_session::{
+    FullGraphTrainingSession, TrainingSessionConfig, TrainingSessionReport,
+    TrainingSessionResources,
+};
+
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
