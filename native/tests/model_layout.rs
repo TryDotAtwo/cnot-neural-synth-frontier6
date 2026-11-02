@@ -194,6 +194,74 @@ fn model_uses_only_selected_features_with_their_registered_shapes() {
 }
 
 #[test]
+fn default_builtin_feature_set_executes_through_model_and_adamw_on_cuda() {
+    tch::set_num_threads(1);
+    cnot103_native::torch_device::require_cuda_device(0)
+        .expect("initialize CUDA for the native-feature integration test");
+    let device = Device::Cuda(0);
+
+    let registry = FeatureRegistry::new();
+    let mut policy = FeaturePolicy::complete_103("native-default-feature-set-cuda-v1");
+    let candidate_ids = policy.enabled_ids.clone();
+    let selected_ids: Vec<_> = candidate_ids
+        .into_iter()
+        .filter(|id| {
+            let mut probe = policy.clone();
+            probe.enabled_ids = vec![*id];
+            registry.selected_specs(&probe).is_ok()
+        })
+        .collect();
+    policy.enabled_ids = selected_ids;
+    let specs = registry.selected_specs(&policy).unwrap();
+    assert_eq!(specs.len(), 41, "the default registry exposes the 41 built-in feature producers");
+
+    let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
+    let mut state = MatrixState::identity(3, alphabet.id()).unwrap();
+    state
+        .apply_cnot(CnotGate {
+            control: 0,
+            target: 1,
+        })
+        .unwrap();
+    let packet = registry.build(&[state], &policy).unwrap();
+
+    let variables = VarStore::new(device);
+    let model = FusionDistanceField::new(
+        &variables.root(),
+        &specs,
+        policy.schema_id.clone(),
+        policy.id().unwrap(),
+        device,
+        ModelConfig {
+            wire_dim: 8,
+            pair_dim: 4,
+            structural_blocks: 1,
+            attention_heads: 2,
+            feedforward_dim: 16,
+            fusion_blocks: 1,
+            basis_proposal_hidden_dim: 8,
+        },
+    )
+    .unwrap();
+    let output = model.forward(&packet).unwrap();
+    assert!(output.value.isfinite().all().int64_value(&[]) != 0);
+    assert_eq!(output.value.device(), device);
+
+    let mut trainer = NeuralTrainer::new(
+        &variables,
+        Sampler::new(1, 7).unwrap(),
+        AdamWConfig::default(),
+    )
+    .unwrap();
+    let outcome = trainer
+        .step(1, |_| Ok(output.value.sum(tch::Kind::Float)))
+        .unwrap();
+    assert!(outcome.accepted);
+    assert_eq!(trainer.progress().accepted, 1);
+    assert_eq!(trainer.optimizer_steps(), 1);
+}
+
+#[test]
 fn model_forward_and_adamw_update_execute_on_cuda_when_available() {
     tch::set_num_threads(1);
     if let Err(error) = cnot103_native::torch_device::require_cuda_device(0) {
