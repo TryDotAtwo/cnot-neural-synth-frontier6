@@ -1,19 +1,22 @@
-//! Exploratory H07 prediction-spread diagnostic candidate.
+//! H07 post-forward prediction-spread diagnostic.
 //!
-//! The pinned feature schema marks H07 unimplemented and assigns a `group/1`
-//! placeholder, not a numeric producer contract. Its prose description mentions
-//! extra forwards over task views and relabel probes but does not define a
-//! tensor shape, mapping, or availability contract. This helper is one research
-//! candidate interpretation; it is not a source-parity H07 producer and must
-//! not be fed to the model or counted as complete-103 coverage.
+//! The pinned feature schema keeps H07 unimplemented as a model input and gives
+//! it a group/1 placeholder. The normative feature bank describes additional
+//! forwards over equivalent views and relabel probes. This module runs those
+//! forwards on caller-built packets and emits an auditable diagnostic; probe
+//! construction and the exact source availability policy remain explicit.
 
 use crate::schema::FeatureId;
+#[cfg(feature = "torch")]
+use crate::{model::FusionDistanceField, packet::FeaturePacket};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+#[cfg(feature = "torch")]
+use tch::{Device, Kind};
 
-pub const H07_PRODUCER_VERSION: &str = "h07_post_forward_population_variance_v1";
+pub const H07_PRODUCER_VERSION: &str = "h07_distance_field_value_population_variance_v2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum H07ProbeKind {
@@ -82,6 +85,9 @@ pub enum H07Error {
     MissingRelabelProbe,
     NonFinitePrediction(String),
     VarianceNotRepresentable,
+    ModelForward(String),
+    ModelProbeBatch { probe_id: String, batch: usize },
+    ModelOutputCardinality { probe_id: String, outputs: usize },
 }
 
 impl Display for H07Error {
@@ -108,6 +114,15 @@ impl Display for H07Error {
             Self::VarianceNotRepresentable => {
                 formatter.write_str("population variance cannot be represented as finite float32")
             }
+            Self::ModelForward(error) => write!(formatter, "model forward failed: {error}"),
+            Self::ModelProbeBatch { probe_id, batch } => write!(
+                formatter,
+                "probe {probe_id} must contain exactly one task, got batch {batch}"
+            ),
+            Self::ModelOutputCardinality { probe_id, outputs } => write!(
+                formatter,
+                "probe {probe_id} produced {outputs} scalar values; exactly one is required"
+            ),
         }
     }
 }
@@ -129,47 +144,9 @@ pub fn compute_h07_prediction_spread(
     let problem_scope_sha256 = normalize_digest("problem scope digest", problem_scope_sha256)?;
     let mut probes = samples.to_vec();
     probes.sort_by(|left, right| left.probe_id.cmp(&right.probe_id));
-
-    let mut probe_ids = HashSet::with_capacity(probes.len());
-    let mut canonical_count = 0usize;
-    let mut view_sample_count = 0usize;
-    let mut relabel_sample_count = 0usize;
-    let mut has_noncanonical_view = false;
-    for probe in &probes {
-        if probe.probe_id.trim().is_empty() || probe.probe_id.trim() != probe.probe_id {
-            return Err(H07Error::InvalidProbeId);
-        }
-        if !probe_ids.insert(probe.probe_id.as_str()) {
-            return Err(H07Error::DuplicateProbeId(probe.probe_id.clone()));
-        }
-        if !probe.prediction.is_finite() {
-            return Err(H07Error::NonFinitePrediction(probe.probe_id.clone()));
-        }
-        if probe.kind == H07ProbeKind::Canonical {
-            canonical_count += 1;
-        }
-        if probe.kind.is_equivalent_view() {
-            view_sample_count += 1;
-            has_noncanonical_view |= probe.kind != H07ProbeKind::Canonical;
-        }
-        if probe.kind == H07ProbeKind::Relabel {
-            relabel_sample_count += 1;
-        }
-    }
-    if canonical_count != 1 {
-        return Err(H07Error::CanonicalProbeCount(canonical_count));
-    }
-    if !has_noncanonical_view {
-        return Err(H07Error::MissingEquivalentViewProbe);
-    }
-    if relabel_sample_count == 0 {
-        return Err(H07Error::MissingRelabelProbe);
-    }
+    let (view_sample_count, relabel_sample_count) = validate_probe_metadata(&probes)?;
 
     let sample_count = probes.len();
-    if sample_count == 0 {
-        return Err(H07Error::CanonicalProbeCount(0));
-    }
     let mut mean = 0.0f64;
     let mut sum_squared_deviations = 0.0f64;
     let mut minimum = f64::INFINITY;
@@ -211,6 +188,117 @@ pub fn compute_h07_prediction_spread(
         relabel_sample_count,
         probes,
     })
+}
+
+fn validate_probe_metadata(probes: &[H07ProbePrediction]) -> Result<(usize, usize), H07Error> {
+    let mut probe_ids = HashSet::with_capacity(probes.len());
+    let mut canonical_count = 0usize;
+    let mut view_sample_count = 0usize;
+    let mut relabel_sample_count = 0usize;
+    let mut has_noncanonical_view = false;
+    for probe in probes {
+        if probe.probe_id.trim().is_empty() || probe.probe_id.trim() != probe.probe_id {
+            return Err(H07Error::InvalidProbeId);
+        }
+        if !probe_ids.insert(probe.probe_id.as_str()) {
+            return Err(H07Error::DuplicateProbeId(probe.probe_id.clone()));
+        }
+        if !probe.prediction.is_finite() {
+            return Err(H07Error::NonFinitePrediction(probe.probe_id.clone()));
+        }
+        if probe.kind == H07ProbeKind::Canonical {
+            canonical_count += 1;
+        }
+        if probe.kind.is_equivalent_view() {
+            view_sample_count += 1;
+            has_noncanonical_view |= probe.kind != H07ProbeKind::Canonical;
+        }
+        if probe.kind == H07ProbeKind::Relabel {
+            relabel_sample_count += 1;
+        }
+    }
+    if canonical_count != 1 {
+        return Err(H07Error::CanonicalProbeCount(canonical_count));
+    }
+    if !has_noncanonical_view {
+        return Err(H07Error::MissingEquivalentViewProbe);
+    }
+    if relabel_sample_count == 0 {
+        return Err(H07Error::MissingRelabelProbe);
+    }
+    Ok((view_sample_count, relabel_sample_count))
+}
+
+/// A single already-transformed model input for the H07 post-forward diagnostic.
+///
+/// The caller must construct only valid, cost-preserving view/relabel packets
+/// and bind the exact task, alphabet/cost graph, and symmetry assumptions in
+/// problem_scope_sha256.
+#[cfg(feature = "torch")]
+#[derive(Debug)]
+pub struct H07ModelProbe<'a> {
+    pub probe_id: String,
+    pub kind: H07ProbeKind,
+    pub packet: &'a FeaturePacket,
+}
+
+/// Runs one actual model forward per supplied canonical/view/relabel packet and
+/// summarizes the scalar value-head predictions as H07. The source defines
+/// H07 as an extra-forward diagnostic/ensemble, not as a model input channel;
+/// probe generation remains explicit so invalid task symmetries cannot be
+/// silently assumed.
+/// The supplied model digest must bind the exact weights and model contract;
+/// the problem-scope digest must bind the task, alphabet/cost graph, and probe
+/// transformations used to construct the packets.
+#[cfg(feature = "torch")]
+pub fn evaluate_h07_prediction_spread(
+    model: &FusionDistanceField,
+    model_contract_sha256: &str,
+    problem_scope_sha256: &str,
+    probes: &[H07ModelProbe<'_>],
+) -> Result<H07Diagnostic, H07Error> {
+    let model_contract_sha256 = normalize_digest("model contract digest", model_contract_sha256)?;
+    let problem_scope_sha256 = normalize_digest("problem scope digest", problem_scope_sha256)?;
+    let metadata: Vec<_> = probes
+        .iter()
+        .map(|probe| H07ProbePrediction {
+            probe_id: probe.probe_id.clone(),
+            kind: probe.kind,
+            prediction: 0.0,
+        })
+        .collect();
+    validate_probe_metadata(&metadata)?;
+
+    let mut predictions = Vec::with_capacity(probes.len());
+    for probe in probes {
+        if probe.packet.batch != 1 {
+            return Err(H07Error::ModelProbeBatch {
+                probe_id: probe.probe_id.clone(),
+                batch: probe.packet.batch,
+            });
+        }
+        let output = tch::no_grad(|| model.forward(probe.packet))
+            .map_err(|error| H07Error::ModelForward(format!("{}: {error}", probe.probe_id)))?;
+        let outputs = output.value.numel();
+        if outputs != 1 {
+            return Err(H07Error::ModelOutputCardinality {
+                probe_id: probe.probe_id.clone(),
+                outputs,
+            });
+        }
+        let value = output
+            .value
+            .to_device(Device::Cpu)
+            .to_kind(Kind::Double)
+            .view([-1])
+            .double_value(&[0]);
+        predictions.push(H07ProbePrediction {
+            probe_id: probe.probe_id.clone(),
+            kind: probe.kind,
+            prediction: value,
+        });
+    }
+    compute_h07_prediction_spread(&model_contract_sha256, &problem_scope_sha256, &predictions)
 }
 
 fn normalize_digest(name: &str, digest: &str) -> Result<String, H07Error> {

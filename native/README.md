@@ -187,12 +187,14 @@ is deliberately split by input contract:
   executable source producer in that archive. Rust modules contain candidate
   implementations for many of these missing IDs, but that is not evidence of
   legacy source parity or a complete production registry. H07's pinned entry is
-  `group/1` with producer version `unimplemented`; the local packet layout now
-  preserves that placeholder and bumps its identity to v23. The separate
-  post-forward prediction-spread helper is exploratory: the source description
-  mentions extra forwards over views and relabel probes but does not specify a
-  numeric tensor layout or availability contract. It is not an H07 provider and
-  does not count toward complete-103 model input.
+  a group/1 placeholder with producer version unimplemented; the local packet
+  layout preserves that placeholder. H07 is a post-forward diagnostic/ensemble,
+  not a model input. The native runtime now executes the actual model on
+  caller-built canonical/view/relabel packets, runs the value head for each,
+  and reports population variance with probe provenance. The exact source
+  probe-generation and availability policy
+  remain unspecified, so this does not claim source parity or complete-103
+  model-input coverage.
   I09 now ports the bounded quadratic compiler equations and fixed-prefix
   alpha/beta/rank response from the separately pinned Stage-60 source in the
   A15 source-only candidate, SHA-256

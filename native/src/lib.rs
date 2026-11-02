@@ -145,6 +145,9 @@ pub use view_diagnostic::{
 };
 
 #[cfg(feature = "torch")]
+pub use view_diagnostic::{evaluate_h07_prediction_spread, H07ModelProbe};
+
+#[cfg(feature = "torch")]
 pub use objective::{
     ExposureAudit, FullGraphObjective, FullGraphObjectiveConfig, FullGraphObjectiveRunner,
     StateAdmission,

@@ -5,7 +5,8 @@ use cnot103_native::objective::{
 };
 use cnot103_native::training_data::{TrainingRecord, TrainingSplit};
 use cnot103_native::{
-    CheckpointStore, CnotAlphabet, FeatureId, FeaturePolicy, FeatureRegistry, MatrixState, Sampler,
+    evaluate_h07_prediction_spread, CheckpointStore, CnotAlphabet, CnotGate, FeatureId,
+    FeaturePolicy, FeatureRegistry, H07ModelProbe, H07ProbeKind, MatrixState, Sampler,
     WordCertificate,
 };
 use serde_json::{json, Value};
@@ -393,6 +394,101 @@ stderr:
     assert_eq!(actual["progress"]["accepted"], 2);
     assert_eq!(actual["optimizer_steps"], 2);
     assert_eq!(actual["feature_count"], profile.feature_count());
+}
+
+fn state_from_word(alphabet: &CnotAlphabet, gates: &[CnotGate]) -> MatrixState {
+    let mut state = MatrixState::identity(alphabet.dimension(), alphabet.id()).unwrap();
+    for gate in gates {
+        state.apply_cnot(*gate).unwrap();
+    }
+    state
+}
+
+fn relabel_state(state: &MatrixState, output_to_source: &[usize]) -> MatrixState {
+    let n = state.dimension() as usize;
+    let words_per_row = state.words_per_row();
+    assert_eq!(output_to_source.len(), n);
+    let mut rows = vec![0u64; n * words_per_row];
+    for output_row in 0..n {
+        for output_column in 0..n {
+            let source_row = output_to_source[output_row];
+            let source_column = output_to_source[output_column];
+            let source_words = state.row_words(source_row as u32).unwrap();
+            let bit = (source_words[source_column / 64] >> (source_column % 64)) & 1;
+            if bit != 0 {
+                rows[output_row * words_per_row + output_column / 64] |=
+                    1u64 << (output_column % 64);
+            }
+        }
+    }
+    MatrixState::from_packed_rows(state.dimension(), state.alphabet_id(), rows).unwrap()
+}
+
+#[test]
+fn h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets() {
+    let _guard = CUDA_RESUME_TEST_LOCK
+        .lock()
+        .expect("serialize CUDA resume and H07 probes around process-global LibTorch RNG");
+    let Some(device_index) = selected_cuda_index() else {
+        return;
+    };
+    let fixture = fixture(Device::Cuda(device_index), FeatureProfile::Builtin41);
+    let gates = [
+        CnotGate {
+            control: 0,
+            target: 1,
+        },
+        CnotGate {
+            control: 1,
+            target: 2,
+        },
+        CnotGate {
+            control: 2,
+            target: 0,
+        },
+    ];
+    let canonical = state_from_word(&fixture.alphabet, &gates);
+    let inverse_gates = gates.into_iter().rev().collect::<Vec<_>>();
+    let inverse = state_from_word(&fixture.alphabet, &inverse_gates);
+    let relabeled = relabel_state(&canonical, &[1, 0, 2]);
+    let states = [canonical, inverse, relabeled];
+    let packets = states
+        .iter()
+        .map(|state| {
+            fixture
+                .registry
+                .build(std::slice::from_ref(state), &fixture.policy)
+                .expect("build each exact-view feature packet")
+        })
+        .collect::<Vec<_>>();
+    let probes = [
+        H07ModelProbe {
+            probe_id: "canonical".into(),
+            kind: H07ProbeKind::Canonical,
+            packet: &packets[0],
+        },
+        H07ModelProbe {
+            probe_id: "inverse".into(),
+            kind: H07ProbeKind::Inverse,
+            packet: &packets[1],
+        },
+        H07ModelProbe {
+            probe_id: "wire-swap-01".into(),
+            kind: H07ProbeKind::Relabel,
+            packet: &packets[2],
+        },
+    ];
+
+    let diagnostic =
+        evaluate_h07_prediction_spread(&fixture.model, &"1".repeat(64), &"2".repeat(64), &probes)
+            .expect("run canonical, inverse-view, and cost-preserving relabel forwards");
+    assert_eq!(diagnostic.sample_count, 3);
+    assert_eq!(diagnostic.view_sample_count, 2);
+    assert_eq!(diagnostic.relabel_sample_count, 1);
+    assert!(diagnostic
+        .probes
+        .iter()
+        .all(|probe| probe.prediction.is_finite()));
 }
 
 #[test]

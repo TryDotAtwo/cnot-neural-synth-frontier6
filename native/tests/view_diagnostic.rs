@@ -35,7 +35,7 @@ fn h07_is_a_post_forward_population_variance_with_bound_provenance() {
     assert_eq!(diagnostic.probes.len(), 3);
     assert_eq!(
         diagnostic.producer_version,
-        "h07_post_forward_population_variance_v1"
+        "h07_distance_field_value_population_variance_v2"
     );
 }
 
