@@ -1,9 +1,11 @@
 use cnot103_native::model::{FusionDistanceField, ModelConfig};
 use cnot103_native::nn_training::{AdamWConfig, NeuralTrainer};
-use cnot103_native::objective::{FullGraphObjective, FullGraphObjectiveConfig, FullGraphObjectiveRunner};
+use cnot103_native::objective::{
+    FullGraphObjective, FullGraphObjectiveConfig, FullGraphObjectiveRunner,
+};
 use cnot103_native::training_data::{TrainingRecord, TrainingSplit};
 use cnot103_native::{
-    CnotAlphabet, CheckpointStore, FeaturePolicy, FeatureRegistry, MatrixState, Sampler,
+    CheckpointStore, CnotAlphabet, FeatureId, FeaturePolicy, FeatureRegistry, MatrixState, Sampler,
     WordCertificate,
 };
 use serde_json::{json, Value};
@@ -14,11 +16,47 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tch::nn::VarStore;
 use tch::{Device, Kind};
 
+#[path = "support/feature_contexts.rs"]
+mod feature_contexts;
+use feature_contexts::complete_model_input_contexts;
+
 const DEVICE_ENV: &str = "CNOT103_RESUME_DEVICE";
 const STORE_ENV: &str = "CNOT103_BUILTIN_RESUME_STORE";
 const OUTPUT_ENV: &str = "CNOT103_BUILTIN_RESUME_OUTPUT";
+const PROFILE_ENV: &str = "CNOT103_CUDA_RESUME_PROFILE";
+static CUDA_RESUME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MODEL_SEED: i64 = 2043;
 const SAMPLER_SEED: u64 = 2043;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FeatureProfile {
+    Builtin41,
+    AllModelInputs102,
+}
+
+impl FeatureProfile {
+    fn as_env(self) -> &'static str {
+        match self {
+            Self::Builtin41 => "builtin-41",
+            Self::AllModelInputs102 => "all-model-inputs-102",
+        }
+    }
+
+    fn from_env() -> Self {
+        match std::env::var(PROFILE_ENV).as_deref() {
+            Ok("all-model-inputs-102") => Self::AllModelInputs102,
+            Ok("builtin-41") | Err(_) => Self::Builtin41,
+            Ok(other) => panic!("unsupported {PROFILE_ENV} value: {other}"),
+        }
+    }
+
+    fn feature_count(self) -> usize {
+        match self {
+            Self::Builtin41 => 41,
+            Self::AllModelInputs102 => 102,
+        }
+    }
+}
 
 struct TestDir(PathBuf);
 
@@ -76,25 +114,46 @@ fn selected_cuda_index() -> Option<usize> {
     }
 }
 
-fn fixture(device: Device) -> Fixture {
+fn fixture(device: Device, profile: FeatureProfile) -> Fixture {
     tch::set_num_threads(1);
     tch::manual_seed(MODEL_SEED);
 
-    let registry = FeatureRegistry::new();
-    let mut policy = FeaturePolicy::complete_103("builtin-41-full-graph-resume-v1");
-    let candidate_ids = policy.enabled_ids.clone();
-    policy.enabled_ids = candidate_ids
-        .into_iter()
-        .filter(|id| {
-            let mut one_id = policy.clone();
-            one_id.enabled_ids = vec![*id];
-            registry.selected_specs(&one_id).is_ok()
-        })
-        .collect();
+    let (registry, policy) = match profile {
+        FeatureProfile::Builtin41 => {
+            let registry = FeatureRegistry::new();
+            let mut policy = FeaturePolicy::complete_103("builtin-41-full-graph-resume-v1");
+            let candidate_ids = policy.enabled_ids.clone();
+            policy.enabled_ids = candidate_ids
+                .into_iter()
+                .filter(|id| {
+                    let mut one_id = policy.clone();
+                    one_id.enabled_ids = vec![*id];
+                    registry.selected_specs(&one_id).is_ok()
+                })
+                .collect();
+            (registry, policy)
+        }
+        FeatureProfile::AllModelInputs102 => {
+            let registry =
+                FeatureRegistry::with_all_model_input_providers(complete_model_input_contexts())
+                    .expect("register all 102 model-input providers from explicit contexts");
+            let mut policy =
+                FeaturePolicy::complete_103_augmentation_only("all-model-inputs-102-resume-v1");
+            policy
+                .enabled_ids
+                .retain(|id| *id != FeatureId::new(b'H', 7).unwrap());
+            policy.solver_assisted = true;
+            (registry, policy)
+        }
+    };
     let specs = registry
         .selected_specs(&policy)
-        .expect("the built-in feature subset is executable");
-    assert_eq!(specs.len(), 41, "expected all 41 default built-in producers");
+        .expect("the selected feature profile is executable");
+    assert_eq!(
+        specs.len(),
+        profile.feature_count(),
+        "feature profile must register its full declared input set"
+    );
 
     let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
     let identity = MatrixState::identity(3, alphabet.id()).unwrap();
@@ -230,7 +289,10 @@ fn assert_equivalent(actual: &Value, expected: &Value) {
         "feature_count",
         "alphabet",
     ] {
-        assert_eq!(actual[field], expected[field], "resume field differs: {field}");
+        assert_eq!(
+            actual[field], expected[field],
+            "resume field differs: {field}"
+        );
     }
     let actual_parameters = actual["parameters"].as_array().unwrap();
     let expected_parameters = expected["parameters"].as_array().unwrap();
@@ -256,6 +318,21 @@ fn assert_equivalent(actual: &Value, expected: &Value) {
 
 #[test]
 fn fresh_process_full_graph_cuda_resume_matches_uninterrupted_builtin_features() {
+    let _guard = CUDA_RESUME_TEST_LOCK
+        .lock()
+        .expect("serialize CUDA resume profiles around process-global LibTorch RNG");
+    run_resume_case(FeatureProfile::Builtin41);
+}
+
+#[test]
+fn fresh_process_full_graph_cuda_resume_matches_uninterrupted_all_model_inputs() {
+    let _guard = CUDA_RESUME_TEST_LOCK
+        .lock()
+        .expect("serialize CUDA resume profiles around process-global LibTorch RNG");
+    run_resume_case(FeatureProfile::AllModelInputs102);
+}
+
+fn run_resume_case(profile: FeatureProfile) {
     let Some(device_index) = selected_cuda_index() else {
         return;
     };
@@ -263,11 +340,11 @@ fn fresh_process_full_graph_cuda_resume_matches_uninterrupted_builtin_features()
     let temp = TestDir::new();
     let store = CheckpointStore::new(temp.path().join("checkpoint"));
 
-    let mut uninterrupted = fixture(device);
+    let mut uninterrupted = fixture(device, profile);
     run_updates(&mut uninterrupted, 2);
     let expected = summary(&uninterrupted);
 
-    let mut split = fixture(device);
+    let mut split = fixture(device, profile);
     run_updates(&mut split, 1);
     {
         let runner = FullGraphObjectiveRunner::new(
@@ -292,6 +369,7 @@ fn fresh_process_full_graph_cuda_resume_matches_uninterrupted_builtin_features()
         .arg("fresh_process_full_graph_cuda_resume_child")
         .arg("--nocapture")
         .env(DEVICE_ENV, format!("cuda:{device_index}"))
+        .env(PROFILE_ENV, profile.as_env())
         .env("CNOT103_REQUIRE_CUDA", "1")
         .env(STORE_ENV, store.root())
         .env(OUTPUT_ENV, &output)
@@ -314,20 +392,19 @@ stderr:
     assert_equivalent(&actual, &expected);
     assert_eq!(actual["progress"]["accepted"], 2);
     assert_eq!(actual["optimizer_steps"], 2);
-    assert_eq!(actual["feature_count"], 41);
+    assert_eq!(actual["feature_count"], profile.feature_count());
 }
 
 #[test]
 #[ignore = "invoked in a new process by fresh_process_full_graph_cuda_resume_matches_uninterrupted_builtin_features"]
 fn fresh_process_full_graph_cuda_resume_child() {
-    let (Some(store), Some(output)) = (
-        std::env::var_os(STORE_ENV),
-        std::env::var_os(OUTPUT_ENV),
-    ) else {
+    let (Some(store), Some(output)) = (std::env::var_os(STORE_ENV), std::env::var_os(OUTPUT_ENV))
+    else {
         return;
     };
     let device_index = selected_cuda_index().expect("parent requires a working CUDA device");
-    let mut fixture = fixture(Device::Cuda(device_index));
+    let profile = FeatureProfile::from_env();
+    let mut fixture = fixture(Device::Cuda(device_index), profile);
     let store = CheckpointStore::new(store);
     fixture
         .objective
