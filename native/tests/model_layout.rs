@@ -213,7 +213,11 @@ fn default_builtin_feature_set_executes_through_model_and_adamw_on_cuda() {
         .collect();
     policy.enabled_ids = selected_ids;
     let specs = registry.selected_specs(&policy).unwrap();
-    assert_eq!(specs.len(), 41, "the default registry exposes the 41 built-in feature producers");
+    assert_eq!(
+        specs.len(),
+        41,
+        "the default registry exposes the 41 built-in feature producers"
+    );
 
     let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
     let mut state = MatrixState::identity(3, alphabet.id()).unwrap();
@@ -304,4 +308,25 @@ fn model_forward_and_adamw_update_execute_on_cuda_when_available() {
     assert!(before
         .iter()
         .any(|(name, value)| !value.equal(&after[name])));
+}
+
+#[test]
+fn identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan() {
+    let (variables, model, registry, policy, _packet) = dynamic_model_fixture(Device::Cpu);
+    let alphabet = CnotAlphabet::all_to_all_unit(2).unwrap();
+    let identity = MatrixState::identity(2, alphabet.id()).unwrap();
+    let packet = registry.build(&[identity], &policy).unwrap();
+
+    tch::no_grad(|| {
+        for mut parameter in variables.variables().into_values() {
+            let _ = parameter.fill_(f64::NAN);
+        }
+    });
+
+    let output = model.forward(&packet).unwrap();
+    assert_eq!(
+        output.value.double_value(&[0]),
+        0.0,
+        "the distance field must enforce V(I)=0 even when its raw output is NaN"
+    );
 }
