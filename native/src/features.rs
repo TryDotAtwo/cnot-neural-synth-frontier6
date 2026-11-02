@@ -197,6 +197,31 @@ impl FeatureRegistry {
         }
     }
 
+    /// Build a registry with default providers that need no experiment-specific
+    /// physical contexts. max_n bounds the guarded recognizers and diffusion
+    /// profile; their resource budgets and numeric settings are versioned by the
+    /// providers. Template-response features and I10 remain opt-in because their
+    /// exact experiment set and horizon are part of the feature identity.
+    ///
+    /// Context-bound providers and H07 are intentionally absent. H07 remains a
+    /// post-forward diagnostic helper without a model-input producer contract.
+    pub fn with_default_context_free_providers(max_n: u32) -> Result<Self, FeatureBuildError> {
+        let mut registry = Self::new();
+        crate::rank_features::register_partial_shear_rank(&mut registry)?;
+        crate::basis_gradient::register_basis_gradient(&mut registry)?;
+        crate::stage26::register_stage26_features_with_budget(&mut registry, max_n, 100_000)?;
+        crate::bound_features::register_general_compiler_bounds(&mut registry)?;
+        crate::guarded_features::register_guarded_pair_f02_view(&mut registry, max_n, 100_000)?;
+        crate::guarded_features::register_guarded_pair(&mut registry, max_n, 100_000)?;
+        crate::guarded_features::register_guarded_zero_excess(&mut registry, max_n)?;
+        crate::guarded_features::register_guarded_one_excess(&mut registry, max_n, 100_000)?;
+        let mut diffusion = crate::diffusion::DiffusionConfig::default();
+        diffusion.max_n = max_n;
+        crate::diffusion::register_diffusion(&mut registry, diffusion)?;
+        crate::symmetry_alignment::register_symmetry_alignment_h06(&mut registry)?;
+        Ok(registry)
+    }
+
     pub fn register(
         &mut self,
         producer: Box<dyn FeatureProducer>,

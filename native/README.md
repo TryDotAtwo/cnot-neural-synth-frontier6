@@ -5,6 +5,11 @@ is deliberately split by input contract:
 
 - 41 feature IDs have built-in structural producers: A01-A20, B01-B12, F01,
   G05, C01, D03, and H01-H05.
+- FeatureRegistry::with_default_context_free_providers(max_n) adds 23 more
+  providers (C05, E01/E04/E05, F02-F10, G01-G04/G06-G10, and H06), so 64 IDs
+  are selectable with the default operational profile. It leaves 31 physical
+  context-bound IDs, six template-configured E IDs, horizon-configured I10, and
+  H07 unregistered: full-103 selection still fails closed for those 39 IDs.
 - C02, C03, and C04 can be registered for explicit labeled wire cuts. They
   require an `augmentation_only` symmetry policy and are bound to the ordered
   cut set by the producer version. A matrix width with no registered cut is
