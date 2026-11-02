@@ -5,7 +5,10 @@
 //! verified reduction words are upper bounds only.
 
 use crate::alphabet::CnotAlphabet;
-use crate::bellman::{recompute_backup, select_backup, BellmanBranchAudit};
+use crate::bellman::{
+    recompute_backup, select_backup_with_model_input_coverage, BellmanBranchAudit,
+    BellmanSelectionConfig,
+};
 use crate::checkpoint::{CheckpointManifest, CheckpointStore};
 use crate::features::{FeaturePolicy, FeatureRegistry};
 use crate::model::FusionDistanceField;
@@ -667,55 +670,43 @@ impl FullGraphObjective {
             });
         }
 
-        // Fail closed on incomplete inputs. Reserved/unavailable features are
-        // never silently treated as a complete 103-feature training row.
-        if self.config.require_all_model_inputs {
-            for item in &validated {
-                let mut states = Vec::with_capacity(1 + item.successors.len());
-                states.push(item.record.state.clone());
-                if !item.record.state.is_identity() || self.config.qhat_weight > 0.0 {
-                    states.extend(item.successors.iter().cloned());
-                }
-                let packet = registry
-                    .build(&states, &self.policy)
-                    .map_err(|error| error.to_string())?;
-                packet
-                    .require_complete_model_input_coverage()
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-
-        for item in &validated {
-            if self.config.supervision_weight > 0.0 {
-                self.exposures
-                    .observe(self.config.compact_exposures, 0, &item.record.state);
-            }
-            self.exposures
-                .observe(self.config.compact_exposures, 1, &item.record.state);
-            if !item.record.state.is_identity() || self.config.qhat_weight > 0.0 {
-                for successor in &item.successors {
-                    self.exposures
-                        .observe(self.config.compact_exposures, 1, successor);
-                }
-            }
-        }
-
+        // Feature packets are built once per example and retained only through
+        // that example's loss construction. This keeps candidate coverage
+        // fail-closed without multiplying provider work or holding every
+        // Bellman packet in the batch at once.
         let mut terms = Vec::with_capacity(validated.len());
         let mut gradient_states = Vec::with_capacity(validated.len() * 2);
         let mut diagnostics = ObjectiveDiagnostics {
             examples: validated.len(),
             ..ObjectiveDiagnostics::default()
         };
-        for item in validated {
+        for item in &validated {
             let state = &item.record.state;
-            let selection = select_backup(
+            // Terminal Bellman rows have no selected successor, but terminal
+            // Q-hat still targets every primitive action. Check their packets
+            // before the loss pass, using bounded per-item memory.
+            if self.config.require_all_model_inputs
+                && self.config.qhat_weight > 0.0
+                && state.is_identity()
+            {
+                let packet = registry
+                    .build(&item.successors, &self.policy)
+                    .map_err(|error| error.to_string())?;
+                packet
+                    .require_complete_model_input_coverage()
+                    .map_err(|error| error.to_string())?;
+            }
+            let selection = select_backup_with_model_input_coverage(
                 model,
                 variables,
                 std::slice::from_ref(state),
                 registry,
                 &self.policy,
                 item.alphabet,
-                Some(self.config.neighbor_chunk_size),
+                BellmanSelectionConfig {
+                    chunk_size: Some(self.config.neighbor_chunk_size),
+                    require_complete_model_input_coverage: self.config.require_all_model_inputs,
+                },
             )
             .map_err(|error| error.to_string())?;
             let branch = selection
@@ -729,16 +720,11 @@ impl FullGraphObjective {
             let bellman = recompute_backup(model, variables, &selection)
                 .map_err(|error| error.to_string())?;
 
-            let parent_packet = registry
-                .build(std::slice::from_ref(state), &self.policy)
-                .map_err(|error| error.to_string())?;
-            if self.config.require_all_model_inputs {
-                parent_packet
-                    .require_complete_model_input_coverage()
-                    .map_err(|error| error.to_string())?;
-            }
+            let parent_packet = selection
+                .parent_packet(0)
+                .ok_or_else(|| "Bellman selection did not retain its parent packet".to_owned())?;
             let output = model
-                .forward(&parent_packet)
+                .forward(parent_packet)
                 .map_err(|error| error.to_string())?;
             if output.value.numel() != 1 || output.value.isfinite().all().int64_value(&[]) == 0 {
                 return Err("objective parent value is not a finite scalar".into());
@@ -816,6 +802,22 @@ impl FullGraphObjective {
         let loss = Tensor::stack(&terms, 0).mean(loss_kind);
         if loss.numel() != 1 || loss.isfinite().all().int64_value(&[]) == 0 {
             return Err("nonfinite full graph objective loss".into());
+        }
+        // Commit exposure changes only after the complete batch has produced a
+        // finite loss. A provider/model failure cannot leave a partial audit.
+        for item in &validated {
+            if self.config.supervision_weight > 0.0 {
+                self.exposures
+                    .observe(self.config.compact_exposures, 0, &item.record.state);
+            }
+            self.exposures
+                .observe(self.config.compact_exposures, 1, &item.record.state);
+            if !item.record.state.is_identity() || self.config.qhat_weight > 0.0 {
+                for successor in &item.successors {
+                    self.exposures
+                        .observe(self.config.compact_exposures, 1, successor);
+                }
+            }
         }
         self.last_diagnostics = diagnostics;
         Ok(PreparedTrainingLoss {

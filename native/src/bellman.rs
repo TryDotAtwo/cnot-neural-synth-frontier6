@@ -120,6 +120,10 @@ impl BellmanSelection {
         self.branches.iter().map(|branch| &branch.audit)
     }
 
+    pub(crate) fn parent_packet(&self, index: usize) -> Option<&FeaturePacket> {
+        self.branches.get(index).map(|branch| &branch.parent_packet)
+    }
+
     /// States whose values participate in the differentiable Bellman residual.
     pub fn gradient_exposure_states(&self) -> Vec<MatrixState> {
         self.branches
@@ -176,10 +180,70 @@ pub fn select_backup_with_macros(
     macro_provider: Option<&dyn MacroProvider>,
     chunk_size: Option<usize>,
 ) -> Result<BellmanSelection, BellmanError> {
+    select_backup_internal(
+        model,
+        variables,
+        states,
+        registry,
+        policy,
+        alphabet,
+        BellmanSelectionOptions {
+            macro_provider,
+            config: BellmanSelectionConfig {
+                chunk_size,
+                require_complete_model_input_coverage: false,
+            },
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BellmanSelectionConfig {
+    pub chunk_size: Option<usize>,
+    pub require_complete_model_input_coverage: bool,
+}
+
+struct BellmanSelectionOptions<'a> {
+    macro_provider: Option<&'a dyn MacroProvider>,
+    config: BellmanSelectionConfig,
+}
+
+pub(crate) fn select_backup_with_model_input_coverage(
+    model: &FusionDistanceField,
+    variables: &VarStore,
+    states: &[MatrixState],
+    registry: &FeatureRegistry,
+    policy: &FeaturePolicy,
+    alphabet: &CnotAlphabet,
+    config: BellmanSelectionConfig,
+) -> Result<BellmanSelection, BellmanError> {
+    select_backup_internal(
+        model,
+        variables,
+        states,
+        registry,
+        policy,
+        alphabet,
+        BellmanSelectionOptions {
+            macro_provider: None,
+            config,
+        },
+    )
+}
+
+fn select_backup_internal(
+    model: &FusionDistanceField,
+    variables: &VarStore,
+    states: &[MatrixState],
+    registry: &FeatureRegistry,
+    policy: &FeaturePolicy,
+    alphabet: &CnotAlphabet,
+    options: BellmanSelectionOptions<'_>,
+) -> Result<BellmanSelection, BellmanError> {
     if states.is_empty() {
         return Err(BellmanError::Invalid("empty Bellman batch".into()));
     }
-    if chunk_size.is_some_and(|size| size == 0) {
+    if options.config.chunk_size.is_some_and(|size| size == 0) {
         return Err(BellmanError::Invalid(
             "positive neighbor chunk size required".into(),
         ));
@@ -204,6 +268,11 @@ pub fn select_backup_with_macros(
             ));
         }
         let parent_packet = registry.build(std::slice::from_ref(state), policy)?;
+        if options.config.require_complete_model_input_coverage {
+            parent_packet
+                .require_complete_model_input_coverage()
+                .map_err(|error| BellmanError::Invalid(error.to_string()))?;
+        }
         if state.is_identity() {
             let packet_digest = packet_fingerprint(&parent_packet, None);
             branches.push(PreparedBranch {
@@ -240,7 +309,7 @@ pub fn select_backup_with_macros(
             })?));
         }
         let primitive_count = successors.len();
-        if let Some(provider) = macro_provider {
+        if let Some(provider) = options.macro_provider {
             for certificate in provider.candidates(state).map_err(BellmanError::Invalid)? {
                 certificate.verify(alphabet)?;
                 if certificate.start != *state || certificate.physical_cost == 0 {
@@ -259,7 +328,7 @@ pub fn select_backup_with_macros(
             ));
         }
 
-        let width = chunk_size.unwrap_or(successors.len());
+        let width = options.config.chunk_size.unwrap_or(successors.len());
         let mut best = f64::INFINITY;
         let mut selected_index = None;
         let mut selected_cost = None;
@@ -269,6 +338,11 @@ pub fn select_backup_with_macros(
             let end = (start + width).min(successors.len());
             let chunk = &successors[start..end];
             let packet = registry.build(chunk, policy)?;
+            if options.config.require_complete_model_input_coverage {
+                packet
+                    .require_complete_model_input_coverage()
+                    .map_err(|error| BellmanError::Invalid(error.to_string()))?;
+            }
             let chunk_totals = tch::no_grad(|| -> Result<Vec<f64>, BellmanError> {
                 let values = model.forward(&packet)?.value;
                 if values.isfinite().all().int64_value(&[]) == 0 {

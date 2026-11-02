@@ -1,5 +1,7 @@
-//! Rust implementation of the 103-feature distance field.
+//! Rust implementation for the canonical 103-ID CNOT feature manifest.
 //!
+//! The distance field consumes 102 registered model inputs; H07 is evaluated
+//! as a separate post-forward diagnostic, not as an input tensor.
 //! Tensor/autograd operations use libtorch through `tch`; the stable model
 //! structure and feature contracts remain owned by this crate. CUDA execution
 //! is selected by the tensor device, while `crate::cuda` contains project-owned
