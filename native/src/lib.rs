@@ -105,7 +105,10 @@ pub use rank_features::{
     LabeledCutError, RankIncrementProbe, RestrictedIntersection,
 };
 pub use response::{evaluate_i10, register_tiny_i10, I10Config, I10OracleResult, I10OracleStatus};
-pub use schema::{all_feature_specs, FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT};
+pub use schema::{
+    all_feature_specs, all_model_input_specs, FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT,
+    H07_POST_FORWARD_DIAGNOSTIC_ID, MODEL_INPUT_COUNT,
+};
 pub use shared_relation::{
     register_default_shared_relation_contexts, register_shared_relation_contexts,
     SharedRelationContext, SharedRelationContextError, STAGE56_SOURCE_SHA256,

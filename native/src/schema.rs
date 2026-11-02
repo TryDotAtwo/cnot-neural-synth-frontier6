@@ -1,6 +1,11 @@
 use std::fmt;
 
 pub const FEATURE_COUNT: usize = 103;
+pub const MODEL_INPUT_COUNT: usize = FEATURE_COUNT - 1;
+pub const H07_POST_FORWARD_DIAGNOSTIC_ID: FeatureId = FeatureId {
+    family: b'H',
+    ordinal: 7,
+};
 pub const FEATURE_ID_MANIFEST_ID: &str = "cnot_feature_ids_a01_i11_v1";
 pub const FEATURE_LAYOUT_ID: &str = "runtime_packet_layout_v24";
 
@@ -243,6 +248,17 @@ fn default_wire_roles(id: FeatureId, role: FeatureRole) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// Canonical model inputs from the stable 103-ID manifest. H07 is a
+/// post-forward diagnostic and therefore is not an input to the model.
+pub fn all_model_input_specs() -> Vec<FeatureSpec> {
+    let specs: Vec<_> = all_feature_specs()
+        .into_iter()
+        .filter(|spec| spec.id != H07_POST_FORWARD_DIAGNOSTIC_ID)
+        .collect();
+    debug_assert_eq!(specs.len(), MODEL_INPUT_COUNT);
+    specs
 }
 
 pub fn all_feature_specs() -> Vec<FeatureSpec> {

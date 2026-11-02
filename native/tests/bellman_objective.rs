@@ -85,7 +85,7 @@ fn fixture() -> Fixture {
     let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
     let mut registry = FeatureRegistry::new();
     for mut spec in registry.specs() {
-        if spec.producer_version != "unconfigured" {
+        if spec.id == FeatureId::new(b'H', 7).unwrap() || spec.producer_version != "unconfigured" {
             continue;
         }
         spec.scope = "bellman_fixture".into();
@@ -98,8 +98,10 @@ fn fixture() -> Fixture {
         }
         registry.register(Box::new(ZeroFeature { spec })).unwrap();
     }
-    let policy = FeaturePolicy::complete_103("bellman-fixture-v1");
+    let mut policy = FeaturePolicy::all_model_inputs("bellman-fixture-v1");
+    policy.solver_assisted = true;
     let policy_id = policy.id().unwrap();
+    let model_specs = registry.selected_specs(&policy).unwrap();
     let variables = VarStore::new(Device::Cpu);
     let config = ModelConfig {
         wire_dim: 8,
@@ -112,7 +114,7 @@ fn fixture() -> Fixture {
     };
     let model = FusionDistanceField::new(
         &variables.root(),
-        &registry.specs(),
+        &model_specs,
         policy.schema_id.clone(),
         policy_id,
         Device::Cpu,
@@ -304,7 +306,7 @@ fn full_graph_objective_updates_real_model_and_tracks_actual_gradient_exposure()
             teacher_weight: 0.0,
             // This fixture uses deliberately synthetic providers; it tests the
             // trainer/update path, not production readiness of all 103 inputs.
-            require_complete_103: false,
+            require_all_model_inputs: false,
             ..Default::default()
         },
     )
@@ -489,7 +491,7 @@ fn full_graph_checkpoint_restores_into_fresh_trainer_and_accepts_next_update() {
         FullGraphObjectiveConfig {
             qhat_weight: 0.0,
             teacher_weight: 0.0,
-            require_complete_103: false,
+            require_all_model_inputs: false,
             ..Default::default()
         },
     )
@@ -529,7 +531,7 @@ fn full_graph_checkpoint_restores_into_fresh_trainer_and_accepts_next_update() {
         FullGraphObjectiveConfig {
             qhat_weight: 0.0,
             teacher_weight: 0.0,
-            require_complete_103: false,
+            require_all_model_inputs: false,
             ..Default::default()
         },
     )

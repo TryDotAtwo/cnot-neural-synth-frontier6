@@ -6,8 +6,8 @@
 
 use crate::packet::{FeatureEntry, FeaturePacket, FeaturePacketError, FeatureStatus};
 use crate::schema::{
-    all_feature_specs, feature_spec, is_reserved_native_layout, FeatureId, FeatureRole,
-    FeatureSpec, FEATURE_COUNT, FEATURE_ID_MANIFEST_ID, FEATURE_LAYOUT_ID,
+    all_feature_specs, all_model_input_specs, feature_spec, is_reserved_native_layout, FeatureId,
+    FeatureRole, FeatureSpec, FEATURE_COUNT, FEATURE_ID_MANIFEST_ID, FEATURE_LAYOUT_ID,
 };
 use crate::state::MatrixState;
 use crate::structural;
@@ -63,6 +63,25 @@ impl FeaturePolicy {
     /// contract needed by seeded Monte Carlo and physical-wire probes.
     pub fn complete_103_augmentation_only(schema_id: impl Into<String>) -> Self {
         let mut policy = Self::complete_103(schema_id);
+        policy.symmetry_contract = "augmentation_only".into();
+        policy
+    }
+
+    /// Select the executable model inputs from the canonical 103-ID manifest.
+    /// H07 remains a post-forward diagnostic, not a model input.
+    pub fn all_model_inputs(schema_id: impl Into<String>) -> Self {
+        let mut policy = Self::complete_103(schema_id);
+        policy.enabled_ids = all_model_input_specs()
+            .into_iter()
+            .map(|spec| spec.id)
+            .collect();
+        policy
+    }
+
+    /// All model inputs with the weaker symmetry contract needed by seeded
+    /// Monte Carlo and physical-wire probes.
+    pub fn all_model_inputs_augmentation_only(schema_id: impl Into<String>) -> Self {
+        let mut policy = Self::all_model_inputs(schema_id);
         policy.symmetry_contract = "augmentation_only".into();
         policy
     }

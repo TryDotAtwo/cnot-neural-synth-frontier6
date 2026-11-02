@@ -21,6 +21,31 @@ use tch::{Device, Kind};
 mod feature_contexts;
 use feature_contexts::complete_model_input_contexts;
 
+#[test]
+fn complete_model_input_profile_is_accepted_by_default_training_gate() {
+    let registry = FeatureRegistry::with_all_model_input_providers(complete_model_input_contexts())
+        .expect("register all 102 model-input providers");
+    let mut policy =
+        FeaturePolicy::all_model_inputs_augmentation_only("complete-model-inputs-contract-test");
+    policy.solver_assisted = true;
+    let selected = registry.selected_specs(&policy).unwrap();
+    assert_eq!(selected.len(), cnot103_native::schema::MODEL_INPUT_COUNT);
+    assert!(!policy
+        .enabled_ids
+        .contains(&FeatureId::new(b'H', 7).unwrap()));
+
+    let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
+    FullGraphObjective::new(
+        vec![alphabet],
+        &registry,
+        policy,
+        Vec::new(),
+        Vec::new(),
+        FullGraphObjectiveConfig::default(),
+    )
+    .expect("default complete-model-input gate must accept H07 as diagnostic-only");
+}
+
 const DEVICE_ENV: &str = "CNOT103_RESUME_DEVICE";
 const STORE_ENV: &str = "CNOT103_BUILTIN_RESUME_STORE";
 const OUTPUT_ENV: &str = "CNOT103_BUILTIN_RESUME_OUTPUT";
@@ -139,10 +164,7 @@ fn fixture(device: Device, profile: FeatureProfile) -> Fixture {
                 FeatureRegistry::with_all_model_input_providers(complete_model_input_contexts())
                     .expect("register all 102 model-input providers from explicit contexts");
             let mut policy =
-                FeaturePolicy::complete_103_augmentation_only("all-model-inputs-102-resume-v1");
-            policy
-                .enabled_ids
-                .retain(|id| *id != FeatureId::new(b'H', 7).unwrap());
+                FeaturePolicy::all_model_inputs_augmentation_only("all-model-inputs-102-resume-v1");
             policy.solver_assisted = true;
             (registry, policy)
         }
@@ -203,7 +225,7 @@ fn fixture(device: Device, profile: FeatureProfile) -> Fixture {
         FullGraphObjectiveConfig {
             qhat_weight: 0.0,
             teacher_weight: 0.0,
-            require_complete_103: false,
+            require_all_model_inputs: false,
             ..Default::default()
         },
     )

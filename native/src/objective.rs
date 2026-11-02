@@ -13,7 +13,7 @@ use crate::nn_training::{
     DifferentiableObjective, NeuralTrainer, PreparedTrainingLoss, TchTrainingError,
 };
 use crate::packet::StateIdentity;
-use crate::schema::all_feature_specs;
+use crate::schema::all_model_input_specs;
 use crate::state::{CnotGate, MatrixState};
 use crate::training_data::{elementary_lower_bound, ExactCatalog, TrainingRecord};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,8 @@ pub struct FullGraphObjectiveConfig {
     /// Stable SHA-256 identity of the exact admission policy/data boundary.
     /// A boolean alone cannot bind a resumed run to the same held-out policy.
     pub external_admission_sha256: Option<String>,
-    pub require_complete_103: bool,
+    /// Require all executable inputs from the 103-ID manifest; H07 is diagnostic-only.
+    pub require_all_model_inputs: bool,
     pub compact_exposures: bool,
 }
 
@@ -52,7 +53,7 @@ impl Default for FullGraphObjectiveConfig {
             teacher_temperature: 4.0,
             external_admission: false,
             external_admission_sha256: None,
-            require_complete_103: true,
+            require_all_model_inputs: true,
             compact_exposures: false,
         }
     }
@@ -248,15 +249,15 @@ impl FullGraphObjective {
     ) -> Result<Self, String> {
         config.validate()?;
         let policy_id = policy.id().map_err(|error| error.to_string())?;
-        if config.require_complete_103 {
+        if config.require_all_model_inputs {
             let selected: HashSet<_> = policy.enabled_ids.iter().copied().collect();
-            let expected: HashSet<_> = all_feature_specs()
+            let expected: HashSet<_> = all_model_input_specs()
                 .into_iter()
                 .map(|spec| spec.id)
                 .collect();
             if selected != expected {
                 return Err(
-                    "full graph training requires the canonical complete-103 feature policy".into(),
+                    "full graph training requires every executable model input from the canonical 103-ID manifest".into(),
                 );
             }
         }
@@ -344,7 +345,7 @@ impl FullGraphObjective {
     /// Stable checkpoint contract for `Checkpoint.contract`.
     pub fn checkpoint_contract(&self) -> serde_json::Value {
         serde_json::json!({
-            "id": "full_graph_reference_v1",
+            "id": "full_graph_reference_v2",
             "objective_sha256": self.config_sha256,
             "feature_registry_sha256": self.feature_contract_sha256,
             "training_records_sha256": self.training_records_sha256,
@@ -593,7 +594,7 @@ impl FullGraphObjective {
 
         // Fail closed on incomplete inputs. Reserved/unavailable features are
         // never silently treated as a complete 103-feature training row.
-        if self.config.require_complete_103 {
+        if self.config.require_all_model_inputs {
             for item in &validated {
                 let mut states = Vec::with_capacity(1 + item.successors.len());
                 states.push(item.record.state.clone());
@@ -604,7 +605,7 @@ impl FullGraphObjective {
                     .build(&states, &self.policy)
                     .map_err(|error| error.to_string())?;
                 packet
-                    .require_complete_103()
+                    .require_complete_model_input_coverage()
                     .map_err(|error| error.to_string())?;
             }
         }
@@ -656,9 +657,9 @@ impl FullGraphObjective {
             let parent_packet = registry
                 .build(std::slice::from_ref(state), &self.policy)
                 .map_err(|error| error.to_string())?;
-            if self.config.require_complete_103 {
+            if self.config.require_all_model_inputs {
                 parent_packet
-                    .require_complete_103()
+                    .require_complete_model_input_coverage()
                     .map_err(|error| error.to_string())?;
             }
             let output = model
@@ -1119,7 +1120,7 @@ fn objective_config_digest(
         .collect();
     catalog_rows.sort_by_key(|(id, _)| (*id).clone());
     let body = serde_json::json!({
-        "id": "full_graph_reference_v1",
+        "id": "full_graph_reference_v2",
         "policy": policy_id,
         "feature_registry_sha256": feature_contract_sha256,
         "training_records_sha256": training_records_sha256,
@@ -1134,7 +1135,7 @@ fn objective_config_digest(
         "teacher_temperature": config.teacher_temperature,
         "external_admission": config.external_admission,
         "external_admission_sha256": config.external_admission_sha256,
-        "require_complete_103": config.require_complete_103,
+        "require_all_model_inputs": config.require_all_model_inputs,
         "compact_exposures": config.compact_exposures,
         "gradient_observation": "neural_trainer_autograd_boundary_v1"
     });
