@@ -375,6 +375,44 @@ fn full_graph_objective_checkpoint_state_is_bound_to_its_contract() {
 }
 
 #[test]
+fn full_graph_checkpoint_contract_is_bound_to_frozen_dataset_sha256() {
+    let fixture = fixture();
+    let mut first = FullGraphObjective::new(
+        vec![fixture.alphabet.clone()],
+        &fixture.registry,
+        fixture.policy.clone(),
+        Vec::new(),
+        Vec::new(),
+        FullGraphObjectiveConfig::default(),
+    )
+    .unwrap();
+    let unbound_digest = first.config_sha256().to_owned();
+    assert!(first.bind_frozen_dataset_sha256(&"A".repeat(64)).is_err());
+
+    let dataset_sha = "a".repeat(64);
+    first.bind_frozen_dataset_sha256(&dataset_sha).unwrap();
+    assert_ne!(first.config_sha256(), unbound_digest);
+    assert_eq!(
+        first.checkpoint_contract()["frozen_dataset_sha256"].as_str(),
+        Some(dataset_sha.as_str())
+    );
+    first.bind_frozen_dataset_sha256(&dataset_sha).unwrap();
+    assert!(first.bind_frozen_dataset_sha256(&"b".repeat(64)).is_err());
+
+    let mut second = FullGraphObjective::new(
+        vec![fixture.alphabet],
+        &fixture.registry,
+        fixture.policy,
+        Vec::new(),
+        Vec::new(),
+        FullGraphObjectiveConfig::default(),
+    )
+    .unwrap();
+    second.bind_frozen_dataset_sha256(&"b".repeat(64)).unwrap();
+    assert_ne!(first.checkpoint_contract(), second.checkpoint_contract());
+}
+
+#[test]
 fn full_graph_checkpoint_contract_is_bound_to_ordered_training_records() {
     let fixture = fixture();
     let identity = MatrixState::identity(3, fixture.alphabet.id()).unwrap();
@@ -407,6 +445,10 @@ fn full_graph_checkpoint_contract_is_bound_to_ordered_training_records() {
         FullGraphObjectiveConfig::default(),
     )
     .unwrap();
+    let dataset_sha = "c".repeat(64);
+    first_objective
+        .bind_frozen_dataset_sha256(&dataset_sha)
+        .unwrap();
     let first_contract = {
         let runner = FullGraphObjectiveRunner::new(
             &mut first_objective,
@@ -429,6 +471,9 @@ fn full_graph_checkpoint_contract_is_bound_to_ordered_training_records() {
         FullGraphObjectiveConfig::default(),
     )
     .unwrap();
+    second_objective
+        .bind_frozen_dataset_sha256(&dataset_sha)
+        .unwrap();
     let second_contract = {
         let runner = FullGraphObjectiveRunner::new(
             &mut second_objective,
@@ -442,11 +487,18 @@ fn full_graph_checkpoint_contract_is_bound_to_ordered_training_records() {
         runner.checkpoint_contract()
     };
 
+    assert_eq!(
+        first_contract["frozen_dataset_sha256"],
+        second_contract["frozen_dataset_sha256"]
+    );
     assert_ne!(
         first_contract["training_records_sha256"],
         second_contract["training_records_sha256"]
     );
     assert_ne!(first_contract, second_contract);
+    assert!(first_objective
+        .bind_frozen_dataset_sha256(&"d".repeat(64))
+        .is_err());
 }
 
 #[test]

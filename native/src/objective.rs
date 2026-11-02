@@ -230,6 +230,7 @@ pub struct FullGraphObjective {
     exact_catalogs: HashMap<String, ExactCatalog>,
     feature_contract_sha256: String,
     training_records_sha256: Option<String>,
+    frozen_dataset_sha256: Option<String>,
     policy: FeaturePolicy,
     forbidden: HashSet<StateIdentity>,
     config: FullGraphObjectiveConfig,
@@ -308,12 +309,14 @@ impl FullGraphObjective {
             &forbidden,
             &config,
             None,
+            None,
         );
         Ok(Self {
             alphabets: alphabet_map,
             exact_catalogs: exact_map,
             feature_contract_sha256,
             training_records_sha256: None,
+            frozen_dataset_sha256: None,
             policy,
             forbidden,
             config,
@@ -345,12 +348,45 @@ impl FullGraphObjective {
     /// Stable checkpoint contract for `Checkpoint.contract`.
     pub fn checkpoint_contract(&self) -> serde_json::Value {
         serde_json::json!({
-            "id": "full_graph_reference_v2",
+            "id": "full_graph_reference_v3",
             "objective_sha256": self.config_sha256,
             "feature_registry_sha256": self.feature_contract_sha256,
+            "frozen_dataset_sha256": self.frozen_dataset_sha256,
             "training_records_sha256": self.training_records_sha256,
             "exposure_schema": EXPOSURE_SCHEMA,
         })
+    }
+
+    /// Bind the exact sealed frozen-data artifact before constructing a runner.
+    /// The ordered TrainingRecord digest is bound separately when the runner is
+    /// created; both identities are required to resume the same training run.
+    pub fn bind_frozen_dataset_sha256(&mut self, sha256: &str) -> Result<(), String> {
+        if !is_sha256_hex(sha256) {
+            return Err("frozen dataset fingerprint must be lowercase SHA-256 hex".into());
+        }
+        if let Some(bound) = &self.frozen_dataset_sha256 {
+            return if bound == sha256 {
+                Ok(())
+            } else {
+                Err("objective is already bound to a different frozen dataset".into())
+            };
+        }
+        if self.training_records_sha256.is_some() {
+            return Err("frozen dataset must be bound before constructing the runner".into());
+        }
+        let policy_id = self.policy.id().map_err(|error| error.to_string())?;
+        self.config_sha256 = objective_config_digest(
+            &self.alphabets,
+            &self.exact_catalogs,
+            &policy_id,
+            &self.feature_contract_sha256,
+            &self.forbidden,
+            &self.config,
+            None,
+            Some(sha256),
+        );
+        self.frozen_dataset_sha256 = Some(sha256.to_owned());
+        Ok(())
     }
 
     fn bind_training_records(&mut self, records: &[TrainingRecord]) -> Result<(), String> {
@@ -373,6 +409,7 @@ impl FullGraphObjective {
             &self.forbidden,
             &self.config,
             Some(&digest),
+            self.frozen_dataset_sha256.as_deref(),
         );
         self.training_records_sha256 = Some(digest);
         Ok(())
@@ -1101,6 +1138,7 @@ fn objective_config_digest(
     forbidden: &HashSet<StateIdentity>,
     config: &FullGraphObjectiveConfig,
     training_records_sha256: Option<&str>,
+    frozen_dataset_sha256: Option<&str>,
 ) -> String {
     let mut alphabet_rows: Vec<_> = alphabets
         .values()
@@ -1120,9 +1158,10 @@ fn objective_config_digest(
         .collect();
     catalog_rows.sort_by_key(|(id, _)| (*id).clone());
     let body = serde_json::json!({
-        "id": "full_graph_reference_v2",
+        "id": "full_graph_reference_v3",
         "policy": policy_id,
         "feature_registry_sha256": feature_contract_sha256,
+        "frozen_dataset_sha256": frozen_dataset_sha256,
         "training_records_sha256": training_records_sha256,
         "alphabets": alphabet_rows,
         "exact_sources": catalog_rows,

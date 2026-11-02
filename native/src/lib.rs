@@ -9,6 +9,7 @@ pub mod checkpoint;
 pub mod diffusion;
 pub mod features;
 pub mod frequency_context;
+pub mod frozen_data;
 pub mod general_compiler;
 pub mod guarded_features;
 pub mod i09_quadratic;
@@ -74,6 +75,7 @@ pub use frequency_context::{
     register_default_frequency_contexts, register_frequency_contexts, FrequencyContext,
     FrequencyContextError,
 };
+pub use frozen_data::{FrozenDataError, FrozenDataset, FrozenPanel, FrozenRecordMetadata};
 pub use general_compiler::{
     compile_general_cnot_word, GeneralCompilerError, GeneralCompilerLimits,
 };

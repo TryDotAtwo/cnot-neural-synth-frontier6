@@ -328,6 +328,24 @@ compiled GPU targets. `build.rs` adds the platform CUDA runtime library path so
 the Rust FFI link step resolves `cudart`.
 
 
+## Frozen dataset reader and checkpoint identity
+
+`FrozenDataset::load_pinned_with_catalogs(path, trusted_sha256, catalogs)` reads a
+`own_frozen_panels_v1` artifact and requires both its `.sha256` sidecar and the
+caller-supplied trusted digest to match the exact bytes. It replays reduction
+certificates, checks labels and train/dev/test source-seed separation, recomputes
+the declared finite symmetry views, enforces dev/test and historical/held-out
+separation, and rejects train roots or one-CNOT successors in the forbidden set.
+The sidecar alone is only an integrity check; production callers should pin the
+expected digest in a separately versioned experiment manifest.
+
+Before constructing `FullGraphObjectiveRunner`, call
+`objective.bind_frozen_dataset_sha256(&dataset.sha256)`. Checkpoint contract v3
+then binds the frozen artifact digest and, when the runner is built, the separate
+ordered training-record digest. A resume with a different artifact or record
+sequence is rejected. This is a library path; a complete production training CLI
+and full source/103-feature acceptance are still open.
+
 ## GPU fresh-process checkpoint acceptance
 
 The CUDA loader was corrected on 2026-11-02: torch_device explicitly opens
