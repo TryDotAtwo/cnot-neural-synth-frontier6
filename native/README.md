@@ -5,6 +5,10 @@ is deliberately split by input contract:
 
 - 41 feature IDs have built-in structural producers: A01-A20, B01-B12, F01,
   G05, C01, D03, and H01-H05.
+- FeatureRegistry::with_all_model_input_providers(contexts) registers all 102
+  model-input features using explicit validated context records. Full 103-ID
+  selection remains closed on H07 until it has a model-input contract; H07 stays
+  available as a post-forward diagnostic only.
 - FeatureRegistry::with_default_context_free_providers(max_n) adds 23 more
   providers (C05, E01/E04/E05, F02-F10, G01-G04/G06-G10, and H06), so 64 IDs
   are selectable with the default operational profile. It leaves 31 physical

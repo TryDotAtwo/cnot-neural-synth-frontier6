@@ -67,8 +67,8 @@ pub use bound_features::register_general_compiler_bounds;
 pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManifest, CheckpointStore};
 pub use diffusion::{register_diffusion, DiffusionConfig};
 pub use features::{
-    FeatureBuildError, FeatureComputation, FeaturePolicy, FeatureProducer, FeatureRegistry,
-    FeatureValue,
+    FeatureBuildError, FeatureComputation, FeaturePolicy, FeatureProducer, FeatureProviderContexts,
+    FeatureRegistry, FeatureValue,
 };
 pub use frequency_context::{
     register_default_frequency_contexts, register_frequency_contexts, FrequencyContext,

@@ -163,6 +163,36 @@ pub trait FeatureProducer: Send + Sync {
     fn compute(&self, state: &MatrixState, policy: &FeaturePolicy) -> FeatureComputation;
 }
 
+/// Explicit physical/experiment contexts needed to register every current model-input provider.
+///
+/// No contexts are synthesized from matrix width. Each collection must contain
+/// enough validated, source-bound records for its provider; registration fails
+/// closed when a required collection or resource bound is absent.
+pub struct FeatureProviderContexts {
+    pub max_n: u32,
+    pub labeled_cuts: Vec<crate::rank_features::LabeledCut>,
+    pub restricted_intersections: Vec<crate::rank_features::RestrictedIntersection>,
+    pub rank_increment_probes: Vec<crate::rank_features::RankIncrementProbe>,
+    pub alphabet: crate::alphabet::CnotAlphabet,
+    pub selected_residual_gates: Vec<crate::state::CnotGate>,
+    pub block_parity_contexts: Vec<crate::block_parities::BlockContext>,
+    pub max_parity_patterns: usize,
+    pub max_parity_pairs: usize,
+    pub matrix_boundaries: Vec<crate::matrix_boundary::MatrixBoundarySpec>,
+    pub max_boundary_ports: usize,
+    pub max_boundary_equations: usize,
+    pub paid_basis_contexts: Vec<crate::paid_basis_features::PaidBasisBlockContext>,
+    pub paid_shear_config: crate::paid_basis::PaidShearConfig,
+    pub template_response: crate::template_response::TemplateResponseConfig,
+    pub bilinear_contexts: Vec<crate::bilinear::BilinearContext>,
+    pub shared_relation_contexts: Vec<crate::shared_relation::SharedRelationContext>,
+    pub frequency_contexts: Vec<crate::frequency_context::FrequencyContext>,
+    pub positive_packet_contexts: Vec<crate::positive_packet::OptionalGatePacket>,
+    pub i09_contexts: Vec<crate::i09_quadratic::I09Context>,
+    pub i09_limits: crate::i09_quadratic::I09Limits,
+    pub i10_config: crate::response::I10Config,
+}
+
 pub struct FeatureRegistry {
     specs: HashMap<FeatureId, FeatureSpec>,
     providers: HashMap<FeatureId, Box<dyn FeatureProducer>>,
@@ -195,6 +225,94 @@ impl FeatureRegistry {
             specs: specs.into_iter().map(|spec| (spec.id, spec)).collect(),
             providers: HashMap::new(),
         }
+    }
+
+    /// Register all 102 currently defined model-input features.
+    ///
+    /// The context bundle is explicit because these providers depend on physical
+    /// cuts, bases, templates, alphabets, or experiment horizons. H07 is
+    /// intentionally not registered: it is currently a post-forward diagnostic
+    /// and has no model-input producer contract. Consequently, complete-103
+    /// selection still fails closed on H07 alone.
+    pub fn with_all_model_input_providers(
+        contexts: FeatureProviderContexts,
+    ) -> Result<Self, FeatureBuildError> {
+        let FeatureProviderContexts {
+            max_n,
+            labeled_cuts,
+            restricted_intersections,
+            rank_increment_probes,
+            alphabet,
+            selected_residual_gates,
+            block_parity_contexts,
+            max_parity_patterns,
+            max_parity_pairs,
+            matrix_boundaries,
+            max_boundary_ports,
+            max_boundary_equations,
+            paid_basis_contexts,
+            paid_shear_config,
+            template_response,
+            bilinear_contexts,
+            shared_relation_contexts,
+            frequency_contexts,
+            positive_packet_contexts,
+            i09_contexts,
+            i09_limits,
+            i10_config,
+        } = contexts;
+
+        let mut registry = Self::with_default_context_free_providers(max_n)?;
+        crate::rank_features::register_labeled_cuts(&mut registry, labeled_cuts)?;
+        crate::rank_features::register_restricted_intersections(
+            &mut registry,
+            restricted_intersections,
+        )?;
+        crate::rank_features::register_rank_increment_probes(&mut registry, rank_increment_probes)?;
+        crate::rank_features::register_selected_residual_ranks(
+            &mut registry,
+            &alphabet,
+            selected_residual_gates,
+        )?;
+        crate::block_parities::register_block_parities(
+            &mut registry,
+            block_parity_contexts,
+            max_parity_patterns,
+            max_parity_pairs,
+        )?;
+        crate::matrix_boundary::register_matrix_boundaries(
+            &mut registry,
+            matrix_boundaries,
+            max_boundary_ports,
+            max_boundary_equations,
+        )
+        .map_err(|error| FeatureBuildError(error.to_string()))?;
+        crate::paid_basis_features::register_paid_basis_features(
+            &mut registry,
+            paid_basis_contexts,
+            paid_shear_config,
+        )?;
+        crate::template_response::register_template_response(&mut registry, template_response)?;
+        crate::bilinear::register_default_bilinear_contexts(&mut registry, bilinear_contexts)?;
+        crate::shared_relation::register_default_shared_relation_contexts(
+            &mut registry,
+            shared_relation_contexts,
+        )?;
+        crate::frequency_context::register_default_frequency_contexts(
+            &mut registry,
+            frequency_contexts,
+        )?;
+        crate::positive_packet::register_default_positive_packet_contexts(
+            &mut registry,
+            positive_packet_contexts,
+        )?;
+        crate::i09_quadratic::register_i09_quadratic_response(
+            &mut registry,
+            i09_contexts,
+            i09_limits,
+        )?;
+        crate::response::register_tiny_i10(&mut registry, i10_config)?;
+        Ok(registry)
     }
 
     /// Build a registry with default providers that need no experiment-specific
