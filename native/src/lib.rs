@@ -151,7 +151,8 @@ pub use template_response::{
 };
 pub use training::{Progress, PythonRandomSnapshot, Sampler, SamplerSnapshot, TrainingError};
 pub use training_data::{
-    ExactCatalog, ExactCatalogEntry, TrainingDataError, TrainingRecord, TrainingSplit,
+    load_exact_catalogs_pinned, ExactCatalog, ExactCatalogEntry, TrainingDataError, TrainingRecord,
+    TrainingSplit,
 };
 pub use view_diagnostic::{
     compute_h07_prediction_spread, H07Diagnostic, H07Error, H07ProbeKind, H07ProbePrediction,

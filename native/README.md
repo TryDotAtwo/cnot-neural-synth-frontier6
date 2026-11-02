@@ -339,6 +339,16 @@ separation, and rejects train roots or one-CNOT successors in the forbidden set.
 The sidecar alone is only an integrity check; production callers should pin the
 expected digest in a separately versioned experiment manifest.
 
+Exact labels that are not proved by equality of source bounds require a
+proof-checked catalog. load_exact_catalogs_pinned(path, trusted_sha256) reads
+an exact_distance_catalog_bundle_v1 artifact with a provenance field and one
+catalog per matrix width. Entries carry packed matrix rows, an exact distance,
+and a replayable reduction word under the unit-cost all-to-all CNOT alphabet.
+The loader requires both the adjacent .sha256 sidecar and the separate trusted
+pin, then verifies catalog closure, replayed costs, and the global Lipschitz
+condition before returning catalogs for FrozenDataset::load_pinned_with_catalogs.
+A sidecar by itself is not a trusted pin.
+
 Before constructing `FullGraphObjectiveRunner`, call
 `objective.bind_frozen_dataset(&dataset)`. Checkpoint contract v3 binds the
 frozen artifact digest and the exact ordered train-panel digest immediately;
