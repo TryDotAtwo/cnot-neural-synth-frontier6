@@ -11,26 +11,49 @@ import importlib
 import importlib.util
 import json
 import math
+import numpy as np
 import pathlib
 import tempfile
 import sys
 import zipfile
 from collections import deque
+from dataclasses import dataclass
+from random import Random
 from types import SimpleNamespace
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 ARCHIVE = ROOT / "packages/v13_recovery_candidate_v17_20261001.zip"
 OUTPUT = pathlib.Path(__file__).resolve().with_name("python_structural_33.json")
 OUTPUT_SUBSPACE = pathlib.Path(__file__).resolve().with_name("python_subspace_views_6.json")
+OUTPUT_BASIS = pathlib.Path(__file__).resolve().with_name("python_basis_gradient_3.json")
 ARCHIVE_SHA256 = "9947df2dc27080b38eb34e7551be39ce0536f2409aa733c5f201c317ed1a4866"
 STRUCTURAL_PATH = "research_v3/features/structural.py"
 SUBSPACE_PATH = "research_v3/features/subspace_views.py"
 GF2_PATH = "research_v3/gf2.py"
 PACKET_PATH = "research_v3/features/packet.py"
+BASIS_GRADIENT_PATH = "research_v3/features/basis_gradient.py"
+BASIS_MACROS_PATH = "research_v3/search/basis_macros.py"
 SCHEMA_PATH = "research_v3/configs/feature_schema.json"
 SUBSPACE_SHA256 = "78c06d9e542016f4cb0875f7a1a9807e8a638de6eebeddc7aadff57cd3084a99"
 GF2_SHA256 = "223d7bc72029457e8119946c6cd320c95063559ff63a61d1c67a9e7293bc21f2"
 PACKET_SHA256 = "b4e8b22065a7ec45a2de8c2b4d2a5e75f527abf4e131a7b9409951d1fa7341f1"
+BASIS_GRADIENT_SHA256 = "d450f15ed32454bff2dd069c66ccf3cb6395667f8828e1a563d522006bbc96e2"
+BASIS_MACROS_SHA256 = "ed34348949806453dd1c70daf957ee071c1cd445de787b70dc5346dd38840b53"
+
+@dataclass(frozen=True)
+class OracleState:
+    n: int
+    packed_rows: tuple[int, ...]
+
+
+class CaptureRegistry:
+    def __init__(self):
+        self.producers = {}
+
+    def register(self, feature_spec, producer, **_kwargs):
+        self.producers[feature_spec.id] = producer
+
+
 WIDTH4_PATHS = [
     ("identity4", []),
     ("triangular_chain4", [[0, 1], [1, 2], [2, 3]]),
@@ -87,6 +110,8 @@ def load_oracle():
         subspace_bytes = archive.read(SUBSPACE_PATH)
         gf2_bytes = archive.read(GF2_PATH)
         packet_bytes = archive.read(PACKET_PATH)
+        basis_gradient_bytes = archive.read(BASIS_GRADIENT_PATH)
+        basis_macros_bytes = archive.read(BASIS_MACROS_PATH)
     schema = json.loads(schema_bytes)
     if sha256(schema_bytes) != "3b4063047ccc9d337e74d92de90108653ac5cf9da166733eba2f4c429c48c0b8":
         raise RuntimeError("pinned feature schema manifest SHA-256 mismatch")
@@ -98,6 +123,10 @@ def load_oracle():
         raise RuntimeError("pinned GF(2) helper SHA-256 mismatch")
     if sha256(packet_bytes) != PACKET_SHA256:
         raise RuntimeError("pinned Python feature packet SHA-256 mismatch")
+    if sha256(basis_gradient_bytes) != BASIS_GRADIENT_SHA256:
+        raise RuntimeError("pinned Python basis-gradient producer SHA-256 mismatch")
+    if sha256(basis_macros_bytes) != BASIS_MACROS_SHA256:
+        raise RuntimeError("pinned Python basis-macro helper SHA-256 mismatch")
     implemented = [entry for entry in schema["entries"] if entry["implemented"]]
     expected = [f"A{i:02}" for i in range(1, 21)]
     expected += [f"B{i:02}" for i in range(1, 13)] + ["F01"]
@@ -116,22 +145,113 @@ def load_oracle():
         sys.path.insert(0, temp)
         try:
             subspace_module = importlib.import_module("research_v3.features.subspace_views")
-            class CaptureRegistry:
-                def __init__(self):
-                    self.producers = {}
-                def register(self, feature_spec, producer):
-                    self.producers[feature_spec.id] = producer
-            capture = CaptureRegistry()
-            subspace_specs = subspace_module.register_subspace_views(capture)
+            subspace_capture = CaptureRegistry()
+            subspace_specs = subspace_module.register_subspace_views(subspace_capture)
+            basis_module = importlib.import_module("research_v3.features.basis_gradient")
+            basis_capture = CaptureRegistry()
+            basis_specs = basis_module.register_basis_gradient(basis_capture)
         finally:
             sys.path.remove(temp)
         expected_subspace = ["C01", "D03", "H01", "H02", "H03", "H04"]
         if list(subspace_specs) != expected_subspace:
             raise RuntimeError("pinned subspace module declared unexpected feature IDs")
         return (
-            schema, implemented, module, subspace_specs, capture.producers,
-            sha256(schema_bytes), sha256(source_bytes),
+            schema, implemented, module, subspace_specs, subspace_capture.producers,
+            basis_specs, basis_capture.producers, sha256(schema_bytes), sha256(source_bytes),
         )
+
+
+def basis_gradient_batches(specs, producers):
+    feature_ids = list(specs)
+    if feature_ids != ["E01", "E04", "E05"]:
+        raise RuntimeError(f"pinned basis-gradient module declared unexpected IDs: {feature_ids}")
+    batches = []
+    target_count = 32
+
+    for n in (4, 5, 6):
+        accepted = []
+        seen = set()
+        candidate_count = 0
+        unsupported_count = 0
+
+        def consider(name, path):
+            nonlocal candidate_count, unsupported_count
+            rows = apply_path(n, path)
+            if rows in seen:
+                return
+            seen.add(rows)
+            candidate_count += 1
+            state = OracleState(n, rows)
+            results = [producers[feature_id](state, None) for feature_id in feature_ids]
+            unsupported = [isinstance(result, str) for result in results]
+            if any(unsupported):
+                if not all(unsupported) or any(result != "unsupported" for result in results):
+                    raise RuntimeError("basis-gradient providers disagree on applicability")
+                unsupported_count += 1
+                return
+            accepted.append({
+                "name": name,
+                "n": n,
+                "packed_rows": list(rows),
+                "cnot_path": path,
+                "oracle_state": state,
+            })
+
+        if n == 4:
+            for original_name, path in WIDTH4_PATHS:
+                consider(f"basis_n4_{original_name}", path)
+
+        rng = Random(20261103 + n)
+        gates = [
+            (control, target)
+            for control in range(n)
+            for target in range(n)
+            if control != target
+        ]
+        for attempt in range(20000):
+            if len(accepted) >= target_count:
+                break
+            length = rng.randint(2 * n, 5 * n)
+            path = [list(rng.choice(gates)) for _ in range(length)]
+            consider(f"basis_n{n}_seeded_{attempt:04}", path)
+        if len(accepted) != target_count:
+            raise RuntimeError(
+                f"only generated {len(accepted)} applicable width-{n} states; expected {target_count}"
+            )
+
+        states = []
+        for row in accepted:
+            states.append({key: value for key, value in row.items() if key != "oracle_state"})
+        feature_rows = []
+        for feature_id in feature_ids:
+            arrays = [
+                producers[feature_id](row["oracle_state"], None)[0]
+                for row in accepted
+            ]
+            first_shape = list(arrays[0].shape)
+            if any(list(array.shape) != first_shape for array in arrays):
+                raise RuntimeError(f"{feature_id} changes shape within width-{n} batch")
+            stacked = np.stack(arrays, axis=0).astype("float32", copy=False)
+            values = [float(value) for value in stacked.reshape(-1)]
+            if not all(math.isfinite(value) for value in values):
+                raise RuntimeError(f"{feature_id} contains a non-finite value")
+            spec = specs[feature_id]
+            feature_rows.append({
+                "id": feature_id,
+                "role": spec.role,
+                "channels": spec.channels,
+                "shape": first_shape,
+                "values": values,
+            })
+        batches.append({
+            "n": n,
+            "candidate_count": candidate_count,
+            "unsupported_candidate_count": unsupported_count,
+            "state_count": len(states),
+            "states": states,
+            "features": feature_rows,
+        })
+    return batches
 
 
 def compact_json(value, level=0, key=None):
@@ -155,7 +275,8 @@ def compact_json(value, level=0, key=None):
 
 
 def main():
-    schema, entries, oracle, subspace_specs, subspace_producers, schema_sha, source_sha = load_oracle()
+    (schema, entries, oracle, subspace_specs, subspace_producers, basis_specs, basis_producers,
+     schema_sha, source_sha) = load_oracle()
     batches = []
     subspace_batches = []
     inputs = [
@@ -193,7 +314,7 @@ def main():
             first_shape = list(arrays[0].shape)
             if any(list(array.shape) != first_shape for array in arrays):
                 raise RuntimeError(f"{feature_id} changes shape within width-{n} batch")
-            stacked = __import__("numpy").stack(arrays, axis=0).astype("float32", copy=False)
+            stacked = np.stack(arrays, axis=0).astype("float32", copy=False)
             values = [float(value) for value in stacked.reshape(-1)]
             if not all(math.isfinite(value) for value in values):
                 raise RuntimeError(f"{feature_id} contains a non-finite value")
@@ -215,7 +336,7 @@ def main():
             first_shape = list(arrays[0].shape)
             if any(list(array.shape) != first_shape for array in arrays):
                 raise RuntimeError(f"{feature_id} changes shape within width-{n} batch")
-            stacked = __import__("numpy").stack(arrays, axis=0).astype("float32", copy=False)
+            stacked = np.stack(arrays, axis=0).astype("float32", copy=False)
             values = [float(value) for value in stacked.reshape(-1)]
             if not all(math.isfinite(value) for value in values):
                 raise RuntimeError(f"{feature_id} contains a non-finite value")
@@ -257,11 +378,30 @@ def main():
         "feature_ids": list(subspace_specs),
         "batches": subspace_batches,
     }
+    basis_fixture = {
+        "schema": "python_basis_gradient_reference_v1",
+        "source_archive_sha256": ARCHIVE_SHA256,
+        "basis_gradient_sha256": BASIS_GRADIENT_SHA256,
+        "basis_macros_sha256": BASIS_MACROS_SHA256,
+        "gf2_helper_sha256": GF2_SHA256,
+        "feature_packet_sha256": PACKET_SHA256,
+        "feature_ids": list(basis_specs),
+        "batches": basis_gradient_batches(basis_specs, basis_producers),
+    }
     OUTPUT.write_text(compact_json(fixture) + "\n", encoding="utf-8")
     OUTPUT_SUBSPACE.write_text(compact_json(subspace_fixture) + "\n", encoding="utf-8")
+    OUTPUT_BASIS.write_text(compact_json(basis_fixture) + "\n", encoding="utf-8")
     matrix_count = sum(batch["state_count"] for batch in batches)
     print(f"wrote {OUTPUT.relative_to(ROOT)} ({matrix_count} matrices, {len(entries)} structural features)")
-    print(f"wrote {OUTPUT_SUBSPACE.relative_to(ROOT)} ({matrix_count} matrices, {len(subspace_specs)} subspace features)")
+    basis_state_count = sum(batch["state_count"] for batch in basis_fixture["batches"])
+    print(
+        f"wrote {OUTPUT_SUBSPACE.relative_to(ROOT)} "
+        f"({matrix_count} matrices, {len(subspace_specs)} subspace features)"
+    )
+    print(
+        f"wrote {OUTPUT_BASIS.relative_to(ROOT)} "
+        f"({basis_state_count} matrices, {len(basis_specs)} basis-gradient features)"
+    )
 
 
 if __name__ == "__main__":

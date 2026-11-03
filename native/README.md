@@ -102,7 +102,11 @@ split by input contract:
 - E01, E04, and E05 can be explicitly registered for the source-defined
   zero-template partial-shear cost, ordered-pair gradient, and gradient
   statistics. They require `augmentation_only` because the source block fixes
-  the first half of the physical wires.
+  the first half of the physical wires. A direct source-parity fixture pins the
+  Python-v17 archive plus the basis-gradient and basis-macro module hashes, then
+  compares values, roles, channels, shapes, and status on 32 CNOT-constructed
+  matrices at each width 4, 5, and 6. This establishes parity for those sampled
+  states only; it does not establish parity for other E-family providers.
 - G01-G04 can be explicitly registered as source-relative CNOT column-diffusion
   profiles. Rust uses uniformization over the exact finite class chain and
   exposes the source's `floating_semigroup` status without claiming a formal

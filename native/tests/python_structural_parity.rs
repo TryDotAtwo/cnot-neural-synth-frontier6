@@ -1,6 +1,6 @@
 use cnot103_native::{
-    CnotAlphabet, FeatureId, FeaturePolicy, FeatureRegistry, FeatureRole, FeatureStatus,
-    MatrixState,
+    register_basis_gradient, CnotAlphabet, FeatureId, FeaturePolicy, FeatureRegistry, FeatureRole,
+    FeatureStatus, MatrixState,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -18,6 +18,10 @@ const PYTHON_SUBSPACE_SHA256: &str =
 const PYTHON_GF2_SHA256: &str = "223d7bc72029457e8119946c6cd320c95063559ff63a61d1c67a9e7293bc21f2";
 const PYTHON_PACKET_SHA256: &str =
     "b4e8b22065a7ec45a2de8c2b4d2a5e75f527abf4e131a7b9409951d1fa7341f1";
+const PYTHON_BASIS_GRADIENT_SHA256: &str =
+    "d450f15ed32454bff2dd069c66ccf3cb6395667f8828e1a563d522006bbc96e2";
+const PYTHON_BASIS_MACROS_SHA256: &str =
+    "ed34348949806453dd1c70daf957ee071c1cd445de787b70dc5346dd38840b53";
 
 fn parse_id(value: &Value) -> FeatureId {
     let text = value.as_str().expect("feature ID must be text");
@@ -48,24 +52,31 @@ fn role(value: &Value) -> FeatureRole {
     }
 }
 
-fn states_from_batch(batch: &Value) -> Vec<MatrixState> {
+fn states_from_batch(batch: &Value, exhaustive: bool) -> Vec<MatrixState> {
     let n = batch["n"].as_u64().expect("batch width must be numeric") as usize;
-    assert!((3..=4).contains(&n));
+    assert!((3..=6).contains(&n));
     let expected_count = batch["state_count"]
         .as_u64()
         .expect("state count must be numeric") as usize;
-    let expected_exhaustive_count = if n == 3 { 168 } else { 5 };
-    assert_eq!(expected_count, expected_exhaustive_count);
+    let fixture_rows = batch["states"]
+        .as_array()
+        .expect("fixture states must be an array");
+    assert_eq!(fixture_rows.len(), expected_count);
+    if exhaustive {
+        let expected_exhaustive_count = match n {
+            3 => 168,
+            4 => 5,
+            _ => panic!("unexpected exhaustive width: {n}"),
+        };
+        assert_eq!(expected_count, expected_exhaustive_count);
+    }
 
     let alphabet = CnotAlphabet::all_to_all_unit(n as u32).expect("CNOT alphabet");
     let mut states = Vec::with_capacity(expected_count);
     let mut identities = HashSet::new();
     let mut state_names = HashSet::new();
 
-    for row in batch["states"]
-        .as_array()
-        .expect("batch states must be an array")
-    {
+    for row in fixture_rows {
         assert_eq!(row["n"].as_u64(), Some(n as u64));
         let name = row["name"].as_str().expect("state name must be text");
         assert!(state_names.insert(name), "duplicate state name: {name}");
@@ -97,7 +108,13 @@ fn states_from_batch(batch: &Value) -> Vec<MatrixState> {
     states
 }
 
-fn assert_feature_rows(rows: &[Value], states: &[MatrixState], schema_id: &str) {
+fn assert_feature_rows(
+    rows: &[Value],
+    states: &[MatrixState],
+    schema_id: &str,
+    symmetry_contract: &str,
+    register_basis: bool,
+) {
     let ids = rows
         .iter()
         .map(|row| parse_id(&row["id"]))
@@ -107,11 +124,14 @@ fn assert_feature_rows(rows: &[Value], states: &[MatrixState], schema_id: &str) 
         seed: 0,
         schema_id: schema_id.into(),
         solver_assisted: false,
-        symmetry_contract: "exact_relabel".into(),
+        symmetry_contract: symmetry_contract.into(),
         evaluations: None,
         max_bytes: None,
     };
-    let registry = FeatureRegistry::new();
+    let mut registry = FeatureRegistry::new();
+    if register_basis {
+        register_basis_gradient(&mut registry).expect("source basis-gradient providers");
+    }
     registry
         .selected_specs(&policy)
         .expect("every source-backed provider must be executable");
@@ -192,11 +212,13 @@ fn all_python_v17_source_backed_structural_features_match_rust() {
         .as_array()
         .expect("fixture must contain width-specific batches")
     {
-        let states = states_from_batch(batch);
+        let states = states_from_batch(batch, true);
         assert_feature_rows(
             batch["features"].as_array().unwrap(),
             &states,
             "python-v17-structural-parity-v2",
+            "exact_relabel",
+            false,
         );
     }
 }
@@ -235,11 +257,65 @@ fn all_python_v17_opt_in_subspace_views_match_rust() {
         .as_array()
         .expect("fixture must contain width-specific batches")
     {
-        let states = states_from_batch(batch);
+        let states = states_from_batch(batch, true);
         assert_feature_rows(
             batch["features"].as_array().unwrap(),
             &states,
             "python-v17-subspace-parity-v1",
+            "exact_relabel",
+            false,
+        );
+    }
+}
+
+#[test]
+fn all_python_v17_basis_gradient_features_match_rust_on_widths_four_to_six() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/python_basis_gradient_3.json"))
+            .expect("pinned Python basis-gradient fixture must be valid JSON");
+    assert_eq!(
+        fixture["schema"].as_str(),
+        Some("python_basis_gradient_reference_v1")
+    );
+    assert_eq!(
+        fixture["source_archive_sha256"].as_str(),
+        Some(PYTHON_ARCHIVE_SHA256)
+    );
+    assert_eq!(
+        fixture["basis_gradient_sha256"].as_str(),
+        Some(PYTHON_BASIS_GRADIENT_SHA256)
+    );
+    assert_eq!(
+        fixture["basis_macros_sha256"].as_str(),
+        Some(PYTHON_BASIS_MACROS_SHA256)
+    );
+    assert_eq!(
+        fixture["gf2_helper_sha256"].as_str(),
+        Some(PYTHON_GF2_SHA256)
+    );
+    assert_eq!(
+        fixture["feature_packet_sha256"].as_str(),
+        Some(PYTHON_PACKET_SHA256)
+    );
+    assert_eq!(
+        fixture["feature_ids"],
+        serde_json::json!(["E01", "E04", "E05"])
+    );
+
+    let batches = fixture["batches"]
+        .as_array()
+        .expect("fixture must contain width-specific batches");
+    assert_eq!(batches.len(), 3);
+    for (batch, expected_width) in batches.iter().zip([4u64, 5, 6]) {
+        assert_eq!(batch["n"].as_u64(), Some(expected_width));
+        assert_eq!(batch["state_count"].as_u64(), Some(32));
+        let states = states_from_batch(batch, false);
+        assert_feature_rows(
+            batch["features"].as_array().unwrap(),
+            &states,
+            "python-v17-basis-gradient-parity-v1",
+            "augmentation_only",
+            true,
         );
     }
 }
