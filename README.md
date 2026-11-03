@@ -45,8 +45,34 @@ value is checked as exact zero. Run it with
 cargo test --locked --manifest-path native/Cargo.toml --features torch --test python_model_forward_parity.
 
 This is a narrow CPU forward-parity check for one source-backed feature and one
-model profile. It does not establish parity for all 102 model inputs, the 103-ID
-catalog, CUDA training, production data, or the complete training workflow.
+model profile. The companion fixture below expands full-model parity to the
+complete active structural set in the pinned Python-v17 schema. Neither fixture
+establishes parity for every provider, CUDA training quality, production data,
+or the complete training workflow.
+
+## Python-v17 active structural full-forward parity
+
+The fixture at
+native/tests/fixtures/python_structural_33_forward_small.json is generated from
+the pinned Python-v17 archive and its feature-schema manifest. It covers A01-A20,
+B01-B12, and F01 on four mixed-width states (two each at widths 3 and 4), using
+an all-to-all unit-gate alphabet for each width.
+
+The reference assigns deterministic values to every sorted Python state-dict
+parameter. The Rust test compares each of the 33 feature roles, channel counts,
+shapes, availability flags, statuses, and values, then compares the complete
+model's value, allowed-action mask, proposal logits, and qhat outputs. The Rust
+packet still carries the canonical 103-ID manifest; this test enables and
+compares the 33 IDs that the pinned Python-v17 base schema marks implemented.
+
+Regenerate the reference with:
+python native/tests/fixtures/generate_python_structural_forward_reference.py
+
+Run the CPU full-forward comparison with:
+cargo test --locked --manifest-path native/Cargo.toml --features torch --test python_structural_forward_parity
+
+The other 70 IDs are not claimed as Python-v17 base-schema parity by this
+fixture. Separate opt-in Python providers remain covered by their own references.
 
 ## Python structural-provider parity fixture
 
