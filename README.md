@@ -51,9 +51,10 @@ catalog, CUDA training, production data, or the complete training workflow.
 The fixture at native/tests/fixtures/python_structural_33.json is generated from
 the pinned Python feature schema and structural producer. It covers all 33 feature
 IDs marked implemented by that Python producer (A01-A20, B01-B12, and F01) over
-five distinct width-4 matrices constructed from recorded CNOT paths. The test
-checks IDs, roles, channel counts, shapes, availability, computed status, and
-every numeric value against the fixture.
+all 168 matrices in GL(3,2), plus five width-4 matrices constructed from recorded
+CNOT paths. The test replays each path, verifies matrix uniqueness, and compares
+IDs, roles, channel counts, shapes, availability, computed status, and every
+numeric value against the pinned Python fixture.
 
 Run with: cargo test --locked --manifest-path native/Cargo.toml --no-default-features --test python_structural_parity
 
