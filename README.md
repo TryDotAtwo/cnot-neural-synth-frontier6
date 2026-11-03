@@ -9,11 +9,13 @@ archives and the pinned feature/model manifests are retained for provenance.
 Old Molab bootstrap and replay scripts are archived under history/molab-bootstrap;
 they are not part of the runtime or build path.
 
-The model currently has 102 registered model-input features. H07 is implemented
-as a post-forward prediction-spread diagnostic, not as a model input. The
-archived source contract leaves H07's probe-generation and availability policy
-unspecified; no source-parity claim is made for it or for the candidate
-providers whose pinned sources are marked unimplemented.
+The canonical feature bank has 103 IDs: 102 model inputs and H07, a post-forward
+prediction-spread diagnostic. The v17 base feature schema marks 33 IDs as
+implemented in its structural producer; the archive also contains separate
+opt-in Python source modules for additional IDs. A Rust registry entry alone
+does not establish parity: parity claims below are limited to providers directly
+compared against the pinned source. H07's probe-generation and availability
+policy remain unspecified in the archived contract.
 
 CUDA acceptance now covers a real 102-input Bellman training update, checkpoint
 save, restore in a fresh process, and the next update on RTX 3060. A matching
@@ -49,18 +51,26 @@ catalog, CUDA training, production data, or the complete training workflow.
 ## Python structural-provider parity fixture
 
 The fixture at native/tests/fixtures/python_structural_33.json is generated from
-the pinned Python feature schema and structural producer. It covers all 33 feature
-IDs marked implemented by that Python producer (A01-A20, B01-B12, and F01) over
-all 168 matrices in GL(3,2), plus five width-4 matrices constructed from recorded
-CNOT paths. The test replays each path, verifies matrix uniqueness, and compares
-IDs, roles, channel counts, shapes, availability, computed status, and every
-numeric value against the pinned Python fixture.
+the pinned Python feature schema and structural producer. It covers all 33 IDs
+marked implemented by that producer (A01-A20, B01-B12, and F01) over every one
+of the 168 matrices in GL(3,2), plus five width-4 matrices built from recorded
+CNOT paths.
 
-Regenerate after checking the pinned source archive, schema, and producer hashes:
+The paired fixture python_subspace_views_6.json covers the archived opt-in
+providers C01, D03, and H01-H04 on the same 173 matrices. The test replays every
+CNOT path, verifies matrix uniqueness, and compares IDs, roles, channel counts,
+shapes, availability, computed status, and every numeric value against values
+from the pinned Python producers.
+
+Regenerate both fixtures after checking the pinned source archive and module
+hashes with:
 python3 native/tests/fixtures/generate_python_structural_reference.py
 
-Run the Rust parity test with: cargo test --locked --manifest-path native/Cargo.toml --no-default-features --test python_structural_parity
+Run the Rust parity tests with:
+cargo test --locked --manifest-path native/Cargo.toml --no-default-features --test python_structural_parity
 
-This establishes parity only for those 33 source-backed structural providers. It
-does not establish parity for the remaining 70 features, model forward/training,
-CUDA behavior, production data, or synthesis quality.
+These fixtures establish exact parity for those 39 providers on these matrices.
+Separate source-golden tests cover selected basis-gradient, diffusion,
+response, and H06 providers. Neither those tests nor these fixtures establish
+full parity for every catalog ID, full-model behavior, production-data
+coverage, or synthesis quality.
