@@ -1,0 +1,485 @@
+   Compiling cnot103-native v0.1.0 (/workspace/tqp-refactor-103/native)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.44s
+     Running unittests src/lib.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/cnot103_native-3e6252d1420565e3)
+
+running 21 tests
+test bellman::tests::candidate_cost_order_is_not_collapsed_to_float32_precision ... ok
+test diffusion::tests::centered_poisson_weights_remain_normalized_at_large_time ... ok
+test frozen_data::tests::rejects_nonzero_padding_bits ... ok
+test numpy_rng::tests::pcg64_raw_stream_matches_numpy_2_2_6 ... ok
+test numpy_rng::tests::poisson_and_bounded_integer_streams_match_numpy_2_2_6 ... ok
+test numpy_rng::tests::poisson_ptrs_matches_numpy_2_2_6 ... ok
+test numpy_rng::tests::seed_sequence_matches_numpy_zero_and_max_u64_seeds ... ok
+test numpy_rng::tests::singleton_integer_range_does_not_advance_numpy_stream ... ok
+test paid_basis::tests::adjacent_equal_cnot_blocks_cancel_and_are_audited ... ok
+test run_config::tests::rejects_unknown_top_level_fields ... ok
+test run_config::tests::rejects_wrong_schema_before_artifact_io ... ok
+test run_config::tests::sha_pins_are_lowercase_and_exactly_256_bits ... ok
+test template_response::tests::rational_to_f32_uses_round_to_nearest_ties_to_even ... ok
+test run_config::tests::complete_manifest_parses_with_explicit_null_limits ... ok
+test frozen_data::tests::pinned_load_verifies_split_artifact_and_rejects_wrong_pin ... ok
+test frozen_data::tests::objective_binding_uses_the_loaded_artifact_and_its_train_panel ... ok
+test run_config::tests::explicit_context_bundle_registers_all_model_input_ids ... ok
+test frozen_data::tests::packed_rows_above_u64_keep_all_bits ... ok
+test nn_training::model_state_serialization_tests::canonical_encoder_is_order_independent_and_reads_legacy_var_store_streams ... ok
+test paid_basis::tests::atlas_enumerates_every_local_linear_basis ... ok
+test training_session::tests::reconstructed_session_resume_matches_continuous_two_attempt_run ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+     Running unittests src/bin/cnot103_train.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/cnot103_train-f29ace86dab9c9db)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/basis_gradient.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/basis_gradient-879c59388440fa6e)
+
+running 2 tests
+test basis_gradient_marks_empty_partial_block_unsupported ... ok
+test ports_partial_shear_cost_gradient_mask_and_gradient_statistics ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bellman_objective.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/bellman_objective-d87f80c898a85d8b)
+
+running 7 tests
+test full_graph_objective_checkpoint_state_is_bound_to_its_contract ... ok
+test full_graph_checkpoint_contract_is_bound_to_ordered_training_records ... ok
+test full_graph_checkpoint_contract_is_bound_to_frozen_dataset_sha256 ... ok
+test full_graph_objective_requires_admission_presence_to_match_checkpoint_contract ... ok
+test full_graph_objective_updates_real_model_and_tracks_actual_gradient_exposure ... ok
+test full_neighbor_selection_is_chunk_invariant_and_recomputes_a_frozen_loss ... ok
+test full_graph_checkpoint_restores_into_fresh_trainer_and_accepts_next_update ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+     Running tests/bilinear_i05.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/bilinear_i05-dfcd54e592dc3497)
+
+running 5 tests
+test i05_context_rejects_dependent_ports_and_registration_rejects_duplicate_widths ... ok
+test i05_matches_hand_derived_stage55_residual_rank_and_hidden_width ... ok
+test i05_paired_rank_precedes_the_final_hidden_dimension_subtractions ... ok
+test i05_fails_closed_for_width_and_symmetry_contract_mismatches ... ok
+test i05_matches_stage55_source_golden_values_across_port_ranks ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/block_parities.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/block_parities-43a5f09bd8391a33)
+
+running 2 tests
+test block_parity_features_match_hand_counted_patterns_and_roles ... ok
+test block_parity_provider_enforces_pattern_budget_and_augmentation_policy ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/builtin_graph_cuda_resume.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/builtin_graph_cuda_resume-9d0796841f702ee0)
+
+running 5 tests
+test fresh_process_full_graph_cuda_resume_child ... ignored, invoked in a new process by fresh_process_full_graph_cuda_resume_matches_uninterrupted_builtin_features
+test complete_model_input_profile_is_accepted_by_default_training_gate ... ok
+test fresh_process_full_graph_cuda_resume_matches_uninterrupted_all_model_inputs ... ok
+test fresh_process_full_graph_cuda_resume_matches_uninterrupted_builtin_features ... ok
+test h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.47s
+
+     Running tests/checkpoint_store.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/checkpoint_store-391d4caf30086aeb)
+
+running 7 tests
+test checkpoint_fresh_process_child ... ok
+test checkpoint_refuses_progress_regression ... ok
+test checkpoint_refuses_contract_mismatch_conflict_and_corruption ... ok
+test checkpoint_is_immutable_and_round_trips_exact_state ... ok
+test checkpoint_publishes_new_last_without_mutating_the_previous_snapshot ... ok
+test idempotent_save_validates_and_repairs_snapshot_and_honors_best_pointer ... ok
+test checkpoint_restores_in_a_fresh_process ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/cuda_children.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/cuda_children-42f9f5e757a80fd0)
+
+running 1 test
+test rust_cuda_ffi_writes_ordered_cnot_successors_across_packed_widths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/diffusion_features.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/diffusion_features-d146bbf837755286)
+
+running 8 tests
+test monte_carlo_diffusion_exposes_configured_resource_limit ... ok
+test shared_word_monte_carlo_features_match_numpy_2_2_6_source_golden ... ok
+test pair_diffusion_uses_each_matrix_column_pair_histogram ... ok
+test two_wire_diffusion_profiles_match_the_closed_form_column_chain ... ok
+test pair_diffusion_reports_unsupported_and_resource_limited_inputs ... ok
+test pair_diffusion_matches_the_source_profile_and_zeroes_diagonal ... ok
+test transposed_profiles_use_row_weights_and_width_limits_are_visible ... ok
+test rank_two_transition_counts_close_on_every_gl3_matrix_and_column_pair ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/exact_catalog_bundle.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/exact_catalog_bundle-b1604e74f7a232c2)
+
+running 3 tests
+test catalog_bundle_rejects_a_nonreplayable_exact_label_certificate ... ok
+test pinned_catalog_bundle_verifies_all_exact_distances ... ok
+test catalog_bundle_requires_the_trusted_digest_and_matching_sidecar ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/exact_paid_basis.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/exact_paid_basis-eb528d221d70b333)
+
+running 2 tests
+test exact_paid_basis_rejects_malformed_or_unsupported_blocks ... ok
+test exact_paid_basis_matches_source_python_golden_cases ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/feature_schema.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/feature_schema-dbb8bb13bbcfb0ad)
+
+running 7 tests
+test d03_uses_the_source_ordered_pair_three_channel_layout ... ok
+test f09_f10_are_registered_as_explicit_global_solver_gated_contracts ... ok
+test selected_specs_follow_policy_and_reject_unimplemented_ids ... ok
+test selected_policy_reports_every_missing_provider_in_one_error ... ok
+test provider_can_declare_its_actual_dynamic_shape ... ok
+test unimplemented_ids_are_reserved_until_a_provider_declares_their_shape ... ok
+test feature_registry_contract_hash_binds_provider_metadata_stably ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/frequency_context.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/frequency_context-f2e4b1c727103049)
+
+running 5 tests
+test i07_context_rejects_invalid_physical_partitions_and_frequency_padding ... ok
+test i07_is_inapplicable_outside_the_explicit_interface ... ok
+test i07_distinguishes_interface_inapplicability_from_alphabet_and_budget_failures ... ok
+test i07_matches_source_fourier_rank_for_all_relabelled_2x2_frequencies ... ok
+test i07_matches_source_wide_rank_and_exact_representation_exponent ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/general_compiler_features.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/general_compiler_features-19c9a2c5a5f1ffb0)
+
+running 6 tests
+test general_compiler_fails_closed_when_gate_limit_is_too_small ... ok
+test f09_f10_require_explicit_solver_assisted_policy ... ok
+test f09_emits_verified_upper_bound_lower_bound_gap_and_tightness ... ok
+test feature_evaluation_budget_does_not_become_a_gate_budget ... ok
+test f10_marks_optimality_only_when_verified_bounds_meet ... ok
+test general_compiler_replays_all_invertible_three_by_three_matrices ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/guarded_features.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/guarded_features-7fe6665d1b75c755)
+
+running 7 tests
+test f07_producer_identity_matches_the_python_reference_bundle ... ok
+test f07_matches_the_source_three_status_feature_without_widening_its_claim ... ok
+test f08_budget_and_solver_gate_never_become_negative_labels ... ok
+test f06_matches_source_six_channels_and_physical_wire_incidence ... ok
+test f07_fails_closed_on_solver_gate_width_and_alphabet ... ok
+test f06_is_fail_closed_outside_its_exact_pair_scope ... ok
+test f08_matches_source_exact_negative_unsupported_statuses ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/labeled_cuts.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/labeled_cuts-8a8cbff2196b1ab6)
+
+running 7 tests
+test labeled_cut_constructor_requires_a_sorted_nonempty_proper_subset ... ok
+test labeled_cut_relabel_maps_the_selected_physical_wires ... ok
+test labeled_cut_provider_rejects_exact_relabel_policy ... ok
+test labeled_cut_registration_does_not_leave_a_partial_provider_set ... ok
+test labeled_cut_provider_marks_a_different_matrix_width_unsupported ... ok
+test labeled_cut_features_compute_three_exact_block_ranks_and_incidence ... ok
+test restricted_subspace_features_distinguish_row_column_and_candidate_rank ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/matrix_boundary.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/matrix_boundary-ca79d1c825ebcd20)
+
+running 4 tests
+test matrix_boundary_spec_rejects_noncanonical_or_inconsistent_physical_wires ... ok
+test i04_matches_the_source_zero_phase_weighted_boundary_descriptor ... ok
+test source_boundary_fixture_preserves_rank_projection_order_and_incidence ... ok
+test matrix_boundary_fail_closed_for_missing_context_policy_and_budgets ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/model_layout.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/model_layout-2de4b8d21d816e67)
+
+running 5 tests
+test identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan ... ok
+test model_uses_only_selected_features_with_their_registered_shapes ... ok
+test identity_distance_is_exactly_zero_even_when_raw_model_output_is_nan_on_cuda ... ok
+test model_forward_and_adamw_update_execute_on_cuda_when_available ... ok
+test default_builtin_feature_set_executes_through_model_and_adamw_on_cuda ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+     Running tests/multiview_features.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/multiview_features-8e41b6db44f2b866)
+
+running 1 test
+test h05_aligns_the_four_exact_matrix_views_per_ordered_wire_pair ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/packet_rows.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/packet_rows-6e24735907512ce9)
+
+running 2 tests
+test single_row_preserves_feature_values_masks_group_metadata_and_identity ... ok
+test model_input_coverage_ignores_h07_and_allows_inapplicability ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/paid_basis_features.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/paid_basis_features-fd35d5ff82f146d7)
+
+running 2 tests
+test paid_basis_features_fail_closed_without_context_or_explicit_solver_policy ... ok
+test d09_through_d14_are_derived_from_one_verified_paid_shear_candidate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/paid_shear_compiler.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/paid_shear_compiler-e7412152b9b89b40)
+
+running 2 tests
+test paid_shear_compiler_rejects_nonphysical_or_malformed_contexts ... ok
+test paid_shear_compiler_matches_source_and_verifies_full_endpoint ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/partial_shear.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/partial_shear-340fa628b2b32b4d)
+
+running 2 tests
+test partial_shear_feature_ranks_the_source_bound_elimination_block ... ok
+test partial_shear_feature_marks_zero_block_and_nonaugmentation_policy_unsupported ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_packet_i08.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/positive_packet_i08-2a66be0faeb00c42)
+
+running 5 tests
+test i08_rejects_malformed_local_factor_contracts_and_duplicate_widths ... ok
+test i08_matches_stage59_cut_widths_live_selectors_and_physical_incidence ... ok
+test i08_fails_closed_for_context_policy_and_working_byte_budgets ... ok
+test i08_preserves_selector_labels_beyond_one_machine_word ... ok
+test i08_rejects_non_affine_maps_and_reports_resource_limits_separately ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/provider_defaults.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/provider_defaults-7baeb78f785fe928)
+
+running 3 tests
+test context_free_provider_profile_rejects_invalid_guarded_width ... ok
+test context_free_provider_profile_registers_exactly_64_ids_and_keeps_the_rest_open ... ok
+test full_model_input_profile_registers_102_features_and_leaves_only_h07_diagnostic ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/python_model_forward_parity.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/python_model_forward_parity-4f8e3f204835d6b4)
+
+running 1 test
+test native_forward_matches_pinned_python_reference_with_identical_weights ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/python_structural_forward_parity.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/python_structural_forward_parity-8f29d8b364ab6139)
+
+running 1 test
+test native_forward_matches_pinned_python_reference_with_all_active_structural_features ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/python_structural_parity.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/python_structural_parity-fe7e7933c0cc683b)
+
+running 4 tests
+test all_python_v17_basis_gradient_features_match_rust_on_widths_four_to_six ... ok
+test all_python_v17_opt_in_subspace_views_match_rust ... ok
+test all_python_v17_source_backed_structural_features_match_rust ... ok
+test all_python_v17_diffusion_features_match_rust_on_pinned_states ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/quadratic_response_i09.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/quadratic_response_i09-78009c8a2f1b7902)
+
+running 5 tests
+test i09_zero_horizon_keeps_the_initial_matrix_boundary_equations ... ok
+test i09_context_and_registration_reject_ambiguous_contracts ... ok
+test i09_compiler_equations_match_direct_one_gate_word_replay ... ok
+test i09_fails_closed_for_context_width_alphabet_and_resource_limits ... ok
+test i09_matches_pinned_stage60_golden_for_every_gl2_target ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/response_i10.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/response_i10-65241343ebe2dee7)
+
+running 9 tests
+test i10_rejects_width_below_the_reference_domain ... ok
+test i10_requires_explicit_solver_assisted_policy ... ok
+test i10_identity_has_the_source_degree_zero_leader ... ok
+test i10_does_not_turn_a_horizon_miss_into_an_exact_zero ... ok
+test i10_one_cnot_endpoint_has_exact_positive_coefficient_one ... ok
+test i10_reports_a_resource_limit_without_emitting_partial_values ... ok
+test i10_oracle_exposes_exact_series_scope_and_transition_audit ... ok
+test i10_counts_distinct_minimum_words_with_multiplicity ... ok
+test i10_matches_source_two_gate_fixture_and_wire_relabeling ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_manifest.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/run_manifest-1f59122f3462e88d)
+
+running 4 tests
+test cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process ... ignored, runs the full 102-input CLI step/save/fresh-process-resume workflow on CUDA
+test run_manifest_rejects_invalid_json ... ok
+test run_manifest_rejects_unknown_top_level_fields ... ok
+test run_manifest_rejects_wrong_schema_before_loading_artifacts ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/selected_residual.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/selected_residual-bf6f0c3ed0c85c5b)
+
+running 2 tests
+test selected_residual_rank_rejects_an_alphabet_mismatch ... ok
+test selected_residual_rank_uses_the_physical_alphabet_and_gate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/shared_relation_i06.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/shared_relation_i06-eaa4f80028361ec6)
+
+running 5 tests
+test i06_emits_the_full_labelled_kernel_ports_and_physical_incidence ... ok
+test i06_rejects_dependent_covectors_and_respects_vector_budget ... ok
+test i06_retains_labelled_ports_even_when_relation_kernels_match ... ok
+test i06_bit_packing_crosses_u64_boundaries_without_losing_labels ... ok
+test i06_matches_independent_relation_enumeration_for_every_invertible_3x3_matrix ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/stage26_features.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/stage26_features-6c54f24141e24443)
+
+running 2 tests
+test stage26_fails_closed_for_alphabet_and_budget_mismatches ... ok
+test stage26_features_match_source_golden_and_never_overstate_gl3_distance ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/stage35_exact.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/stage35_exact-2824a1635a407324)
+
+running 3 tests
+test stage35_rejects_weighted_alphabet_for_exact_labels ... ok
+test stage35_returns_unsupported_without_an_exact_label_outside_its_scope ... ok
+test stage35_exact_oracle_covers_all_two_wire_frames_and_verifies_words ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/stage37_zero_excess.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/stage37_zero_excess-af41bc816c7d53a3)
+
+running 5 tests
+test stage37_handles_identity_and_rejects_alphabet_mismatch ... ok
+test stage37_nonexact_result_excludes_only_the_changed_row_bound ... ok
+test stage37_rejects_nonunit_and_noncomplete_alphabets_without_labels ... ok
+test stage37_constructs_and_replays_words_beyond_one_machine_word ... ok
+test stage37_matches_full_bfs_over_gl_2_3_and_4 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+     Running tests/stage38_one_excess.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/stage38_one_excess-31d99883c74da420)
+
+running 2 tests
+test stage38_reports_budget_exhaustion_without_a_negative_claim ... ok
+test stage38_matches_all_gl3_distance_partitions_and_verifies_exact_words ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/structural_d03.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/structural_d03-a6b0d312c2014a19)
+
+running 1 test
+test d03_matches_the_source_ordered_row_pair_histogram ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/structural_f02.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/structural_f02-06bf663aad28ac3f)
+
+running 3 tests
+test f02_requires_the_explicit_solver_assisted_source_provider ... ok
+test f02_matches_the_source_only_for_exact_stage35_pair_certificates ... ok
+test f02_fails_closed_on_solver_gate_width_alphabet_and_theorem_scope ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/structural_g05.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/structural_g05-4d3e6876e35e93cb)
+
+running 1 test
+test g05_is_exact_ordered_pair_column_bit_histogram ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/symmetry_alignment.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/symmetry_alignment-59c02be25dcf7485)
+
+running 3 tests
+test h06_matches_the_python_source_golden_for_all_four_views ... ok
+test h06_reports_byte_budget_exhaustion_without_emitting_values ... ok
+test h06_is_equivariant_under_physical_wire_relabeling_and_crosses_word_boundaries ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/tch_training_resume.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/tch_training_resume-0117183895b5c557)
+
+running 3 tests
+test fresh_process_resume_child ... ignored, invoked in a separate process by fresh_process_resume_matches_uninterrupted
+test finite_loss_with_overflowing_adam_moments_requires_restore ... ok
+test fresh_process_resume_matches_uninterrupted ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+     Running tests/template_response.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/template_response-3f5ce37a99ca0017)
+
+running 5 tests
+test template_response_rejects_invalid_rational_probe_points ... ok
+test e02_enforces_its_width_budget_before_producing_a_value ... ok
+test e_family_matches_exact_source_template_fixture ... ok
+test e03_reports_resource_limit_instead_of_approximating_rational_overflow ... ok
+test e02_provider_identity_binds_choices_points_and_budgets ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/training_data.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/training_data-5f2d3b9cabfbdc8a)
+
+running 4 tests
+test exact_label_can_be_proved_by_tight_verified_bounds ... ok
+test exact_catalog_requires_a_closed_component_and_proves_distances ... ok
+test training_record_requires_verified_reduction_and_catalog_backed_exact_label ... ok
+test source_elementary_lower_bound_never_exceeds_exact_gl3_distance ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/training_schedule.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/training_schedule-cb8b9e4242fdea97)
+
+running 6 tests
+test progress_keeps_attempt_accept_reject_counts_consistent ... ok
+test progress_rejects_overflow_and_inconsistent_counters_without_mutating ... ok
+test sampler_matches_cpython_311_random_shuffle_across_epochs ... ok
+test sampler_rejects_invalid_resume_state_without_mutating_it ... ok
+test sampler_matches_cpython_for_zero_large_and_max_u64_seeds ... ok
+test sampler_snapshot_restores_the_exact_next_python_batch ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/view_diagnostic.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/view_diagnostic-3ea39d09a8569476)
+
+running 5 tests
+test h07_is_a_post_forward_population_variance_with_bound_provenance ... ok
+test h07_coverage_accepts_exact_canonical_102_input_statuses ... ok
+test h07_is_order_stable_and_rejects_invalid_probe_data ... ok
+test h07_rejects_missing_view_or_relabel_probes ... ok
+test h07_hash_binds_per_probe_input_coverage_and_reasons ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cnot103_native
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

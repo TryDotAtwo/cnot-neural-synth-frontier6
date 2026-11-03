@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/builtin_graph_cuda_resume.rs (/workspace/refactor-103-codex-20261102/target-libtorch-2.9-cu128/debug/deps/builtin_graph_cuda_resume-9d0796841f702ee0)
+
+running 1 test
+test h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.71s
+

@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-11-03T04:51:37.692497+00:00",
+  "repository": "TryDotAtwo/cnot-neural-synth-frontier6",
+  "branch": "refactor/rust-cuda-103",
+  "commit": "88a2a50ce6b8a4dd4ec488796039d904bc42e96e",
+  "tree": "cb3eb0f1452a57980a2b8145b7e3ffab643170de",
+  "platform": "Vast.ai",
+  "instance_id": "58760212",
+  "gpu_info_file": {
+    "path": "gpu-info.csv",
+    "sha256": "0b607e075324651805f102e999f8d8e8033cb93062f054cb7410dd196f4050ae",
+    "contents": [
+      "name, memory.total [MiB], uuid",
+      "NVIDIA GeForce RTX 3060, 12288 MiB, GPU-e14e1bf9-c057-46ed-640c-eea5e7f78734",
+      "NVIDIA GeForce RTX 3060, 12288 MiB, GPU-4edcf4d0-08b7-1d1a-fb30-2c4909e422ca"
+    ]
+  },
+  "runs": [
+    {
+      "id": "full_cuda_suite_cuda0",
+      "device": "cuda:0",
+      "command": "CNOT103_REQUIRE_CUDA=1 CNOT103_RESUME_DEVICE=cuda:0 cargo test --locked --offline --features cuda",
+      "log": "full-cuda-suite-cuda0.log",
+      "sha256": "01f451f598618cc4736d5203346da7f287452ecd5bfb9e2244b25cc6d46c9936",
+      "result": {
+        "target_summaries": 48,
+        "passed": 192,
+        "failed": 0,
+        "ignored": 3
+      }
+    },
+    {
+      "id": "h07_cuda1",
+      "device": "cuda:1",
+      "command": "CNOT103_REQUIRE_CUDA=1 CNOT103_RESUME_DEVICE=cuda:1 cargo test --locked --offline --features cuda --test builtin_graph_cuda_resume h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets -- --exact --nocapture",
+      "log": "h07-cuda1.log",
+      "sha256": "05a005c10dee80e6760ebbe5565b5a1b99ea173fc7edac0e3449b3ebe5f772c5",
+      "result": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "id": "full_102_resume_cuda1",
+      "device": "cuda:1",
+      "command": "CNOT103_REQUIRE_CUDA=1 CNOT103_RESUME_DEVICE=cuda:1 cargo test --locked --offline --features cuda --test builtin_graph_cuda_resume fresh_process_full_graph_cuda_resume_matches_uninterrupted_all_model_inputs -- --exact --nocapture",
+      "log": "full-102-resume-cuda1.log",
+      "sha256": "43fa581770eebbc29cb2c6fe65078d229b07b185de0253fa6794d994c27bca40",
+      "result": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "id": "cli_save_fresh_resume_cuda0",
+      "device": "cuda:0",
+      "command": "CNOT103_REQUIRE_CUDA=1 CNOT103_RESUME_DEVICE=cuda:0 cargo test --locked --offline --features cuda --test run_manifest cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process -- --ignored --exact --nocapture",
+      "log": "cli-save-fresh-resume-cuda0.log",
+      "sha256": "49b6c88c38651872501f5655429809626ba6f931aed2bad0630ccfde82967a61",
+      "result": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    }
+  ],
+  "interpretation": "Synthetic CUDA/runtime acceptance only. H07 reports per-probe coverage for all 102 model-input IDs, including unsupported or inapplicable outcomes; the test does not claim complete H07 coverage, source parity for all features, production training quality, held-out leakage freedom, or completion of the 1000x10000 campaign."
+}
