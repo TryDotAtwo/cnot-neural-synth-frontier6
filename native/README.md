@@ -197,10 +197,12 @@ split by input contract:
   producers; this is a versioned T2 operational definition, not a claim of
   legacy-source parity or global optimality.
 - The pinned reference archive's `research_v3/configs/feature_schema.json`
-  marks only 33 of 103 IDs implemented; the other 70, including H07, have no
-  executable source producer in that archive. Rust modules contain candidate
-  implementations for many of these missing IDs, but that is not evidence of
-  legacy source parity or a complete production registry. H07's pinned entry is
+  marks 33 of 103 IDs as implemented by its base registry. Its separate opt-in
+  Python modules also provide C01, D03, E01/E04/E05, G01-G10, H01-H04, and I10.
+  Together, the archive has executable producers for 53 IDs; the other 50 have
+  no executable Python producer there. Rust implementations for those missing
+  IDs are versioned T2 contracts, not legacy-source parity. This distinction
+  does not establish a complete production registry. H07's pinned entry is
   a group/1 placeholder with producer version unimplemented; the local packet
   layout preserves that placeholder. H07 is a post-forward diagnostic/ensemble,
   not a model input. The native runtime now executes the actual model on
