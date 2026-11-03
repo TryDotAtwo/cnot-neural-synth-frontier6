@@ -1,5 +1,6 @@
 //! Finite symmetry orbit construction and split-overlap validation.
-use super::{FrozenDataError, FrozenPanel, alphabet};
+use super::alphabet::alphabet;
+use super::types::{FrozenDataError, FrozenPanel};
 use crate::state::MatrixState;
 use std::collections::HashSet;
 

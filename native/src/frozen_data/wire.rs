@@ -1,5 +1,6 @@
 //! Private serde schema and semantic decoding for sealed frozen-data artifacts.
-use super::{FrozenDataError, FrozenPanel, FrozenRecordMetadata, MAX_N, alphabet, split_name};
+use super::alphabet::alphabet;
+use super::types::{FrozenDataError, FrozenPanel, FrozenRecordMetadata};
 use crate::alphabet::{CnotAlphabet, WordCertificate};
 use crate::state::{CnotGate, MatrixState};
 use crate::training_data::{ExactCatalog, TrainingRecord, TrainingSplit};
@@ -7,6 +8,16 @@ use num_bigint::BigUint;
 use serde::Deserialize;
 use serde_json::{Number, Value};
 use std::collections::{HashMap, HashSet};
+
+const MAX_N: u32 = 256;
+
+fn split_name(s: TrainingSplit) -> &'static str {
+    match s {
+        TrainingSplit::Train => "train",
+        TrainingSplit::Dev => "dev",
+        TrainingSplit::Test => "test",
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
