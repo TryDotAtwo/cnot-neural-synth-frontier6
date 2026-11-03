@@ -1,3 +1,4 @@
+use cnot103_native::diffusion::{register_diffusion, DiffusionConfig};
 use cnot103_native::{
     register_basis_gradient, CnotAlphabet, FeatureId, FeaturePolicy, FeatureRegistry, FeatureRole,
     FeatureStatus, MatrixState,
@@ -54,7 +55,7 @@ fn role(value: &Value) -> FeatureRole {
 
 fn states_from_batch(batch: &Value, exhaustive: bool) -> Vec<MatrixState> {
     let n = batch["n"].as_u64().expect("batch width must be numeric") as usize;
-    assert!((3..=6).contains(&n));
+    assert!((2..=6).contains(&n));
     let expected_count = batch["state_count"]
         .as_u64()
         .expect("state count must be numeric") as usize;
@@ -316,6 +317,162 @@ fn all_python_v17_basis_gradient_features_match_rust_on_widths_four_to_six() {
             "python-v17-basis-gradient-parity-v1",
             "augmentation_only",
             true,
+        );
+    }
+}
+
+fn assert_diffusion_feature_rows(
+    rows: &[Value],
+    states: &[MatrixState],
+    seed: u64,
+    symmetry_contract: &str,
+) {
+    let ids = rows
+        .iter()
+        .map(|row| parse_id(&row["id"]))
+        .collect::<Vec<_>>();
+    let policy = FeaturePolicy {
+        enabled_ids: ids,
+        seed,
+        schema_id: "python-v17-diffusion-parity-v1".into(),
+        solver_assisted: false,
+        symmetry_contract: symmetry_contract.into(),
+        evaluations: None,
+        max_bytes: None,
+    };
+    let mut registry = FeatureRegistry::new();
+    register_diffusion(
+        &mut registry,
+        DiffusionConfig {
+            taus: [0.0, 0.25, 1.0, 4.0],
+            floor: 1e-30,
+            max_n: 16,
+            max_pair_states: 10_000,
+            mc_samples: 128,
+            mc_tau: 1.0,
+        },
+    )
+    .expect("source diffusion providers");
+    registry
+        .selected_specs(&policy)
+        .expect("every pinned diffusion provider must be executable");
+    let packet = registry
+        .build(states, &policy)
+        .expect("Rust must build every pinned diffusion feature");
+
+    for expected in rows {
+        let id = parse_id(&expected["id"]);
+        let actual = packet.feature(id);
+        assert_eq!(actual.spec.role, role(&expected["role"]), "{id} role");
+        assert_eq!(
+            actual.spec.channels,
+            expected["channels"].as_u64().unwrap() as usize,
+            "{id} channels"
+        );
+        let mut expected_shape = vec![states.len()];
+        expected_shape.extend(
+            expected["shape"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|extent| extent.as_u64().unwrap() as usize),
+        );
+        assert_eq!(actual.shape, expected_shape, "{id} shape");
+        assert_eq!(actual.available, vec![1; states.len()], "{id} availability");
+        assert!(
+            actual
+                .status
+                .iter()
+                .all(|status| *status == FeatureStatus::Computed),
+            "{id} status"
+        );
+
+        let reference = numbers(&expected["values"]);
+        assert_eq!(actual.values.len(), reference.len(), "{id} value count");
+        for (index, (actual, expected)) in actual.values.iter().zip(reference).enumerate() {
+            let tolerance = 3e-6 * (1.0 + expected.abs());
+            assert!(
+                (actual - expected).abs() <= tolerance,
+                "{id}[{index}]: Rust={actual:.9}, Python={expected:.9}, tolerance={tolerance:.3e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn all_python_v17_diffusion_features_match_rust_on_pinned_states() {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/python_diffusion_10.json"))
+        .expect("pinned Python diffusion fixture must be valid JSON");
+    assert_eq!(
+        fixture["schema"].as_str(),
+        Some("python_diffusion_reference_v1")
+    );
+    assert_eq!(
+        fixture["source_archive_sha256"].as_str(),
+        Some(PYTHON_ARCHIVE_SHA256)
+    );
+    assert_eq!(
+        fixture["diffusion_module_sha256"].as_str(),
+        Some("c618292a54d10a092abc44cd808b892b51b73e5409633434be201fe5599fcf01")
+    );
+    assert_eq!(
+        fixture["probes_module_sha256"].as_str(),
+        Some("183a37e9325c53b16c9c951e40e9cbb0fcb0bdc0c0bfb7963af977e14c70b4e4")
+    );
+    assert_eq!(fixture["numpy_version"].as_str(), Some("2.2.6"));
+    assert_eq!(fixture["scipy_version"].as_str(), Some("1.15.3"));
+    assert_eq!(
+        fixture["config"]["taus"],
+        serde_json::json!([0.0, 0.25, 1.0, 4.0])
+    );
+    assert_eq!(fixture["config"]["floor"].as_f64(), Some(1e-30));
+    assert_eq!(fixture["config"]["max_n"].as_u64(), Some(16));
+    assert_eq!(fixture["config"]["max_pair_states"].as_u64(), Some(10_000));
+    assert_eq!(fixture["config"]["mc_samples"].as_u64(), Some(128));
+    assert_eq!(fixture["config"]["mc_tau"].as_f64(), Some(1.0));
+    let expected_ids = (1..=10)
+        .map(|index| format!("G{index:02}"))
+        .collect::<Vec<_>>();
+    assert_eq!(fixture["feature_ids"], serde_json::json!(expected_ids));
+    assert_eq!(fixture["mc_seed"].as_u64(), Some(91));
+
+    let batches = fixture["batches"]
+        .as_array()
+        .expect("fixture must contain width-specific batches");
+    assert_eq!(batches.len(), 5);
+    for (batch, expected_width) in batches.iter().zip(2u64..=6) {
+        assert_eq!(batch["n"].as_u64(), Some(expected_width));
+        let expected_state_count = match expected_width {
+            2 => 6,
+            3 => 168,
+            _ => 12,
+        };
+        assert_eq!(batch["state_count"].as_u64(), Some(expected_state_count));
+        let exact_rows = batch["exact_features"].as_array().unwrap();
+        let exact_ids = exact_rows
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(exact_ids, ["G01", "G02", "G03", "G04", "G05", "G06"]);
+        let monte_carlo_rows = batch["monte_carlo_features"].as_array().unwrap();
+        let monte_carlo_ids = monte_carlo_rows
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(monte_carlo_ids, ["G07", "G08", "G09", "G10"]);
+        let states = states_from_batch(batch, false);
+        assert_eq!(batch["state_count"].as_u64(), Some(states.len() as u64));
+        assert_diffusion_feature_rows(
+            batch["exact_features"].as_array().unwrap(),
+            &states,
+            0,
+            "exact_relabel",
+        );
+        assert_diffusion_feature_rows(
+            batch["monte_carlo_features"].as_array().unwrap(),
+            &states,
+            91,
+            "augmentation_only",
         );
     }
 }

@@ -127,6 +127,12 @@ split by input contract:
   compatibility identity are bound into their producer version. Use
   `FeaturePolicy::complete_103_augmentation_only` when requesting the full
   manifest with these providers.
+  A pinned Python-source parity fixture checks all G01-G10 on all six
+  GL(2,2) and 168 GL(3,2) states, plus 12 seeded CNOT-generated states at
+  each width 4-6. It pins the source archive and producer-module hashes,
+  NumPy 2.2.6, SciPy 1.15.3, and the diffusion grid; this establishes parity
+  for the Rust CPU providers at that configuration, not the CUDA
+  implementation's separate RNG stream.
 - I10 can be explicitly registered as an exact leading-term response over the
   full ordered CNOT alphabet. It is solver-assisted and bounded by configured
   maximum width, degree, layer-state count, and transition count. It returns a
@@ -244,8 +250,7 @@ counts, G01-G04 source-relative column diffusion, G05 ordered column-pair
 histograms, I10 exact full-alphabet response (source degree/coefficient fixture,
 wire relabeling, horizon miss, solver-policy gate and resource cap), G06
 source-relative pair diffusion (SciPy profile values and exact
-transition closure across all GL(3,2) matrices), G07-G10 NumPy-source golden
-moments for a fixed seed/state, E02/E03/E06-E09 fixed-template exact response and
+transition closure across all GL(3,2) matrices), G07-G10 fixed-seed NumPy goldens plus direct G01-G10 Python-source parity on all GL(2,2)/GL(3,2) states and seeded width-4-to-6 states, E02/E03/E06-E09 fixed-template exact response and
 E01/E04/E05 partial-shear
 gradients and statistics, C02-C05 cut and partial-shear ranks, C06/C07
 restricted-subspace intersections, C09 candidate-rank increment,
