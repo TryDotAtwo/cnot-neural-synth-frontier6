@@ -1,32 +1,16 @@
+use super::assignment::template_assignment_cost;
+use super::budget::{source_evaluation_estimate, template_response_workspace_bytes};
+use super::moments::{
+    conditional_choice_totals, conditional_round_cost, deterministic_probability,
+    expected_cost_fraction, mixed_difference_at_midpoint,
+};
 use super::provider::{CachedTemplateResponse, TemplateResponseValues};
 use super::rational::{rational_to_f32, signed_rational_to_f32};
-use super::{
-    RationalProbability, TemplateChoice, TemplateChoiceKind, TemplateResponseConfig,
-    TEMPLATE_RESPONSE_WIRE_ROLES,
-};
+use super::{RationalProbability, TemplateResponseConfig, TEMPLATE_RESPONSE_WIRE_ROLES};
 use crate::features::{FeatureComputation, FeatureValue};
 use crate::packet::FeatureStatus;
 use crate::shear::partial_shear;
 use crate::state::MatrixState;
-
-fn source_evaluation_estimate(
-    choice_count: usize,
-    point_count: usize,
-    assignment_count: usize,
-) -> Option<usize> {
-    let pair_count = choice_count.checked_mul(choice_count.saturating_sub(1))? / 2;
-    let pair_evaluations = pair_count.checked_mul(4)?;
-    let point_rounding_evaluations = point_count
-        .checked_add(2)?
-        .checked_mul(choice_count.checked_mul(2)?.checked_add(2)?)?;
-    1usize
-        .checked_add(point_count)?
-        .checked_add(pair_evaluations)?
-        .checked_add(point_rounding_evaluations)?
-        .checked_add(assignment_count)
-}
-
-const RATIONAL_ITEM_BYTES: usize = 128;
 
 pub(super) fn compute_template_response(
     state: &MatrixState,
@@ -213,180 +197,12 @@ pub(super) fn compute_template_response(
     })
 }
 
-fn template_assignment_cost(
-    block: &[Vec<u8>],
-    choices: &[TemplateChoice],
-    assignment: usize,
-) -> Option<u64> {
-    let mut transformed = block.to_vec();
-    let mut preparation_cost = 0u64;
-    for (index, choice) in choices.iter().copied().enumerate() {
-        if assignment & (1usize << index) == 0 {
-            continue;
-        }
-        match choice.kind {
-            TemplateChoiceKind::Add => {
-                preparation_cost = preparation_cost.checked_add(2)?;
-                for row in &mut transformed {
-                    row[choice.control] ^= row[choice.target];
-                }
-            }
-            TemplateChoiceKind::Swap => {
-                preparation_cost = preparation_cost.checked_add(6)?;
-                for row in &mut transformed {
-                    row.swap(choice.control, choice.target);
-                }
-            }
-        }
-    }
-    let residual_cost = transformed
-        .iter()
-        .flatten()
-        .try_fold(0u64, |sum, bit| sum.checked_add(u64::from(*bit)))?;
-    preparation_cost.checked_add(residual_cost)
-}
-
-pub(super) fn template_response_workspace_bytes(
-    dimension: u32,
-    choice_count: usize,
-) -> Option<usize> {
-    let width = (dimension / 2) as usize;
-    1usize
-        .checked_shl(width as u32)?
-        .checked_mul(choice_count.saturating_add(6))?
-        .checked_mul(RATIONAL_ITEM_BYTES)
-}
-
 fn scalar_feature(value: f32) -> FeatureValue {
     FeatureValue {
         shape: vec![1],
         values: vec![value],
         token_valid: Vec::new(),
         incidence: Vec::new(),
-    }
-}
-
-fn expected_cost_fraction(
-    costs: &[u64],
-    probabilities: &[RationalProbability],
-) -> Option<(u128, u128)> {
-    if costs.len() != (1usize.checked_shl(probabilities.len() as u32)?) {
-        return None;
-    }
-    let denominator = probabilities
-        .iter()
-        .try_fold(1u128, |product, probability| {
-            product.checked_mul(u128::from(probability.denominator))
-        })?;
-    let mut numerator = 0u128;
-    for (assignment, cost) in costs.iter().copied().enumerate() {
-        let mut weight = 1u128;
-        for (index, probability) in probabilities.iter().enumerate() {
-            let factor = if assignment & (1usize << index) != 0 {
-                probability.numerator
-            } else {
-                probability.denominator - probability.numerator
-            };
-            weight = weight.checked_mul(u128::from(factor))?;
-        }
-        numerator = numerator.checked_add(weight.checked_mul(u128::from(cost))?)?;
-    }
-    Some((numerator, denominator))
-}
-
-fn conditional_choice_totals(
-    costs: &[u64],
-    probabilities: &[RationalProbability],
-    fixed_index: usize,
-) -> Option<(u128, u128)> {
-    if probabilities.len() >= usize::BITS as usize
-        || fixed_index >= probabilities.len()
-        || costs.len() != (1usize.checked_shl(probabilities.len() as u32)?)
-    {
-        return None;
-    }
-    let mut zero_total = 0u128;
-    let mut one_total = 0u128;
-    for assignment in 0..costs.len() {
-        if assignment & (1usize << fixed_index) != 0 {
-            continue;
-        }
-        let mut weight = 1u128;
-        for (index, probability) in probabilities.iter().enumerate() {
-            if index == fixed_index {
-                continue;
-            }
-            let factor = if assignment & (1usize << index) != 0 {
-                probability.numerator
-            } else {
-                probability.denominator - probability.numerator
-            };
-            weight = weight.checked_mul(u128::from(factor))?;
-        }
-        zero_total = zero_total.checked_add(weight.checked_mul(u128::from(costs[assignment]))?)?;
-        one_total = one_total.checked_add(
-            weight.checked_mul(u128::from(costs[assignment | (1usize << fixed_index)]))?,
-        )?;
-    }
-    Some((zero_total, one_total))
-}
-
-fn conditional_round_cost(costs: &[u64], probabilities: &[RationalProbability]) -> Option<u64> {
-    let mut point = probabilities.to_vec();
-    for index in 0..point.len() {
-        let (zero_cost, one_cost) = conditional_choice_totals(costs, &point, index)?;
-        point[index] = deterministic_probability(one_cost < zero_cost);
-    }
-    let assignment = point
-        .iter()
-        .enumerate()
-        .fold(0usize, |mask, (index, probability)| {
-            mask | (usize::from(probability.numerator == 1) << index)
-        });
-    costs.get(assignment).copied()
-}
-
-fn mixed_difference_at_midpoint(
-    costs: &[u64],
-    first: usize,
-    second: usize,
-) -> Option<(i128, u128)> {
-    let bit_count = costs.len().trailing_zeros() as usize;
-    if costs.len() != (1usize.checked_shl(bit_count as u32)?)
-        || first >= bit_count
-        || second >= bit_count
-        || first >= second
-        || bit_count < 2
-    {
-        return None;
-    }
-    let assignment_count = 1usize.checked_shl((bit_count - 2) as u32)?;
-    let mut difference_sum = 0i128;
-    for reduced in 0..assignment_count {
-        let mut base = 0usize;
-        let mut reduced_index = 0usize;
-        for index in 0..bit_count {
-            if index == first || index == second {
-                continue;
-            }
-            base |= ((reduced >> reduced_index) & 1) << index;
-            reduced_index += 1;
-        }
-        let first_bit = 1usize << first;
-        let second_bit = 1usize << second;
-        let difference = i128::from(costs[base | first_bit | second_bit])
-            - i128::from(costs[base | first_bit])
-            - i128::from(costs[base | second_bit])
-            + i128::from(costs[base]);
-        difference_sum = difference_sum.checked_add(difference)?;
-    }
-    Some((difference_sum, assignment_count as u128))
-}
-
-fn deterministic_probability(bit: bool) -> RationalProbability {
-    RationalProbability {
-        numerator: u64::from(bit),
-        denominator: 1,
     }
 }
 

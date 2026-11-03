@@ -4,8 +4,11 @@
 //! explicit, ordered source-template choice set. It is not a distance label or
 //! an optimum over the full CNOT alphabet.
 
+mod assignment;
+mod budget;
 mod compute;
 mod config;
+mod moments;
 mod provider;
 mod rational;
 mod registration;

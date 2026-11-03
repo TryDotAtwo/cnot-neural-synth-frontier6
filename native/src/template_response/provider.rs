@@ -1,8 +1,7 @@
 //! Shared cache and feature-producer implementation for the response family.
 
-use super::compute::{
-    compute_template_response, resource_limit, template_response_workspace_bytes, unavailable,
-};
+use super::budget::template_response_workspace_bytes;
+use super::compute::{compute_template_response, resource_limit, unavailable};
 use super::{TemplateResponseConfig, TEMPLATE_RESPONSE_CACHE_CAPACITY};
 use crate::features::{FeatureComputation, FeaturePolicy, FeatureProducer, FeatureValue};
 use crate::packet::{FeatureStatus, StateIdentity};
