@@ -1,119 +1,19 @@
-//! Exact one-excess CNOT recognizer using the source's bounded temporal
-//! contraction. Counts use arbitrary-precision integers; resource exhaustion
-//! never becomes a negative feature label.
-
 use crate::alphabet::{CnotAlphabet, WordCertificate};
-use crate::stage37::{Stage37Error, Stage37Result, recognize_stage37};
+use crate::stage37::{recognize_stage37, Stage37Error, Stage37Result};
 use crate::state::MatrixState;
 use num_bigint::{BigInt, Sign};
 use std::collections::HashSet;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
-pub const STAGE38_PRODUCER: &str = "stage38_one_excess_exact_v1";
-pub const STAGE38_SOURCE_NOTES_SHA256: &str =
-    "0815dc96c12052e04d26a04295b26f883c8936fb62d5b4c484b7d3841ee8292d";
-pub const STAGE38_SOURCE_IMPLEMENTATION_SHA256: &str =
-    "90f4aac082958111293665010a34332f28d5145e957ca2ae49551d199c4cd82e";
-
-type Row = Vec<u64>;
-type Histories = Vec<Vec<Row>>;
-type Constraint = (usize, usize);
-
-mod contraction;
-use contraction::{count_histories, recover_histories};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Stage38Error {
-    AlphabetMismatch,
-    InvalidBudget,
-    SizeOverflow,
-    InvalidHistory(&'static str),
-    ContractionBudgetExceeded(String),
-    ContractionInvariant(&'static str),
-    Stage37(String),
-    InvalidCertificate(String),
-    ResultMismatch,
-}
-
-impl Display for Stage38Error {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AlphabetMismatch => formatter.write_str("state/alphabet identity mismatch"),
-            Self::InvalidBudget => formatter.write_str("positive contraction budget required"),
-            Self::SizeOverflow => formatter.write_str("stage-38 size or index overflow"),
-            Self::InvalidHistory(reason) => write!(formatter, "invalid row history: {reason}"),
-            Self::ContractionBudgetExceeded(reason) => {
-                write!(formatter, "exact contraction budget exceeded: {reason}")
-            }
-            Self::ContractionInvariant(reason) => {
-                write!(formatter, "stage-38 contraction invariant failed: {reason}")
-            }
-            Self::Stage37(reason) => write!(formatter, "stage-37 exclusion failed: {reason}"),
-            Self::InvalidCertificate(reason) => {
-                write!(formatter, "stage-38 word certificate failed: {reason}")
-            }
-            Self::ResultMismatch => {
-                formatter.write_str("stage-38 result differs from recomputation")
-            }
-        }
-    }
-}
-
-impl Error for Stage38Error {}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Stage38Exact {
-    pub state: MatrixState,
-    pub alphabet_id: String,
-    pub distance: u64,
-    pub changed_rows: usize,
-    pub templates: usize,
-    pub one_excess_count: String,
-    pub max_bag: usize,
-    pub transport_free: bool,
-    pub max_entries: usize,
-    pub word: WordCertificate,
-    pub source_notes_sha256: &'static str,
-    pub source_implementation_sha256: &'static str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Stage38NoOneExcess {
-    pub state: MatrixState,
-    pub alphabet_id: String,
-    pub excluded_length: u64,
-    pub changed_rows: usize,
-    pub templates: usize,
-    pub max_bag: usize,
-    pub max_entries: usize,
-    pub source_notes_sha256: &'static str,
-    pub source_implementation_sha256: &'static str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Stage38Unsupported {
-    pub state: MatrixState,
-    pub alphabet_id: String,
-    pub reason: &'static str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Stage38ResourceLimit {
-    pub state: MatrixState,
-    pub alphabet_id: String,
-    pub max_entries: usize,
-    pub changed_rows: usize,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Stage38Result {
-    Exact(Stage38Exact),
-    CertifiedNoSolutionWithinScope(Stage38NoOneExcess),
-    Unsupported(Stage38Unsupported),
-    ResourceLimit(Stage38ResourceLimit),
-}
+use super::contraction::{count_histories, recover_histories};
+use super::support::{
+    identity_row, is_complete_unit_alphabet, numeric_row_cmp, resource_limit, stage38_lineage,
+    unsupported, zero_row,
+};
+use super::types::{Stage38Error, Stage38Exact, Stage38NoOneExcess, Stage38Result};
+use super::xor_rows;
+use super::{
+    Histories, STAGE38_PRODUCER, STAGE38_SOURCE_IMPLEMENTATION_SHA256, STAGE38_SOURCE_NOTES_SHA256,
+};
 
 /// Recognizes the exact `r+1` CNOT family after stage 37 excludes length `r`.
 pub fn recognize_stage38(
@@ -354,89 +254,4 @@ fn one_excess(
         source_notes_sha256: STAGE38_SOURCE_NOTES_SHA256,
         source_implementation_sha256: STAGE38_SOURCE_IMPLEMENTATION_SHA256,
     }))
-}
-
-fn is_complete_unit_alphabet(alphabet: &CnotAlphabet) -> bool {
-    let Ok(expected) = CnotAlphabet::all_to_all_unit(alphabet.dimension()) else {
-        return false;
-    };
-    alphabet.id() == expected.id()
-        && alphabet.gates() == expected.gates()
-        && alphabet
-            .gates()
-            .iter()
-            .enumerate()
-            .all(|(index, _)| alphabet.cost_at(index) == Some(1))
-}
-
-fn unsupported(
-    state: &MatrixState,
-    alphabet: &CnotAlphabet,
-    reason: &'static str,
-) -> Stage38Result {
-    Stage38Result::Unsupported(Stage38Unsupported {
-        state: state.clone(),
-        alphabet_id: alphabet.id().to_owned(),
-        reason,
-    })
-}
-
-fn resource_limit(
-    state: &MatrixState,
-    alphabet: &CnotAlphabet,
-    max_entries: usize,
-    changed_rows: usize,
-    reason: String,
-) -> Stage38Result {
-    Stage38Result::ResourceLimit(Stage38ResourceLimit {
-        state: state.clone(),
-        alphabet_id: alphabet.id().to_owned(),
-        max_entries,
-        changed_rows,
-        reason,
-    })
-}
-
-pub(super) fn xor_rows(left: &Row, right: &Row) -> Row {
-    left.iter()
-        .zip(right)
-        .map(|(left, right)| left ^ right)
-        .collect()
-}
-
-fn zero_row(words: usize) -> Row {
-    vec![0; words]
-}
-
-fn identity_row(n: usize, words: usize, row: usize) -> Row {
-    let mut value = vec![0; words];
-    value[row / 64] = 1u64 << (row % 64);
-    debug_assert!(row < n);
-    value
-}
-
-fn numeric_row_cmp(left: &Row, right: &Row) -> std::cmp::Ordering {
-    left.iter().rev().cmp(right.iter().rev())
-}
-
-fn stage38_lineage(state: &MatrixState) -> Result<String, Stage38Error> {
-    let n = usize::try_from(state.dimension()).map_err(|_| Stage38Error::SizeOverflow)?;
-    let mut rows = Vec::with_capacity(n);
-    for row in 0..n {
-        let words = state
-            .row_words(u32::try_from(row).map_err(|_| Stage38Error::SizeOverflow)?)
-            .ok_or(Stage38Error::SizeOverflow)?;
-        let mut value = BigInt::from(0u8);
-        for word in words.iter().rev() {
-            value <<= 64usize;
-            value += BigInt::from(*word);
-        }
-        rows.push(value.to_string());
-    }
-    let tuple = if rows.len() == 1 {
-        format!("({},)", rows[0])
-    } else {
-        format!("({})", rows.join(", "))
-    };
-    Ok(format!("stage38:{}:{tuple}", state.dimension()))
 }
