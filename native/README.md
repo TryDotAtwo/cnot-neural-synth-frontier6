@@ -407,6 +407,8 @@ schedule and availability contract remain unspecified; H07 remains outside the
 
 ## Current Vast acceptance — 2026-11-03
 
+The recorded runs above predate the expanded packed-width Rust CUDA test in commit `118535b71d88de4d0650b6e7c0ca7414d462717f`. That test now covers dimensions 2, 3, 7, 64, and 65, but it has not yet been rerun on Vast.
+
 Receipt status: this section records completed Vast runs, but I did not locate a committed exact-run receipt tying the source commit, run manifest, Vast instance IDs, and raw stdout/stderr together. Treat these results as project-reported runs until that evidence is attached; they are not independently auditable from the current branch.
 
 At the current branch tip, the full CUDA Cargo suite passed after adding the
