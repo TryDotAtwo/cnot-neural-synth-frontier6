@@ -24,3 +24,24 @@ not production training or a synthesis-quality result.
 Production-scale training, held-out leakage audit, the 1000x10000 campaign,
 quality acceptance, and exact source parity for the unimplemented providers
 remain open.
+
+## Narrow Python forward-parity fixture
+
+The test fixture native/tests/fixtures/python_a01_forward_small.json records a
+small numerical comparison against the Python model from the pinned
+packages/v13_recovery_candidate_v17_20261001.zip archive
+(SHA-256 9947df2dc27080b38eb34e7551be39ce0536f2409aa733c5f201c317ed1a4866).
+It covers the A01-only feature profile, two three-wire matrices (identity and a
+nonidentity state), and the one-block model configuration stored in the fixture.
+The same 10,887 state-dict parameters are loaded into the Rust model before the
+forward comparison.
+
+The check compares the A01 feature values, value prediction, allowed-action
+mask, proposal logits, and qhat outputs. Floating outputs use a relative-plus-
+absolute tolerance of 2e-5 times (1 + absolute reference value); the identity
+value is checked as exact zero. Run it with
+cargo test --locked --manifest-path native/Cargo.toml --features torch --test python_model_forward_parity.
+
+This is a narrow CPU forward-parity check for one source-backed feature and one
+model profile. It does not establish parity for all 102 model inputs, the 103-ID
+catalog, CUDA training, production data, or the complete training workflow.
