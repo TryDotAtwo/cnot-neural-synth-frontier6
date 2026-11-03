@@ -34,7 +34,7 @@ remain open.
 
 The test fixture native/tests/fixtures/python_a01_forward_small.json records a
 small numerical comparison against the Python model from the pinned
-packages/v13_recovery_candidate_v17_20261001.zip archive
+history/packages/v13_recovery_candidate_v17_20261001.zip archive
 (SHA-256 9947df2dc27080b38eb34e7551be39ce0536f2409aa733c5f201c317ed1a4866).
 It covers the A01-only feature profile, two three-wire matrices (identity and a
 nonidentity state), and the one-block model configuration stored in the fixture.

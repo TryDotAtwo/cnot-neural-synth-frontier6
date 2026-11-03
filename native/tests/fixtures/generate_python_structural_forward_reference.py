@@ -15,7 +15,7 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[3]
-ARCHIVE = ROOT / "packages/v13_recovery_candidate_v17_20261001.zip"
+ARCHIVE = ROOT / "history/packages/v13_recovery_candidate_v17_20261001.zip"
 OUTPUT = Path(__file__).resolve().with_name("python_structural_33_forward_small.json")
 ARCHIVE_SHA256 = "9947df2dc27080b38eb34e7551be39ce0536f2409aa733c5f201c317ed1a4866"
 SCHEMA_SHA256 = "3b4063047ccc9d337e74d92de90108653ac5cf9da166733eba2f4c429c48c0b8"

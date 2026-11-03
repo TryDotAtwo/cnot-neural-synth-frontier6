@@ -22,7 +22,7 @@ from random import Random
 from types import SimpleNamespace
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-ARCHIVE = ROOT / "packages/v13_recovery_candidate_v17_20261001.zip"
+ARCHIVE = ROOT / "history/packages/v13_recovery_candidate_v17_20261001.zip"
 OUTPUT = pathlib.Path(__file__).resolve().with_name("python_structural_33.json")
 OUTPUT_SUBSPACE = pathlib.Path(__file__).resolve().with_name("python_subspace_views_6.json")
 OUTPUT_BASIS = pathlib.Path(__file__).resolve().with_name("python_basis_gradient_3.json")
