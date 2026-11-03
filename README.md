@@ -56,7 +56,10 @@ CNOT paths. The test replays each path, verifies matrix uniqueness, and compares
 IDs, roles, channel counts, shapes, availability, computed status, and every
 numeric value against the pinned Python fixture.
 
-Run with: cargo test --locked --manifest-path native/Cargo.toml --no-default-features --test python_structural_parity
+Regenerate after checking the pinned source archive, schema, and producer hashes:
+python3 native/tests/fixtures/generate_python_structural_reference.py
+
+Run the Rust parity test with: cargo test --locked --manifest-path native/Cargo.toml --no-default-features --test python_structural_parity
 
 This establishes parity only for those 33 source-backed structural providers. It
 does not establish parity for the remaining 70 features, model forward/training,
