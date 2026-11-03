@@ -369,8 +369,10 @@ pub fn compute(
         1,
         paths.iter().map(|v| (*v % 2) as f32).collect(),
     );
-    let at_a = matmul(&transpose, &adjacency, n)?;
-    let a_at = matmul(&adjacency, &transpose, n)?;
+    // Python B08 uses the diagonal-free adjacency on both sides.
+    let adjacency_transpose = transpose_dense(&adjacency, n);
+    let at_a = matmul(&adjacency_transpose, &adjacency, n)?;
+    let a_at = matmul(&adjacency, &adjacency_transpose, n)?;
     let mut b08 = Vec::with_capacity(cells * 2);
     for i in 0..cells {
         b08.push(at_a[i] as f32);
