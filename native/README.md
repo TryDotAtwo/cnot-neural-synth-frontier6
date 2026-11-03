@@ -407,6 +407,8 @@ schedule and availability contract remain unspecified; H07 remains outside the
 
 ## Current Vast acceptance — 2026-11-03
 
+Receipt status: this section records completed Vast runs, but I did not locate a committed exact-run receipt tying the source commit, run manifest, Vast instance IDs, and raw stdout/stderr together. Treat these results as project-reported runs until that evidence is attached; they are not independently auditable from the current branch.
+
 At the current branch tip, the full CUDA Cargo suite passed after adding the
 102-input checkpoint profile and real H07 forwards. After the H07 producer
 identity was versioned, the H07 unit tests and complete CUDA resume target were
