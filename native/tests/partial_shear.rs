@@ -37,7 +37,7 @@ fn partial_shear_feature_ranks_the_source_bound_elimination_block() {
 }
 
 #[test]
-fn partial_shear_feature_marks_zero_block_and_nonaugmentation_policy_unsupported() {
+fn partial_shear_feature_marks_zero_block_inapplicable_and_nonaugmentation_policy_unsupported() {
     let alphabet = CnotAlphabet::all_to_all_unit(4).unwrap();
     let identity = MatrixState::identity(4, alphabet.id()).unwrap();
     let mut registry = FeatureRegistry::new();
@@ -48,7 +48,7 @@ fn partial_shear_feature_marks_zero_block_and_nonaugmentation_policy_unsupported
         .unwrap();
     assert_eq!(
         packet.feature(FeatureId::new(b'C', 5).unwrap()).status,
-        vec![FeatureStatus::Unsupported]
+        vec![FeatureStatus::Inapplicable]
     );
     let packet = registry.build(&[identity], &policy("exact")).unwrap();
     assert_eq!(

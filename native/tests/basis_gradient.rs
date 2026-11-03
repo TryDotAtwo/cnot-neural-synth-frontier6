@@ -56,7 +56,7 @@ fn ports_partial_shear_cost_gradient_mask_and_gradient_statistics() {
 }
 
 #[test]
-fn basis_gradient_marks_empty_partial_block_unsupported() {
+fn basis_gradient_marks_empty_partial_block_inapplicable() {
     let alphabet = CnotAlphabet::all_to_all_unit(4).unwrap();
     let identity = MatrixState::identity(4, alphabet.id()).unwrap();
     let mut registry = FeatureRegistry::new();
@@ -70,7 +70,7 @@ fn basis_gradient_marks_empty_partial_block_unsupported() {
     for feature in [id(b'E', 1), id(b'E', 4), id(b'E', 5)] {
         assert_eq!(
             packet.feature(feature).status,
-            vec![FeatureStatus::Unsupported]
+            vec![FeatureStatus::Inapplicable]
         );
     }
 }

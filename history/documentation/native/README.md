@@ -21,8 +21,10 @@ split by input contract:
   cut set by the producer version. A matrix width with no registered cut is
   reported as unsupported.
 - C05 can be registered for the deterministic partial-shear elimination block
-  shared with the paid-basis adapter. It reports that block's rank only when a
-  nonzero partial shear is applicable.
+  shared with the paid-basis adapter. It reports the rank when a nonzero block
+  exists; a zero block is `inapplicable` and masked, while decomposition failures
+  remain unsupported. E01/E04/E05 and the E-template family use the same explicit
+  distinction for states outside their partial-shear domain.
 - C06 and C07 can be registered for explicit restricted row- and column-space
   intersection probes. C09 can be registered for explicit restricted-rank
   increment probes that include a candidate parity vector. These providers
@@ -390,12 +392,14 @@ the generic trainer and checkpoint path; it is not a full 103-feature CNOT
 objective run.
 
 The 41-feature CUDA smoke and fresh-process resume tests remain as a regression
-profile. A second profile now executes all 102 registered model-input features
-through the small Bellman objective, saves after one update, restores in a child
-process, applies the next update, and matches the uninterrupted model, optimizer,
-sampler, objective, progress, and RNG state. The 102-input resume test passed on
-cuda:0 and cuda:1. These are synthetic three-wire fixtures, not production
-training or quality acceptance.
+profile. A second profile executes all 102 registered model-input IDs through the
+Bellman objective with the strict completeness gate enabled, saves after one
+update, restores in a child process, applies the next update, and matches the
+uninterrupted model, optimizer, sampler, objective, progress, and RNG state.
+Computed inputs plus explicitly masked `inapplicable` inputs pass; unsupported,
+resource-limited, or unrequested inputs fail. The 102-input resume test passed on
+cuda:0 and cuda:1 using a synthetic 10-wire one-gate fixture. This is not
+production training or quality acceptance.
 
 H07 now has a Torch-gated evaluator that runs the model value head on
 caller-built canonical, equivalent-view, and relabel packets, then records the
@@ -416,18 +420,18 @@ Vast CUDA suite.
 
 Exact receipts for the current H07 v3 source commit are attached under
 `native/evidence/vast-2026-11-03-h07-v3/`: a run manifest plus raw stdout for
-the full CUDA suite, H07 forwards on cuda:1, the 102-input resume on cuda:1,
-and the CLI step/save/fresh-process-resume/next-step workflow on cuda:0. The
-manifest pins the source commit, Vast instance, devices, commands, and log
-hashes.
+the full CUDA suite, H07 forwards on cuda:1, the strict 102-input resume on
+cuda:0 and cuda:1, and the CLI step/save/fresh-process-resume/next-step workflow
+on cuda:0. The manifest pins the source commit, Vast instance, devices, commands,
+and log hashes.
 
-The full CUDA Cargo suite passed on cuda:0: 191 passed, 0 failed, 3 ignored
+The full CUDA Cargo suite passed on cuda:0: 192 passed, 0 failed, 3 ignored
 across 48 target summaries. The H07 coverage audit passed independently on
-cuda:1, and the 102-input graph resume passed there as well. The H07 synthetic
-fixtures expose unavailable input rows in their per-probe audit; they do not
-claim complete 102-input coverage.
+cuda:1. The strict 102-input graph resume passed on both CUDA devices. The H07
+synthetic fixtures expose unavailable input rows in their per-probe audit; they
+do not claim complete H07 coverage.
 
-The 102-input synthetic GL(4,2) CLI run completed one CUDA update, saved a
+Separately, the 102-input synthetic GL(4,2) CLI run completed one CUDA update, saved a
 checkpoint, restored it in a fresh process, and completed the next update on
 cuda:0. This exercises the bounded launcher, pinned exact fixture artifacts,
 complete feature profile, exposure audit, and checkpoint contract together.

@@ -19,7 +19,7 @@ use tch::{Device, Kind};
 
 #[path = "support/feature_contexts.rs"]
 mod feature_contexts;
-use feature_contexts::complete_model_input_contexts;
+use feature_contexts::{complete_model_input_contexts, complete_model_input_contexts_for_n10};
 
 #[test]
 fn complete_model_input_profile_is_accepted_by_default_training_gate() {
@@ -160,9 +160,10 @@ fn fixture(device: Device, profile: FeatureProfile) -> Fixture {
             (registry, policy)
         }
         FeatureProfile::AllModelInputs102 => {
-            let registry =
-                FeatureRegistry::with_all_model_input_providers(complete_model_input_contexts())
-                    .expect("register all 102 model-input providers from explicit contexts");
+            let registry = FeatureRegistry::with_all_model_input_providers(
+                complete_model_input_contexts_for_n10(),
+            )
+            .expect("register all 102 model-input providers from explicit contexts");
             let mut policy =
                 FeaturePolicy::all_model_inputs_augmentation_only("all-model-inputs-102-resume-v1");
             policy.solver_assisted = true;
@@ -178,9 +179,21 @@ fn fixture(device: Device, profile: FeatureProfile) -> Fixture {
         "feature profile must register its full declared input set"
     );
 
-    let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
-    let identity = MatrixState::identity(3, alphabet.id()).unwrap();
-    let gate = alphabet.gates()[0];
+    let dimension = if matches!(profile, FeatureProfile::AllModelInputs102) {
+        10
+    } else {
+        3
+    };
+    let alphabet = CnotAlphabet::all_to_all_unit(dimension).unwrap();
+    let identity = MatrixState::identity(dimension, alphabet.id()).unwrap();
+    let gate = if dimension == 10 {
+        CnotGate {
+            control: 0,
+            target: 5,
+        }
+    } else {
+        alphabet.gates()[0]
+    };
     let mut state = identity.clone();
     state.apply_cnot(gate).unwrap();
     let records = vec![TrainingRecord {
@@ -225,7 +238,7 @@ fn fixture(device: Device, profile: FeatureProfile) -> Fixture {
         FullGraphObjectiveConfig {
             qhat_weight: 0.0,
             teacher_weight: 0.0,
-            require_all_model_inputs: false,
+            require_all_model_inputs: matches!(profile, FeatureProfile::AllModelInputs102),
             ..Default::default()
         },
     )
@@ -480,7 +493,9 @@ fn h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets() {
     let canonical = state_from_word(&fixture.alphabet, &gates);
     let inverse_gates = gates.into_iter().rev().collect::<Vec<_>>();
     let inverse = state_from_word(&fixture.alphabet, &inverse_gates);
-    let relabeled = relabel_state(&canonical, &[1, 0, 2]);
+    let mut output_to_source = (0..canonical.dimension() as usize).collect::<Vec<_>>();
+    output_to_source.swap(0, 1);
+    let relabeled = relabel_state(&canonical, &output_to_source);
     let states = [canonical, inverse, relabeled];
     let packets = states
         .iter()

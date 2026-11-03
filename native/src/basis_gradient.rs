@@ -40,7 +40,7 @@ impl FeatureProducer for BasisGradientProducer {
         }
         let decomposition = match partial_shear(state) {
             Ok(Some(value)) => value,
-            Ok(None) => return unavailable("no_nonzero_partial_shear_block"),
+            Ok(None) => return inapplicable("no_nonzero_partial_shear_block"),
             Err(_) => return unavailable("partial_shear_decomposition_failed"),
         };
 
@@ -161,6 +161,13 @@ impl FeatureProducer for BasisGradientProducer {
 fn unavailable(reason: &str) -> FeatureComputation {
     FeatureComputation::Unavailable {
         status: FeatureStatus::Unsupported,
+        reason: reason.into(),
+    }
+}
+
+fn inapplicable(reason: &str) -> FeatureComputation {
+    FeatureComputation::Unavailable {
+        status: FeatureStatus::Inapplicable,
         reason: reason.into(),
     }
 }
