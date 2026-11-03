@@ -1,14 +1,13 @@
 //! Neural basis proposal head and its binding to a physical matrix state.
 
 use super::{
-    objective, partial_shear, BasisBinding, BasisChoice, BasisChoiceKind, BasisLossAudit,
-    BasisLossBackend, BasisSide, BasisTemplate,
+    objective, partial_shear, BasisBinding, BasisLossAudit, BasisLossBackend, BasisSide,
+    BasisTemplate,
 };
 use crate::model::{EncodedState, FieldOutput, FusionDistanceField, ModelConfig, ModelError};
 use crate::packet::FeaturePacket;
 use crate::schema::FeatureSpec;
 use crate::state::MatrixState;
-use std::collections::HashSet;
 use tch::nn::{self};
 use tch::{Device, Kind, Tensor};
 

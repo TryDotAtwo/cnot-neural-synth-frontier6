@@ -9,7 +9,7 @@ use crate::features::{FeaturePolicy, FeatureRegistry};
 use crate::packet::FeaturePacket;
 use crate::schema::{FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT, FEATURE_ID_MANIFEST_ID};
 use tch::nn;
-use tch::Device;
+use tch::{Device, Tensor};
 
 /// The selected-feature structural distance field used by research_v3.
 ///

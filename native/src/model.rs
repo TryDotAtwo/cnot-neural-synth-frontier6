@@ -18,5 +18,5 @@ pub(super) const AUXILIARY_HIDDEN_DIM: i64 = 128;
 pub use contracts::{FieldOutput, ModelConfig, ModelError};
 pub use field::FusionDistanceField;
 pub(super) use layers::{pytorch_linear_config, Mlp, MultiHeadAttention, StructuralBlock};
-pub(super) use packet::{matrix_batch_values, shape_i64};
+use packet::{matrix_batch_values, shape_i64};
 pub(crate) use stem::EncodedState;

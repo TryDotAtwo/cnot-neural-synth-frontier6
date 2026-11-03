@@ -32,6 +32,37 @@ pub struct ModelConfig {
     pub basis_proposal_hidden_dim: i64,
 }
 
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            wire_dim: 128,
+            pair_dim: 32,
+            structural_blocks: 6,
+            attention_heads: 4,
+            feedforward_dim: 256,
+            fusion_blocks: 2,
+            basis_proposal_hidden_dim: 128,
+        }
+    }
+}
+
+impl ModelConfig {
+    pub(super) fn validate(&self) -> Result<(), ModelError> {
+        if self.wire_dim < 1
+            || self.pair_dim < 1
+            || self.attention_heads < 1
+            || self.feedforward_dim < 1
+            || self.basis_proposal_hidden_dim < 1
+            || self.wire_dim % self.attention_heads != 0
+        {
+            return Err(ModelError(
+                "invalid model dimensions or attention head count".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct FieldOutput {
     pub value: Tensor,
