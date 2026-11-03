@@ -6,7 +6,10 @@
 //! forwards on caller-built packets and emits an auditable diagnostic; probe
 //! construction and the exact source availability policy remain explicit.
 
-use crate::schema::FeatureId;
+use crate::packet::FeatureStatus;
+use crate::schema::{all_model_input_specs, FeatureId, FEATURE_ID_MANIFEST_ID, MODEL_INPUT_COUNT};
+#[cfg(feature = "torch")]
+use crate::schema::{FEATURE_COUNT, H07_POST_FORWARD_DIAGNOSTIC_ID};
 #[cfg(feature = "torch")]
 use crate::{model::FusionDistanceField, packet::FeaturePacket};
 use sha2::{Digest, Sha256};
@@ -16,7 +19,7 @@ use std::fmt::{Display, Formatter};
 #[cfg(feature = "torch")]
 use tch::{Device, Kind};
 
-pub const H07_PRODUCER_VERSION: &str = "h07_distance_field_value_population_variance_v2";
+pub const H07_PRODUCER_VERSION: &str = "h07_distance_field_value_population_variance_v3";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum H07ProbeKind {
@@ -46,6 +49,75 @@ impl H07ProbeKind {
     }
 }
 
+/// Per-input availability recorded for one actual H07 model forward.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct H07InputCoverageEntry {
+    pub id: FeatureId,
+    pub status: FeatureStatus,
+    pub available: u8,
+    pub reason: String,
+}
+
+/// Exact packet policy and per-feature outcomes used by one H07 prediction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct H07InputCoverage {
+    pub schema_id: String,
+    pub policy_id: String,
+    pub feature_id_manifest_id: String,
+    /// Canonical order, containing one record for each model input.
+    pub entries: Vec<H07InputCoverageEntry>,
+}
+
+impl H07InputCoverage {
+    pub fn selected_model_input_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.status != FeatureStatus::NotRequested)
+            .count()
+    }
+
+    pub fn computed_model_input_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.status == FeatureStatus::Computed && entry.available == 1)
+            .count()
+    }
+
+    pub fn inapplicable_model_input_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.status == FeatureStatus::Inapplicable && entry.available == 0)
+            .count()
+    }
+
+    /// Counts inputs that lack a computed or explicitly inapplicable result.
+    pub fn unavailable_model_input_count(&self) -> usize {
+        self.entries.len().saturating_sub(
+            self.computed_model_input_count() + self.inapplicable_model_input_count(),
+        )
+    }
+
+    /// True only for the exact canonical 102-input set with explicit outcomes.
+    pub fn is_complete(&self) -> bool {
+        let expected = all_model_input_specs();
+        !self.schema_id.trim().is_empty()
+            && !self.policy_id.trim().is_empty()
+            && self.feature_id_manifest_id == FEATURE_ID_MANIFEST_ID
+            && expected.len() == MODEL_INPUT_COUNT
+            && self.entries.len() == MODEL_INPUT_COUNT
+            && expected.iter().zip(&self.entries).all(|(spec, entry)| {
+                spec.id == entry.id
+                    && match entry.status {
+                        FeatureStatus::Computed => entry.available == 1,
+                        FeatureStatus::Inapplicable => entry.available == 0,
+                        FeatureStatus::Unsupported
+                        | FeatureStatus::ResourceLimit
+                        | FeatureStatus::NotRequested => false,
+                    }
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct H07ProbePrediction {
     /// Stable identifier for the exact transformed input/probe.
@@ -53,6 +125,8 @@ pub struct H07ProbePrediction {
     pub kind: H07ProbeKind,
     /// Scalar prediction for the same task scope in the canonical coordinates.
     pub prediction: f64,
+    /// Present for runtime forwards; synthetic prediction-only computations may omit it.
+    pub input_coverage: Option<H07InputCoverage>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +162,7 @@ pub enum H07Error {
     ModelForward(String),
     ModelProbeBatch { probe_id: String, batch: usize },
     ModelOutputCardinality { probe_id: String, outputs: usize },
+    ModelInputCoverage { probe_id: String, reason: String },
 }
 
 impl Display for H07Error {
@@ -123,6 +198,12 @@ impl Display for H07Error {
                 formatter,
                 "probe {probe_id} produced {outputs} scalar values; exactly one is required"
             ),
+            Self::ModelInputCoverage { probe_id, reason } => {
+                write!(
+                    formatter,
+                    "probe {probe_id} input coverage is malformed: {reason}"
+                )
+            }
         }
     }
 }
@@ -242,6 +323,88 @@ pub struct H07ModelProbe<'a> {
     pub packet: &'a FeaturePacket,
 }
 
+#[cfg(feature = "torch")]
+fn h07_input_coverage(
+    packet: &FeaturePacket,
+    probe_id: &str,
+) -> Result<H07InputCoverage, H07Error> {
+    if packet.entries.len() != FEATURE_COUNT
+        || packet.feature_id_manifest_id != FEATURE_ID_MANIFEST_ID
+    {
+        return Err(H07Error::ModelInputCoverage {
+            probe_id: probe_id.into(),
+            reason: "packet does not match the canonical 103-ID manifest".into(),
+        });
+    }
+
+    let mut entries = Vec::with_capacity(MODEL_INPUT_COUNT);
+    for spec in all_model_input_specs() {
+        if spec.id == H07_POST_FORWARD_DIAGNOSTIC_ID {
+            return Err(H07Error::ModelInputCoverage {
+                probe_id: probe_id.into(),
+                reason: "H07 was listed as a model input".into(),
+            });
+        }
+        let entry =
+            packet
+                .entries
+                .get(spec.id.index())
+                .ok_or_else(|| H07Error::ModelInputCoverage {
+                    probe_id: probe_id.into(),
+                    reason: format!("{} is missing from the packet", spec.id),
+                })?;
+        if entry.spec.id != spec.id {
+            return Err(H07Error::ModelInputCoverage {
+                probe_id: probe_id.into(),
+                reason: format!(
+                    "packet order mismatch: expected {}, found {}",
+                    spec.id, entry.spec.id
+                ),
+            });
+        }
+        if entry.status.len() != 1 || entry.available.len() != 1 || entry.reason.len() != 1 {
+            return Err(H07Error::ModelInputCoverage {
+                probe_id: probe_id.into(),
+                reason: format!("{} does not have exactly one metadata row", spec.id),
+            });
+        }
+        let status = entry.status[0];
+        let available = entry.available[0];
+        let valid_mask = match status {
+            FeatureStatus::Computed => available == 1,
+            FeatureStatus::Inapplicable
+            | FeatureStatus::Unsupported
+            | FeatureStatus::ResourceLimit
+            | FeatureStatus::NotRequested => available == 0,
+        };
+        if !valid_mask {
+            return Err(H07Error::ModelInputCoverage {
+                probe_id: probe_id.into(),
+                reason: format!(
+                    "{} has inconsistent {} status and availability mask {}",
+                    spec.id,
+                    status.as_str(),
+                    available
+                ),
+            });
+        }
+        let reason = entry.reason[0].clone();
+        entries.push(H07InputCoverageEntry {
+            id: spec.id,
+            status,
+            available,
+            reason,
+        });
+    }
+
+    Ok(H07InputCoverage {
+        schema_id: packet.schema_id.clone(),
+        policy_id: packet.policy_id.clone(),
+        feature_id_manifest_id: packet.feature_id_manifest_id.into(),
+        entries,
+    })
+}
+
 /// Runs one actual model forward per supplied canonical/view/relabel packet and
 /// summarizes the scalar value-head predictions as H07. The source defines
 /// H07 as an extra-forward diagnostic/ensemble, not as a model input channel;
@@ -265,6 +428,7 @@ pub fn evaluate_h07_prediction_spread(
             probe_id: probe.probe_id.clone(),
             kind: probe.kind,
             prediction: 0.0,
+            input_coverage: None,
         })
         .collect();
     validate_probe_metadata(&metadata)?;
@@ -277,6 +441,7 @@ pub fn evaluate_h07_prediction_spread(
                 batch: probe.packet.batch,
             });
         }
+        let input_coverage = h07_input_coverage(probe.packet, &probe.probe_id)?;
         let output = tch::no_grad(|| model.forward(probe.packet))
             .map_err(|error| H07Error::ModelForward(format!("{}: {error}", probe.probe_id)))?;
         let outputs = output.value.numel();
@@ -296,6 +461,7 @@ pub fn evaluate_h07_prediction_spread(
             probe_id: probe.probe_id.clone(),
             kind: probe.kind,
             prediction: value,
+            input_coverage: Some(input_coverage),
         });
     }
     compute_h07_prediction_spread(&model_contract_sha256, &problem_scope_sha256, &predictions)
@@ -322,6 +488,22 @@ fn probe_digest(
         hash_field(&mut digest, probe.probe_id.as_bytes());
         hash_field(&mut digest, probe.kind.label().as_bytes());
         hash_field(&mut digest, &probe.prediction.to_bits().to_le_bytes());
+        match &probe.input_coverage {
+            Some(coverage) => {
+                hash_field(&mut digest, &[1]);
+                hash_field(&mut digest, coverage.schema_id.as_bytes());
+                hash_field(&mut digest, coverage.policy_id.as_bytes());
+                hash_field(&mut digest, coverage.feature_id_manifest_id.as_bytes());
+                hash_field(&mut digest, &(coverage.entries.len() as u64).to_le_bytes());
+                for entry in &coverage.entries {
+                    hash_field(&mut digest, entry.id.to_string().as_bytes());
+                    hash_field(&mut digest, entry.status.as_str().as_bytes());
+                    hash_field(&mut digest, &[entry.available]);
+                    hash_field(&mut digest, entry.reason.as_bytes());
+                }
+            }
+            None => hash_field(&mut digest, &[0]),
+        }
     }
     digest
         .finalize()

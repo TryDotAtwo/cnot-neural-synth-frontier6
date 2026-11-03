@@ -454,7 +454,15 @@ fn h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets() {
     let Some(device_index) = selected_cuda_index() else {
         return;
     };
-    let fixture = fixture(Device::Cuda(device_index), FeatureProfile::Builtin41);
+    let fixture = fixture(
+        Device::Cuda(device_index),
+        FeatureProfile::AllModelInputs102,
+    );
+    assert_eq!(
+        fixture.policy.enabled_ids.len(),
+        102,
+        "H07 actual forwards must exercise all 102 model inputs"
+    );
     let gates = [
         CnotGate {
             control: 0,
@@ -511,6 +519,19 @@ fn h07_runs_cuda_forwards_for_equivalent_view_and_relabel_packets() {
         .probes
         .iter()
         .all(|probe| probe.prediction.is_finite()));
+    for probe in &diagnostic.probes {
+        let coverage = probe
+            .input_coverage
+            .as_ref()
+            .expect("actual H07 forwards retain per-probe model-input coverage");
+        assert_eq!(coverage.entries.len(), 102);
+        assert_eq!(coverage.selected_model_input_count(), 102);
+        assert!(
+            coverage.unavailable_model_input_count() > 0,
+            "the fixture's unsupported providers must remain visible in the H07 audit"
+        );
+        assert!(!coverage.is_complete());
+    }
 }
 
 #[test]

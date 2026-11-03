@@ -158,8 +158,8 @@ pub use training_data::{
     TrainingSplit,
 };
 pub use view_diagnostic::{
-    compute_h07_prediction_spread, H07Diagnostic, H07Error, H07ProbeKind, H07ProbePrediction,
-    H07_PRODUCER_VERSION,
+    compute_h07_prediction_spread, H07Diagnostic, H07Error, H07InputCoverage,
+    H07InputCoverageEntry, H07ProbeKind, H07ProbePrediction, H07_PRODUCER_VERSION,
 };
 
 #[cfg(feature = "torch")]

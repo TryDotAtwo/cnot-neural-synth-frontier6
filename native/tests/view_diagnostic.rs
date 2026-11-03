@@ -1,5 +1,6 @@
 use cnot103_native::{
-    compute_h07_prediction_spread, FeatureId, H07Error, H07ProbeKind, H07ProbePrediction,
+    compute_h07_prediction_spread, FeatureId, FeatureStatus, H07Error, H07InputCoverage,
+    H07InputCoverageEntry, H07ProbeKind, H07ProbePrediction,
 };
 
 fn sample(id: &str, kind: H07ProbeKind, prediction: f64) -> H07ProbePrediction {
@@ -7,6 +8,7 @@ fn sample(id: &str, kind: H07ProbeKind, prediction: f64) -> H07ProbePrediction {
         probe_id: id.into(),
         kind,
         prediction,
+        input_coverage: None,
     }
 }
 
@@ -35,8 +37,88 @@ fn h07_is_a_post_forward_population_variance_with_bound_provenance() {
     assert_eq!(diagnostic.probes.len(), 3);
     assert_eq!(
         diagnostic.producer_version,
-        "h07_distance_field_value_population_variance_v2"
+        "h07_distance_field_value_population_variance_v3"
     );
+}
+
+fn coverage(reason: &str) -> H07InputCoverage {
+    H07InputCoverage {
+        schema_id: "test-schema".into(),
+        policy_id: "test-policy".into(),
+        feature_id_manifest_id: "test-manifest".into(),
+        entries: vec![
+            H07InputCoverageEntry {
+                id: FeatureId::new(b'A', 1).unwrap(),
+                status: FeatureStatus::Computed,
+                available: 1,
+                reason: reason.into(),
+            },
+            H07InputCoverageEntry {
+                id: FeatureId::new(b'A', 2).unwrap(),
+                status: FeatureStatus::Inapplicable,
+                available: 0,
+                reason: "source-defined inapplicable result".into(),
+            },
+            H07InputCoverageEntry {
+                id: FeatureId::new(b'A', 3).unwrap(),
+                status: FeatureStatus::Unsupported,
+                available: 0,
+                reason: "producer has no result for this state".into(),
+            },
+        ],
+    }
+}
+
+#[test]
+fn h07_coverage_accepts_exact_canonical_102_input_statuses() {
+    let h07 = FeatureId::new(b'H', 7).unwrap();
+    let entries = (0..103)
+        .filter_map(FeatureId::from_index)
+        .filter(|id| *id != h07)
+        .map(|id| H07InputCoverageEntry {
+            id,
+            status: if id == FeatureId::new(b'A', 2).unwrap() {
+                FeatureStatus::Inapplicable
+            } else {
+                FeatureStatus::Computed
+            },
+            available: u8::from(id != FeatureId::new(b'A', 2).unwrap()),
+            reason: "explicit test result".into(),
+        })
+        .collect::<Vec<_>>();
+    let audit = H07InputCoverage {
+        schema_id: "test-schema".into(),
+        policy_id: "test-policy".into(),
+        feature_id_manifest_id: "cnot_feature_ids_a01_i11_v1".into(),
+        entries,
+    };
+
+    assert_eq!(audit.selected_model_input_count(), 102);
+    assert_eq!(audit.computed_model_input_count(), 101);
+    assert_eq!(audit.inapplicable_model_input_count(), 1);
+    assert_eq!(audit.unavailable_model_input_count(), 0);
+    assert!(audit.is_complete());
+}
+
+#[test]
+fn h07_hash_binds_per_probe_input_coverage_and_reasons() {
+    let mut original = probes();
+    original[0].input_coverage = Some(coverage("computed from exact state"));
+    let first = compute_h07_prediction_spread(&"1".repeat(64), &"2".repeat(64), &original)
+        .expect("coverage-bearing diagnostic");
+    let audit = original[0].input_coverage.as_ref().unwrap();
+    assert_eq!(audit.selected_model_input_count(), 3);
+    assert_eq!(audit.computed_model_input_count(), 1);
+    assert_eq!(audit.inapplicable_model_input_count(), 1);
+    assert_eq!(audit.unavailable_model_input_count(), 1);
+    assert!(!audit.is_complete());
+
+    let mut changed = original.clone();
+    changed[0].input_coverage.as_mut().unwrap().entries[0].reason =
+        "different source result".into();
+    let second = compute_h07_prediction_spread(&"1".repeat(64), &"2".repeat(64), &changed)
+        .expect("changed coverage-bearing diagnostic");
+    assert_ne!(first.probe_set_sha256, second.probe_set_sha256);
 }
 
 #[test]

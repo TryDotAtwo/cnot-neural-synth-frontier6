@@ -20,8 +20,11 @@ policy remain unspecified in the archived contract.
 CUDA acceptance now covers a real 102-input Bellman training update, checkpoint
 save, restore in a fresh process, and the next update on RTX 3060. A matching
 H07 diagnostic test runs actual CUDA model forwards over an equivalent inverse
-view and a cost-preserving wire relabeling. These are small synthetic fixtures,
-not production training or a synthesis-quality result.
+view and a cost-preserving wire relabeling. Each H07 probe now records status,
+availability mask, and reason for all 102 model inputs, and binds that record
+into the probe-set digest. The current synthetic fixture exposes unsupported
+providers, so it does not claim complete H07 input coverage. These are small
+synthetic fixtures, not production training or a synthesis-quality result.
 
 Production-scale training, held-out leakage audit, the 1000x10000 campaign,
 quality acceptance, and exact source parity for the unimplemented providers

@@ -399,28 +399,38 @@ training or quality acceptance.
 
 H07 now has a Torch-gated evaluator that runs the model value head on
 caller-built canonical, equivalent-view, and relabel packets, then records the
-population variance and probe provenance. Its CUDA regression executes an
-inverse view and an all-to-all unit-cost wire swap. The exact source probe
-schedule and availability contract remain unspecified; H07 remains outside the
-102 model inputs.
+population variance and probe provenance. Each actual probe also records all
+102 model-input IDs with their status, availability mask, reason, schema, and
+policy; this coverage is bound into the probe-set digest. Its CUDA regression
+executes an inverse view and an all-to-all unit-cost wire swap. The synthetic
+fixture includes unsupported providers, so it does not claim complete H07
+input coverage. The exact source probe schedule and availability contract
+remain unspecified; H07 remains outside the 102 model inputs.
 
 
 ## Current Vast acceptance — 2026-11-03
 
-The recorded runs above predate the expanded packed-width Rust CUDA test in commit `118535b71d88de4d0650b6e7c0ca7414d462717f`. That test now covers dimensions 2, 3, 7, 64, and 65, but it has not yet been rerun on Vast.
+The packed-width Rust CUDA test from commit `118535b71d88de4d0650b6e7c0ca7414d462717f`
+covers dimensions 2, 3, 7, 64, and 65; it passed again in the current full
+Vast CUDA suite.
 
-Receipt status: this section records completed Vast runs, but I did not locate a committed exact-run receipt tying the source commit, run manifest, Vast instance IDs, and raw stdout/stderr together. Treat these results as project-reported runs until that evidence is attached; they are not independently auditable from the current branch.
+Exact receipts for the current H07 v3 source commit are attached under
+`native/evidence/vast-2026-11-03-h07-v3/`: a run manifest plus raw stdout for
+the full CUDA suite, H07 forwards on cuda:1, the 102-input resume on cuda:1,
+and the CLI step/save/fresh-process-resume/next-step workflow on cuda:0. The
+manifest pins the source commit, Vast instance, devices, commands, and log
+hashes.
 
-At the current branch tip, the full CUDA Cargo suite passed after adding the
-102-input checkpoint profile and real H07 forwards. After the H07 producer
-identity was versioned, the H07 unit tests and complete CUDA resume target were
-rerun successfully on cuda:0. The 102-input fresh-process resume also passed
-separately on cuda:1.
+The full CUDA Cargo suite passed on cuda:0: 191 passed, 0 failed, 3 ignored
+across 48 target summaries. The H07 coverage audit passed independently on
+cuda:1, and the 102-input graph resume passed there as well. The H07 synthetic
+fixtures expose unavailable input rows in their per-probe audit; they do not
+claim complete 102-input coverage.
 
-The 102-input synthetic GL(4,2) CLI run also completed one CUDA update, saved
-a checkpoint, resumed it in a fresh process, and completed the next update.
-This exercises the bounded launcher, pinned exact fixture artifacts, complete
-feature profile, exposure audit, and checkpoint contract together.
+The 102-input synthetic GL(4,2) CLI run completed one CUDA update, saved a
+checkpoint, restored it in a fresh process, and completed the next update on
+cuda:0. This exercises the bounded launcher, pinned exact fixture artifacts,
+complete feature profile, exposure audit, and checkpoint contract together.
 
 These acceptances use small synthetic inputs. They do not establish exact parity
 for the archived-unimplemented source features, production data coverage,
