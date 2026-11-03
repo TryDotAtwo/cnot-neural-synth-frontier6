@@ -1,13 +1,21 @@
 //! Deterministic local paid-basis shear compilation and endpoint auditing.
 
+mod endpoint;
+mod groups;
+mod matrix;
+mod word;
+
 use super::{
-    AcceptedBasisMove, BasisSide, BoundaryCancellation, PaidBasisError, PaidShearCandidate,
-    PaidShearConfig, optimize_exact_basis,
+    optimize_exact_basis, AcceptedBasisMove, BasisSide, PaidBasisError, PaidShearCandidate,
+    PaidShearConfig,
 };
 use crate::alphabet::{CnotAlphabet, WordCertificate};
 use crate::state::{CnotGate, MatrixState};
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+pub(crate) use endpoint::endpoint_sha256;
+use endpoint::expected_shear_endpoint;
+use groups::{local_vectors, select_groups, side_vectors};
+use matrix::{identity_matrix, paid_block_cost, physical_wire, xor_rows};
+pub(crate) use word::{cancel_adjacent_block_gates, ReducedWordAudit};
 
 /// Compiles a binary shear block using deterministic, exact local bases of
 /// width at most four. Each accepted move strictly decreases the paid physical
@@ -165,7 +173,7 @@ pub fn compile_paid_shear(
                 .collect(),
         );
     }
-    let reduced = cancel_adjacent_block_gates(&word_blocks);
+    let reduced: ReducedWordAudit = cancel_adjacent_block_gates(&word_blocks);
     let gates = reduced.word;
 
     let alphabet = CnotAlphabet::all_to_all_unit(dimension_u32)
@@ -223,209 +231,4 @@ pub fn compile_paid_shear(
         tested_groups,
         accepted_moves,
     })
-}
-
-#[derive(Debug)]
-pub(crate) struct ReducedWordAudit {
-    pub(crate) word: Vec<CnotGate>,
-    pub(crate) boundary_cancellations: Vec<BoundaryCancellation>,
-}
-
-pub(crate) fn cancel_adjacent_block_gates(blocks: &[Vec<CnotGate>]) -> ReducedWordAudit {
-    let mut stack = Vec::<(CnotGate, usize)>::new();
-    let mut boundary_counts = HashMap::<(u32, u32), usize>::new();
-    for (block_index, block) in blocks.iter().enumerate() {
-        for gate in block.iter().copied() {
-            if stack.last().is_some_and(|(previous, _)| *previous == gate) {
-                let (_, previous_block) = stack.pop().expect("the prior matching gate exists");
-                if previous_block != block_index {
-                    *boundary_counts
-                        .entry((gate.control, gate.target))
-                        .or_default() += 1;
-                }
-            } else {
-                stack.push((gate, block_index));
-            }
-        }
-    }
-    let mut boundary_cancellations = boundary_counts
-        .into_iter()
-        .map(|((control, target), canceled_pairs)| BoundaryCancellation {
-            control,
-            target,
-            canceled_pairs,
-        })
-        .collect::<Vec<_>>();
-    boundary_cancellations.sort_by_key(|item| (item.control, item.target));
-    ReducedWordAudit {
-        word: stack.into_iter().map(|(gate, _)| gate).collect(),
-        boundary_cancellations,
-    }
-}
-
-pub(crate) fn endpoint_sha256(state: &MatrixState) -> String {
-    let mut digest = Sha256::new();
-    hash_field(&mut digest, b"cnot103_paid_shear_endpoint_v1");
-    hash_field(&mut digest, &state.dimension().to_le_bytes());
-    hash_field(&mut digest, state.alphabet_id().as_bytes());
-    hash_field(
-        &mut digest,
-        &(state.packed_rows().len() as u64).to_le_bytes(),
-    );
-    for word in state.packed_rows() {
-        hash_field(&mut digest, &word.to_le_bytes());
-    }
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn hash_field(digest: &mut Sha256, field: &[u8]) {
-    digest.update((field.len() as u64).to_le_bytes());
-    digest.update(field);
-}
-
-fn physical_wire(wire: usize) -> Result<u32, PaidBasisError> {
-    u32::try_from(wire).map_err(|_| PaidBasisError("wire index exceeds u32 range".into()))
-}
-
-fn identity_matrix(width: usize) -> Vec<Vec<u8>> {
-    (0..width)
-        .map(|row| (0..width).map(|column| u8::from(row == column)).collect())
-        .collect()
-}
-
-fn xor_rows(matrix: &mut [Vec<u8>], target: usize, control: usize) {
-    let source = matrix[control].clone();
-    for (value, source) in matrix[target].iter_mut().zip(source) {
-        *value ^= source;
-    }
-}
-
-fn block_hamming_weight(block: &[Vec<u8>]) -> usize {
-    block.iter().flatten().map(|bit| usize::from(*bit)).sum()
-}
-
-fn paid_block_cost(preparation: &[CnotGate], block: &[Vec<u8>]) -> Result<usize, PaidBasisError> {
-    preparation
-        .len()
-        .checked_mul(2)
-        .and_then(|prep| prep.checked_add(block_hamming_weight(block)))
-        .ok_or_else(|| PaidBasisError("paid partial-block cost overflow".into()))
-}
-
-fn side_vectors(block: &[Vec<u8>], side: BasisSide) -> Vec<Vec<u8>> {
-    match side {
-        BasisSide::Source => (0..block[0].len())
-            .map(|column| block.iter().map(|row| row[column]).collect())
-            .collect(),
-        BasisSide::Target => block.to_vec(),
-    }
-}
-
-fn local_vectors(block: &[Vec<u8>], group_indices: &[usize], side: BasisSide) -> Vec<Vec<u8>> {
-    match side {
-        BasisSide::Source => block
-            .iter()
-            .map(|row| group_indices.iter().map(|&index| row[index]).collect())
-            .collect(),
-        BasisSide::Target => (0..block[0].len())
-            .map(|column| {
-                group_indices
-                    .iter()
-                    .map(|&row| block[row][column])
-                    .collect()
-            })
-            .collect(),
-    }
-}
-
-fn select_groups(vectors: &[Vec<u8>], max_width: usize) -> Vec<Vec<usize>> {
-    if vectors.len() < 2 {
-        return Vec::new();
-    }
-    let weights = vectors
-        .iter()
-        .map(|row| row.iter().map(|bit| usize::from(*bit)).sum::<usize>())
-        .collect::<Vec<_>>();
-    let active = weights
-        .iter()
-        .enumerate()
-        .filter_map(|(index, weight)| (*weight > 0).then_some(index))
-        .collect::<Vec<_>>();
-    if active.len() < 2 {
-        return Vec::new();
-    }
-    let width = max_width.min(active.len());
-    let mut leaders = active.clone();
-    leaders.sort_by_key(|index| (std::cmp::Reverse(weights[*index]), *index));
-    let mut seen = std::collections::HashSet::<Vec<usize>>::new();
-    let mut groups = Vec::new();
-
-    for leader in leaders {
-        let mut others = active
-            .iter()
-            .copied()
-            .filter(|index| *index != leader)
-            .collect::<Vec<_>>();
-        others.sort_by_key(|other| {
-            let distance = vectors[leader]
-                .iter()
-                .zip(&vectors[*other])
-                .filter(|(left, right)| left != right)
-                .count() as isize;
-            (
-                distance - weights[leader].max(weights[*other]) as isize,
-                *other,
-            )
-        });
-        let mut group = Vec::with_capacity(width);
-        group.push(leader);
-        group.extend(others.into_iter().take(width - 1));
-        group.sort_unstable();
-        if seen.insert(group.clone()) {
-            groups.push(group);
-        }
-    }
-
-    let step = width.saturating_sub(1).max(1);
-    for start in (0..active.len()).step_by(step) {
-        let end = (start + width).min(active.len());
-        let group = active[start..end].to_vec();
-        if group.len() > 1 && seen.insert(group.clone()) {
-            groups.push(group);
-        }
-    }
-    groups
-}
-
-fn expected_shear_endpoint(
-    start: &MatrixState,
-    dimension: u32,
-    source_wires: &[usize],
-    target_wires: &[usize],
-    block: &[Vec<u8>],
-) -> Result<MatrixState, PaidBasisError> {
-    let words_per_row = start.words_per_row();
-    let row_count = usize::try_from(dimension)
-        .map_err(|_| PaidBasisError("dimension cannot be represented as usize".into()))?;
-    let packed_len = row_count
-        .checked_mul(words_per_row)
-        .ok_or_else(|| PaidBasisError("expected endpoint allocation overflow".into()))?;
-    let mut rows = vec![0u64; packed_len];
-    for wire in 0..row_count {
-        rows[wire * words_per_row + wire / 64] |= 1u64 << (wire % 64);
-    }
-    for (target_index, target_wire) in target_wires.iter().copied().enumerate() {
-        for (source_index, source_wire) in source_wires.iter().copied().enumerate() {
-            if block[target_index][source_index] != 0 {
-                let offset = target_wire * words_per_row + source_wire / 64;
-                rows[offset] ^= 1u64 << (source_wire % 64);
-            }
-        }
-    }
-    MatrixState::from_packed_rows(dimension, start.alphabet_id(), rows)
-        .map_err(|error| PaidBasisError(error.to_string()))
 }
