@@ -1,7 +1,9 @@
-use super::manifest::{parse_run_manifest, AlphabetSpec};
-use crate::alphabet::CnotAlphabet;
-use crate::features::{FeaturePolicy, FeatureRegistry};
-use crate::frozen_data::FrozenDataset;
+//! Manifest-driven assembly and execution of one pinned training run.
+
+mod artifacts;
+mod feature_runtime;
+
+use super::manifest::parse_run_manifest;
 use crate::model::FusionDistanceField;
 use crate::nn_training::NeuralTrainer;
 use crate::objective::{ExposureAudit, FullGraphObjective};
@@ -9,119 +11,37 @@ use crate::training::Sampler;
 use crate::training_session::{
     FullGraphTrainingSession, TrainingSessionConfig, TrainingSessionResources,
 };
-use crate::{load_exact_catalogs_pinned, MatrixState};
+use crate::{CheckpointStore, MatrixState};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tch::{nn::VarStore, Device};
-
-fn resolve_path(manifest: &Path, configured: &Path) -> PathBuf {
-    if configured.is_absolute() {
-        configured.to_owned()
-    } else {
-        manifest
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(configured)
-    }
-}
-fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 
 pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
     let raw = fs::read(path)
         .map_err(|e| format!("could not read run manifest {}: {e}", path.display()))?;
     let manifest = parse_run_manifest(&raw)?;
-    let run_sha256 = sha256(&raw);
-    let dataset_path = resolve_path(path, &manifest.dataset.path);
-    let catalog_path = resolve_path(path, &manifest.exact_catalogs.path);
-    let checkpoint_dir = resolve_path(path, &manifest.checkpoint_dir);
-    if manifest.resume {
-        if !checkpoint_dir.join("last.json").is_file() {
-            return Err(format!(
-                "resume requested but {} has no last.json",
-                checkpoint_dir.display()
-            ));
-        }
-    } else if checkpoint_dir.exists()
-        && fs::read_dir(&checkpoint_dir)
-            .map_err(|e| e.to_string())?
-            .next()
-            .is_some()
-    {
-        return Err(format!(
-            "fresh run refuses nonempty checkpoint directory {}",
-            checkpoint_dir.display()
-        ));
-    }
+    let paths = artifacts::resolve(path, &raw, &manifest)?;
 
     crate::torch_device::require_cuda_device(manifest.training.cuda_device)?;
-    let alphabets = manifest
-        .alphabets
-        .iter()
-        .map(AlphabetSpec::build)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut ids = HashSet::with_capacity(alphabets.len());
-    for alphabet in &alphabets {
-        if !ids.insert(alphabet.id().to_owned()) {
-            return Err(format!("duplicate alphabet identity {}", alphabet.id()));
-        }
-        let canonical =
-            CnotAlphabet::all_to_all_unit(alphabet.dimension()).map_err(|e| e.to_string())?;
-        if alphabet.id() != canonical.id()
-            || alphabet.gates() != canonical.gates()
-            || (0..alphabet.gates().len()).any(|i| alphabet.cost_at(i) != canonical.cost_at(i))
-        {
-            return Err(format!("pinned exact-catalog bundle supports only all-to-all unit alphabet {}; supplied {}", canonical.id(), alphabet.id()));
-        }
-    }
-    let catalogs = load_exact_catalogs_pinned(&catalog_path, &manifest.exact_catalogs.sha256)
-        .map_err(|e| e.to_string())?;
-    if catalogs.len() != alphabets.len() || alphabets.iter().any(|a| !catalogs.contains_key(a.id()))
-    {
-        return Err("exact catalogs must cover exactly the configured alphabets".into());
-    }
-    let dataset = FrozenDataset::load_pinned_with_catalogs(
-        &dataset_path,
-        &manifest.dataset.sha256,
-        &catalogs,
-    )
-    .map_err(|e| e.to_string())?;
-    let feature_contexts = manifest.feature_contexts.build()?;
-    let profile_alphabet = &feature_contexts.alphabet;
-    if !alphabets.iter().any(|a| {
-        a.id() == profile_alphabet.id()
-            && a.dimension() == profile_alphabet.dimension()
-            && a.gates() == profile_alphabet.gates()
-            && (0..a.gates().len()).all(|i| a.cost_at(i) == profile_alphabet.cost_at(i))
-    }) {
-        return Err("feature-context alphabet must exactly match an objective alphabet".into());
-    }
-    let registry = FeatureRegistry::with_all_model_input_providers(feature_contexts)
-        .map_err(|e| e.to_string())?;
-    let mut policy = FeaturePolicy::all_model_inputs_augmentation_only(
-        manifest.feature_policy.schema_id.clone(),
-    );
-    policy.seed = manifest.training.seed;
-    policy.solver_assisted = manifest.feature_policy.solver_assisted;
-    policy.evaluations = manifest.feature_policy.evaluations.into_option();
-    policy.max_bytes = manifest.feature_policy.max_bytes.into_option();
-    let selected = registry
-        .selected_specs(&policy)
-        .map_err(|e| e.to_string())?;
-    if selected.len() != crate::schema::MODEL_INPUT_COUNT {
-        return Err(format!(
-            "expected all {} model inputs, registry selected {}",
-            crate::schema::MODEL_INPUT_COUNT,
-            selected.len()
-        ));
-    }
+    let pinned = artifacts::load(&manifest, &paths)?;
+    let artifacts::PinnedRunData {
+        alphabets,
+        catalogs,
+        dataset,
+    } = pinned;
+    let features = feature_runtime::build(
+        manifest.feature_contexts,
+        manifest.feature_policy,
+        &alphabets,
+        manifest.training.seed,
+    )?;
+    let feature_runtime::FeatureRuntime {
+        registry,
+        policy,
+        selected_count,
+    } = features;
+
     let exact_catalogs = catalogs.values().cloned().collect();
     let forbidden_states = dataset
         .forbidden_keys
@@ -152,7 +72,7 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
         Sampler::new(dataset.train.len(), manifest.training.seed).map_err(|e| e.to_string())?;
     let mut trainer =
         NeuralTrainer::new(&variables, sampler, manifest.optimizer).map_err(|e| e.to_string())?;
-    let store = crate::CheckpointStore::new(&checkpoint_dir);
+    let store = CheckpointStore::new(&paths.checkpoint_dir);
     let session_config = TrainingSessionConfig {
         batch_size: manifest.training.batch_size,
         checkpoint_every_attempts: manifest.training.checkpoint_every_attempts,
@@ -190,12 +110,12 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
     };
     Ok(json!({
         "schema": "cnot103_training_result_v1",
-        "run_manifest_sha256": run_sha256,
+        "run_manifest_sha256": paths.run_sha256,
         "dataset_sha256": dataset.sha256,
         "exact_catalog_bundle_sha256": manifest.exact_catalogs.sha256,
         "objective_sha256": objective.config_sha256(),
         "feature_registry_sha256": registry.contract_sha256(),
-        "feature_model_inputs": selected.len(),
+        "feature_model_inputs": selected_count,
         "train_rows": dataset.train.len(),
         "dev_rows": dataset.dev.len(),
         "test_rows": dataset.test.len(),
