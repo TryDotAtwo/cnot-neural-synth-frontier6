@@ -1,19 +1,16 @@
 //! Full-graph batch validation and differentiable loss construction.
 mod preflight;
+mod record_loss;
 
-use super::losses::{qhat_loss, teacher_loss};
 use super::{FullGraphObjective, ObjectiveDiagnostics, StateAdmission};
 use crate::alphabet::CnotAlphabet;
-use crate::bellman::{
-    recompute_backup, select_backup_with_model_input_coverage, BellmanSelectionConfig,
-};
 use crate::features::FeatureRegistry;
 use crate::model::FusionDistanceField;
 use crate::nn_training::PreparedTrainingLoss;
 use crate::state::MatrixState;
 use crate::training_data::TrainingRecord;
 use tch::nn::VarStore;
-use tch::{Kind, Reduction, Tensor};
+use tch::Tensor;
 
 struct Validated<'a> {
     record: &'a TrainingRecord,
@@ -69,119 +66,18 @@ impl FullGraphObjective {
             ..ObjectiveDiagnostics::default()
         };
         for item in &validated {
-            let state = &item.record.state;
-            // Terminal Bellman rows have no selected successor, but terminal
-            // Q-hat still targets every primitive action. Check their packets
-            // before the loss pass, using bounded per-item memory.
-            if self.config.require_all_model_inputs
-                && self.config.qhat_weight > 0.0
-                && state.is_identity()
-            {
-                let packet = registry
-                    .build(&item.successors, &self.policy)
-                    .map_err(|error| error.to_string())?;
-                packet
-                    .require_complete_model_input_coverage()
-                    .map_err(|error| error.to_string())?;
-            }
-            let selection = select_backup_with_model_input_coverage(
+            let record_loss = record_loss::compute_record_loss(
+                self,
+                item,
                 model,
                 variables,
-                std::slice::from_ref(state),
                 registry,
-                &self.policy,
-                item.alphabet,
-                BellmanSelectionConfig {
-                    chunk_size: Some(self.config.neighbor_chunk_size),
-                    require_complete_model_input_coverage: self.config.require_all_model_inputs,
-                },
-            )
-            .map_err(|error| error.to_string())?;
-            let branch = selection
-                .branches()
-                .next()
-                .ok_or_else(|| "Bellman selection did not return a branch".to_owned())?;
-            diagnostics.primitive_candidates = diagnostics
-                .primitive_candidates
-                .checked_add(branch.primitive_count)
-                .ok_or_else(|| "primitive candidate counter overflow".to_owned())?;
-            let bellman = recompute_backup(model, variables, &selection)
-                .map_err(|error| error.to_string())?;
-
-            let parent_packet = selection
-                .parent_packet(0)
-                .ok_or_else(|| "Bellman selection did not retain its parent packet".to_owned())?;
-            let output = model
-                .forward(parent_packet)
-                .map_err(|error| error.to_string())?;
-            if output.value.numel() != 1 || output.value.isfinite().all().int64_value(&[]) == 0 {
-                return Err("objective parent value is not a finite scalar".into());
+                &mut diagnostics,
+            )?;
+            if record_loss.term.requires_grad() {
+                gradient_states.extend(record_loss.gradient_states);
             }
-            let value = output.value.select(0, 0);
-            let lower = Tensor::from_slice(&[item.lower_bound as f64])
-                .to_device(value.device())
-                .to_kind(value.kind())
-                .select(0, 0);
-            let upper = Tensor::from_slice(&[item.upper_bound as f64])
-                .to_device(value.device())
-                .to_kind(value.kind())
-                .select(0, 0);
-            let interval = (lower - &value).relu().pow_tensor_scalar(2.0)
-                + (&value - upper).relu().pow_tensor_scalar(2.0);
-            let exact_loss = if let Some(exact_distance) = item.record.exact_distance {
-                diagnostics.exact_examples += 1;
-                let target = Tensor::from_slice(&[exact_distance as f64])
-                    .to_device(value.device())
-                    .to_kind(value.kind())
-                    .select(0, 0);
-                value.smooth_l1_loss(&target, Reduction::Mean, 1.0)
-            } else {
-                value.shallow_clone() * 0.0
-            };
-
-            let qhat_loss = if self.config.qhat_weight > 0.0 {
-                qhat_loss(
-                    model,
-                    registry,
-                    &self.policy,
-                    item.alphabet,
-                    state,
-                    &output,
-                    branch,
-                )?
-            } else {
-                output
-                    .qhat
-                    .masked_fill(&Tensor::ones_like(&output.qhat).to_kind(Kind::Bool), 0.0)
-                    .sum(output.qhat.kind())
-                    * 0.0
-            };
-            let teacher = if self.config.teacher_weight > 0.0 {
-                let (loss, used) = teacher_loss(
-                    &output.proposal_logits,
-                    &output.action_mask,
-                    item.record,
-                    item.alphabet,
-                    self.config.teacher_temperature,
-                )?;
-                diagnostics.teacher_examples += usize::from(used);
-                loss
-            } else {
-                output
-                    .proposal_logits
-                    .masked_fill(&output.action_mask.logical_not(), 0.0)
-                    .sum(output.proposal_logits.kind())
-                    * 0.0
-            };
-
-            let term = bellman.loss * self.config.bellman_weight
-                + (interval + exact_loss) * self.config.supervision_weight
-                + qhat_loss * self.config.qhat_weight
-                + teacher * self.config.teacher_weight;
-            if term.requires_grad() {
-                gradient_states.extend(selection.gradient_exposure_states());
-            }
-            terms.push(term);
+            terms.push(record_loss.term);
         }
         if terms.is_empty() {
             return Err("empty full graph objective".into());
