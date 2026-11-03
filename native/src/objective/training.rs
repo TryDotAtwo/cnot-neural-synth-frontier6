@@ -1,18 +1,27 @@
 //! Full-graph batch validation and differentiable loss construction.
+mod preflight;
+
 use super::losses::{qhat_loss, teacher_loss};
 use super::{FullGraphObjective, ObjectiveDiagnostics, StateAdmission};
 use crate::alphabet::CnotAlphabet;
 use crate::bellman::{
-    BellmanSelectionConfig, recompute_backup, select_backup_with_model_input_coverage,
+    recompute_backup, select_backup_with_model_input_coverage, BellmanSelectionConfig,
 };
 use crate::features::FeatureRegistry;
 use crate::model::FusionDistanceField;
 use crate::nn_training::PreparedTrainingLoss;
-use crate::packet::StateIdentity;
 use crate::state::MatrixState;
-use crate::training_data::{TrainingRecord, elementary_lower_bound};
+use crate::training_data::TrainingRecord;
 use tch::nn::VarStore;
 use tch::{Kind, Reduction, Tensor};
+
+struct Validated<'a> {
+    record: &'a TrainingRecord,
+    alphabet: &'a CnotAlphabet,
+    lower_bound: u64,
+    upper_bound: u64,
+    successors: Vec<MatrixState>,
+}
 
 impl FullGraphObjective {
     pub(super) fn compute_loss(
@@ -41,60 +50,13 @@ impl FullGraphObjective {
             return Err("runner admission fingerprint differs from the objective contract".into());
         }
 
-        struct Validated<'a> {
-            record: &'a TrainingRecord,
-            alphabet: &'a CnotAlphabet,
-            lower_bound: u64,
-            upper_bound: u64,
-            successors: Vec<MatrixState>,
-        }
-
-        // Finish all split, certificate, bound, forbidden-neighbor, and
-        // external-admission checks before mutating exposures or calling the model.
-        let mut validated = Vec::with_capacity(records.len());
-        for record in records {
-            let alphabet = self
-                .alphabets
-                .get(record.state.alphabet_id())
-                .ok_or_else(|| "training record uses an unregistered alphabet".to_owned())?;
-            let exact = self.exact_catalogs.get(alphabet.id());
-            let upper_bound = record
-                .validate_for_training(alphabet, exact)
-                .map_err(|error| error.to_string())?;
-            let lower_bound =
-                elementary_lower_bound(&record.state).map_err(|error| error.to_string())?;
-            if lower_bound > upper_bound {
-                return Err("verified word upper bound is below the source lower bound".into());
-            }
-
-            let mut successors = Vec::with_capacity(alphabet.gates().len());
-            for gate in alphabet.gates().iter().copied() {
-                let mut successor = record.state.clone();
-                successor
-                    .apply_cnot(gate)
-                    .map_err(|error| error.to_string())?;
-                if self.forbidden.contains(&StateIdentity::from(&successor)) {
-                    return Err("forbidden state in complete backup; reject whole parent".into());
-                }
-                if let Some(admission) = admission {
-                    admission.admit(&successor)?;
-                }
-                successors.push(successor);
-            }
-            if self.forbidden.contains(&StateIdentity::from(&record.state)) {
-                return Err("forbidden state in training batch".into());
-            }
-            if let Some(admission) = admission {
-                admission.admit(&record.state)?;
-            }
-            validated.push(Validated {
-                record,
-                alphabet,
-                lower_bound,
-                upper_bound,
-                successors,
-            });
-        }
+        let validated = preflight::validate_batch(
+            &self.alphabets,
+            &self.exact_catalogs,
+            &self.forbidden,
+            records,
+            admission,
+        )?;
 
         // Feature packets are built once per example and retained only through
         // that example's loss construction. This keeps candidate coverage
