@@ -35,4 +35,9 @@ impl BlockContext {
 
 mod producer;
 pub use producer::register_block_parities;
-use producer::valid_indices;
+
+fn valid_indices(values: &[u32], n: u32) -> bool {
+    !values.is_empty()
+        && values.iter().all(|value| *value < n)
+        && !values.windows(2).any(|pair| pair[0] >= pair[1])
+}
