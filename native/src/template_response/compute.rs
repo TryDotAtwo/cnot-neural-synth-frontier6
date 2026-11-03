@@ -1,7 +1,8 @@
+use super::provider::{CachedTemplateResponse, TemplateResponseValues};
 use super::rational::{rational_to_f32, signed_rational_to_f32};
 use super::{
-    CachedTemplateResponse, RationalProbability, TEMPLATE_RESPONSE_WIRE_ROLES, TemplateChoice,
-    TemplateChoiceKind, TemplateResponseConfig, TemplateResponseValues,
+    RationalProbability, TemplateChoice, TemplateChoiceKind, TemplateResponseConfig,
+    TEMPLATE_RESPONSE_WIRE_ROLES,
 };
 use crate::features::{FeatureComputation, FeatureValue};
 use crate::packet::FeatureStatus;
