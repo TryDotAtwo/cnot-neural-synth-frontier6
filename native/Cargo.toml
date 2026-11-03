@@ -6,7 +6,7 @@ build = "build.rs"
 
 [lib]
 name = "cnot103_native"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "cnot103-train"
