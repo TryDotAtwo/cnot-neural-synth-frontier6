@@ -22,6 +22,7 @@ fn main() {
 
     let mut config = cmake::Config::new("cuda");
     config.define("CMAKE_BUILD_TYPE", "Release");
+    config.define("BUILD_TESTING", "OFF");
     if let Ok(compiler) = env::var("CMAKE_CUDA_COMPILER").or_else(|_| env::var("CUDACXX")) {
         config.define("CMAKE_CUDA_COMPILER", compiler);
     }
