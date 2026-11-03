@@ -114,7 +114,7 @@ fn i07_matches_source_wide_rank_and_exact_representation_exponent() {
 }
 
 #[test]
-fn i07_fails_closed_for_interface_alphabet_and_budget_mismatches() {
+fn i07_distinguishes_interface_inapplicability_from_alphabet_and_budget_failures() {
     let context = FrequencyContext::new(3, vec![0], vec![1], vec![2], vec![vec![1]]).unwrap();
     let mut registry = FeatureRegistry::new();
     register_frequency_contexts(&mut registry, vec![context.clone()], 2, 2).unwrap();
@@ -129,12 +129,12 @@ fn i07_fails_closed_for_interface_alphabet_and_budget_mismatches() {
 
     let mut registry = FeatureRegistry::new();
     register_frequency_contexts(&mut registry, vec![context], 3, 2).unwrap();
-    let unsupported = registry
+    let outside_interface = registry
         .build(&[target], &policy("augmentation_only"))
         .unwrap();
     assert_eq!(
-        unsupported.feature(id("I07")).status,
-        vec![FeatureStatus::Unsupported]
+        outside_interface.feature(id("I07")).status,
+        vec![FeatureStatus::Inapplicable]
     );
 
     let wrong_alphabet = MatrixState::identity(3, "custom_cnot").unwrap();
@@ -146,6 +146,22 @@ fn i07_fails_closed_for_interface_alphabet_and_budget_mismatches() {
         vec![FeatureStatus::Unsupported]
     );
     assert!(registry.selected_specs(&policy("exact_relabel")).is_err());
+}
+
+#[test]
+fn i07_is_inapplicable_outside_the_explicit_interface() {
+    let context = FrequencyContext::new(4, vec![0], vec![1, 2], vec![3], vec![vec![1]]).unwrap();
+    let mut registry = FeatureRegistry::new();
+    register_frequency_contexts(&mut registry, vec![context], 4, 4).unwrap();
+
+    // CNOT 3 -> 0 breaks the source-wire identity constraint of stage-52.
+    let outside = state(4, vec![9, 2, 4, 8]);
+    let packet = registry
+        .build(&[outside], &policy("augmentation_only"))
+        .unwrap();
+    let feature = packet.feature(id("I07"));
+    assert_eq!(feature.status, vec![FeatureStatus::Inapplicable]);
+    assert_eq!(feature.available, vec![0]);
 }
 
 #[test]

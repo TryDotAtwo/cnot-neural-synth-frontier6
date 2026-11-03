@@ -152,7 +152,9 @@ split by input contract:
   central Fourier rank `kappa` and representation-size exponent
   `internal_width * kappa`, never the exponential dimension itself. It checks
   the physical block form, all-to-all alphabet, width/frequency budgets, and
-  `augmentation_only` symmetry. Source SHA-256:
+  `augmentation_only` symmetry. States outside the explicit interface are
+  `inapplicable` and masked; alphabet/policy/context mismatches remain
+  unsupported and exhausted budgets remain resource-limited. Source SHA-256:
   `44fa3c82aa7b5c59542cb4101c40b8f437fca1e7baf47f66a3c395627c49c465`.
   Rust source-parity fixtures cover all 16 labelled 2x2 sectors under a
   noncanonical wire partition, a 144-wire source case, a frequency row crossing
@@ -400,9 +402,14 @@ identity was versioned, the H07 unit tests and complete CUDA resume target were
 rerun successfully on cuda:0. The 102-input fresh-process resume also passed
 separately on cuda:1.
 
-This acceptance uses small synthetic inputs. It does not establish exact
-parity for the archived-unimplemented source features, production data
-coverage, held-out quality, or completion of the 1000x10000 campaign.
+The 102-input synthetic GL(4,2) CLI run also completed one CUDA update, saved
+a checkpoint, resumed it in a fresh process, and completed the next update.
+This exercises the bounded launcher, pinned exact fixture artifacts, complete
+feature profile, exposure audit, and checkpoint contract together.
+
+These acceptances use small synthetic inputs. They do not establish exact parity
+for the archived-unimplemented source features, production data coverage,
+held-out quality, or completion of the 1000x10000 campaign.
 
 
 ## Bounded CUDA training command

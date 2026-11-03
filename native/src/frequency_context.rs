@@ -156,6 +156,10 @@ impl FeatureProducer for FrequencyContextProducer {
                 "i07_no_explicit_frequency_context_for_width",
             );
         };
+        let expected_alphabet = format!("all_to_all_unit_cnot:{}", context.n);
+        if state.alphabet_id() != expected_alphabet || state.dimension() != context.n {
+            return unavailable(FeatureStatus::Unsupported, "i07_state_alphabet_mismatch");
+        }
 
         let Some(frequency_bits) = context.sources.len().checked_mul(context.targets.len()) else {
             return unavailable(
@@ -173,7 +177,7 @@ impl FeatureProducer for FrequencyContextProducer {
             Ok(true) => {}
             Ok(false) => {
                 return unavailable(
-                    FeatureStatus::Unsupported,
+                    FeatureStatus::Inapplicable,
                     "i07_state_outside_explicit_stage52_interface",
                 );
             }
@@ -302,11 +306,6 @@ fn unavailable(status: FeatureStatus, reason: &str) -> FeatureComputation {
 
 fn has_stage52_interface(state: &MatrixState, context: &FrequencyContext) -> Result<bool, ()> {
     let n = context.n;
-    let expected_alphabet = format!("all_to_all_unit_cnot:{n}");
-    if state.dimension() != n || state.alphabet_id() != expected_alphabet.as_str() {
-        return Ok(false);
-    }
-
     for (index, row) in context.sources.iter().copied().enumerate() {
         for column in 0..n {
             if state_bit(state, row, column) != (column == context.sources[index]) {
