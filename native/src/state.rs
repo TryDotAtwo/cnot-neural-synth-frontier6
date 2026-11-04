@@ -45,6 +45,16 @@ impl fmt::Display for MatrixError {
 
 impl std::error::Error for MatrixError {}
 
+fn packed_matrix_layout(n: u32) -> Result<(usize, usize), MatrixError> {
+    let words_per_row = usize::try_from(n.checked_add(63).ok_or(MatrixError::SizeOverflow)? / 64)
+        .map_err(|_| MatrixError::SizeOverflow)?;
+    let word_count = usize::try_from(n)
+        .ok()
+        .and_then(|dimension| dimension.checked_mul(words_per_row))
+        .ok_or(MatrixError::SizeOverflow)?;
+    Ok((words_per_row, word_count))
+}
+
 impl MatrixState {
     /// Bits are packed row-major: bit `j` of row `i` is matrix entry `(i,j)`.
     /// Word zero contains columns 0 through 63, with column 0 in bit 0.
@@ -60,13 +70,7 @@ impl MatrixState {
         if alphabet_id.is_empty() {
             return Err(MatrixError::InvalidAlphabet);
         }
-        let words_per_row =
-            usize::try_from(n.checked_add(63).ok_or(MatrixError::SizeOverflow)? / 64)
-                .map_err(|_| MatrixError::SizeOverflow)?;
-        let expected = usize::try_from(n)
-            .ok()
-            .and_then(|dimension| dimension.checked_mul(words_per_row))
-            .ok_or(MatrixError::SizeOverflow)?;
+        let (words_per_row, expected) = packed_matrix_layout(n)?;
         if rows.len() != expected {
             return Err(MatrixError::WrongPackedLength {
                 expected,
@@ -98,18 +102,24 @@ impl MatrixState {
         if n == 0 {
             return Err(MatrixError::InvalidDimension);
         }
-        let words_per_row =
-            usize::try_from(n.checked_add(63).ok_or(MatrixError::SizeOverflow)? / 64)
-                .map_err(|_| MatrixError::SizeOverflow)?;
-        let words = usize::try_from(n)
-            .ok()
-            .and_then(|dimension| dimension.checked_mul(words_per_row))
-            .ok_or(MatrixError::SizeOverflow)?;
-        let mut rows = vec![0u64; words];
+        let (words_per_row, word_count) = packed_matrix_layout(n)?;
+        let mut rows = vec![0u64; word_count];
         for row in 0..n as usize {
             rows[row * words_per_row + row / 64] |= 1u64 << (row % 64);
         }
-        Self::from_packed_rows(n, alphabet_id, rows)
+        let alphabet_id = alphabet_id.into();
+        if alphabet_id.is_empty() {
+            return Err(MatrixError::InvalidAlphabet);
+        }
+
+        // The constructed identity is invertible by definition; do not repeat
+        // the cubic elimination performed by the general packed-row validator.
+        Ok(Self {
+            n,
+            words_per_row,
+            alphabet_id,
+            rows,
+        })
     }
 
     pub fn dimension(&self) -> u32 {
