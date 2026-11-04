@@ -1,5 +1,7 @@
 use super::{FeatureId, FEATURE_COUNT, H07_POST_FORWARD_DIAGNOSTIC_ID, MODEL_INPUT_COUNT};
 
+mod roles;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FeatureRole {
     Node,
@@ -44,10 +46,6 @@ impl FeatureSpec {
     }
 }
 
-fn in_set(value: u8, values: &[u8]) -> bool {
-    values.contains(&value)
-}
-
 pub(crate) fn is_reserved_native_layout(id: FeatureId) -> bool {
     matches!(
         (id.family, id.ordinal),
@@ -59,108 +57,6 @@ pub(crate) fn is_reserved_native_layout(id: FeatureId) -> bool {
             | (b'H', 6..=7)
             | (b'I', 1..=11)
     )
-}
-
-fn role_channels(id: FeatureId) -> (FeatureRole, usize) {
-    if is_reserved_native_layout(id) {
-        // Static fallback only: a concrete provider must declare its shape and
-        // identity before the feature can enter a model.
-        return (FeatureRole::Group, 1);
-    }
-    let family = id.family;
-    let ordinal = id.ordinal;
-    match family {
-        b'A' => {
-            let role = if in_set(ordinal, &[1, 2, 3, 4]) || (13..=20).contains(&ordinal) {
-                FeatureRole::Pair
-            } else {
-                FeatureRole::Node
-            };
-            let channels = if in_set(ordinal, &[3, 5, 12, 17, 18, 19, 20]) {
-                2
-            } else {
-                1
-            };
-            (role, channels)
-        }
-        b'B' => match ordinal {
-            1 => (FeatureRole::Global, 1),
-            2 | 3 | 5 | 9 => (FeatureRole::Node, 1),
-            4 | 11 => (FeatureRole::Node, 3),
-            6 | 7 => (FeatureRole::Pair, 1),
-            8 => (FeatureRole::Pair, 2),
-            10 => (FeatureRole::Node, 2),
-            12 => (FeatureRole::Global, 16),
-            _ => unreachable!("validated B feature ordinal"),
-        },
-        b'C' => {
-            if in_set(ordinal, &[1, 5, 8]) {
-                (FeatureRole::Global, 1)
-            } else {
-                (FeatureRole::Group, 1)
-            }
-        }
-        b'D' => match ordinal {
-            3 => (FeatureRole::Pair, 3),
-            5 => (FeatureRole::Node, 2),
-            7 => (FeatureRole::Group, 5),
-            9 | 10 => (FeatureRole::Group, 1),
-            11 | 12 => (FeatureRole::Group, 2),
-            13 => (FeatureRole::Group, 12),
-            14 => (FeatureRole::Pair, 4),
-            _ => (FeatureRole::Group, 1),
-        },
-        b'E' => match ordinal {
-            1..=3 | 7 => (FeatureRole::Global, 1),
-            4 => (FeatureRole::Pair, 2),
-            5 => (FeatureRole::Global, 4),
-            6 => (FeatureRole::Group, 1),
-            8 => (FeatureRole::Global, 2),
-            9 => (FeatureRole::Global, 5),
-            _ => unreachable!("validated E feature ordinal"),
-        },
-        b'F' => match ordinal {
-            1 | 5 => (FeatureRole::Global, 2),
-            2 => (FeatureRole::Global, 1),
-            3 | 10 => (FeatureRole::Global, 5),
-            4 => (FeatureRole::Pair, 3),
-            6 => (FeatureRole::Group, 6),
-            7 | 8 => (FeatureRole::Global, 3),
-            9 => (FeatureRole::Global, 4),
-            _ => unreachable!("validated F feature ordinal"),
-        },
-        b'G' => match ordinal {
-            1 | 2 => (FeatureRole::Node, 28),
-            3 => (FeatureRole::Node, 16),
-            4 => (FeatureRole::Node, 3),
-            5 => (FeatureRole::Pair, 4),
-            6 => (FeatureRole::Pair, 28),
-            7 => (FeatureRole::Node, 1),
-            8 => (FeatureRole::Pair, 5),
-            9 => (FeatureRole::Pair, 2),
-            10 => (FeatureRole::Pair, 7),
-            _ => unreachable!("validated G feature ordinal"),
-        },
-        b'H' => match ordinal {
-            1..=4 => (FeatureRole::Pair, 1),
-            5 => (FeatureRole::Pair, 4),
-            6 => (FeatureRole::Pair, 15),
-            7 => (FeatureRole::Global, 6),
-            _ => unreachable!("validated H feature ordinal"),
-        },
-        b'I' => match ordinal {
-            1 | 3 => (FeatureRole::Group, 2),
-            2 => (FeatureRole::Group, 3),
-            4 | 11 => (FeatureRole::Global, 4),
-            5 | 7 => (FeatureRole::Global, 2),
-            6 => (FeatureRole::Group, 5),
-            8 => (FeatureRole::Group, 4),
-            9 => (FeatureRole::Group, 132),
-            10 => (FeatureRole::Global, 8),
-            _ => unreachable!("validated I feature ordinal"),
-        },
-        _ => unreachable!("FeatureId family is validated on construction"),
-    }
 }
 
 fn default_wire_roles(id: FeatureId, role: FeatureRole) -> Vec<String> {
@@ -186,7 +82,7 @@ pub fn all_feature_specs() -> Vec<FeatureSpec> {
     (0..FEATURE_COUNT)
         .map(|index| {
             let id = FeatureId::from_index(index).expect("feature index is within manifest");
-            let (role, channels) = role_channels(id);
+            let (role, channels) = roles::role_channels(id);
             FeatureSpec {
                 id,
                 role,
@@ -204,7 +100,7 @@ pub fn all_feature_specs() -> Vec<FeatureSpec> {
 }
 
 pub fn feature_spec(id: FeatureId) -> FeatureSpec {
-    let (role, channels) = role_channels(id);
+    let (role, channels) = roles::role_channels(id);
     FeatureSpec {
         id,
         role,
