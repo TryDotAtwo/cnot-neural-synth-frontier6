@@ -1,10 +1,12 @@
+mod candidates;
+mod scoring;
+
 use super::{BellmanBranchAudit, BellmanError, BellmanSelection, MacroProvider, PreparedBranch};
 use crate::alphabet::CnotAlphabet;
 use crate::features::{FeaturePolicy, FeatureRegistry};
 use crate::model::FusionDistanceField;
 use crate::state::MatrixState;
 use tch::nn::VarStore;
-use tch::{Device, Kind};
 
 /// Select the minimum paid-cost primitive successor for every state.
 pub fn select_backup(
@@ -148,93 +150,14 @@ fn select_backup_internal(
             continue;
         }
 
-        let mut successors = Vec::with_capacity(alphabet.gates().len());
-        let mut costs = Vec::with_capacity(alphabet.gates().len());
-        for (index, gate) in alphabet.gates().iter().copied().enumerate() {
-            let mut successor = state.clone();
-            successor
-                .apply_cnot(gate)
-                .map_err(|error| BellmanError::Invalid(error.to_string()))?;
-            successors.push(successor);
-            costs.push(u64::from(alphabet.cost_at(index).ok_or_else(|| {
-                BellmanError::Invalid("alphabet gate cost is missing".into())
-            })?));
-        }
-        let primitive_count = successors.len();
-        if let Some(provider) = options.macro_provider {
-            for certificate in provider.candidates(state).map_err(BellmanError::Invalid)? {
-                certificate.verify(alphabet)?;
-                if certificate.start != *state || certificate.physical_cost == 0 {
-                    return Err(BellmanError::Invalid(
-                        "macro certificate is not bound to its parent or has nonpositive cost"
-                            .into(),
-                    ));
-                }
-                successors.push(certificate.end.clone());
-                costs.push(certificate.physical_cost);
-            }
-        }
-        if successors.is_empty() {
-            return Err(BellmanError::Invalid(
-                "nonterminal state has an empty move alphabet".into(),
-            ));
-        }
-
-        let width = options.config.chunk_size.unwrap_or(successors.len());
-        let mut best = f64::INFINITY;
-        let mut selected_index = None;
-        let mut selected_cost = None;
-        let mut selected_packet = None;
-        let mut totals = Vec::with_capacity(successors.len());
-        for start in (0..successors.len()).step_by(width) {
-            let end = (start + width).min(successors.len());
-            let chunk = &successors[start..end];
-            let packet = registry.build(chunk, policy)?;
-            if options.config.require_complete_model_input_coverage {
-                packet
-                    .require_complete_model_input_coverage()
-                    .map_err(|error| BellmanError::Invalid(error.to_string()))?;
-            }
-            let chunk_totals = tch::no_grad(|| -> Result<Vec<f64>, BellmanError> {
-                let values = model.forward(&packet)?.value;
-                if values.isfinite().all().int64_value(&[]) == 0 {
-                    return Err(BellmanError::Invalid(
-                        "nonfinite Bellman candidate value".into(),
-                    ));
-                }
-                let flat = values
-                    .to_device(Device::Cpu)
-                    .to_kind(Kind::Double)
-                    .contiguous()
-                    .view([-1]);
-                let values = Vec::<f64>::try_from(&flat)?;
-                if values.len() != end - start {
-                    return Err(BellmanError::Invalid(
-                        "model candidate count differs from successor chunk".into(),
-                    ));
-                }
-                values
-                    .into_iter()
-                    .zip(costs[start..end].iter().copied())
-                    .map(|(value, cost)| candidate_total(value, cost))
-                    .collect()
-            })?;
-            if chunk_totals.len() != end - start {
-                return Err(BellmanError::Invalid(
-                    "model candidate count differs from successor chunk".into(),
-                ));
-            }
-            for (local_index, total) in chunk_totals.iter().copied().enumerate() {
-                totals.push(total);
-                if total < best {
-                    best = total;
-                    let global_index = start + local_index;
-                    selected_index = Some(global_index);
-                    selected_cost = Some(costs[global_index]);
-                    selected_packet = Some(packet.single_row(local_index)?);
-                }
-            }
-        }
+        let candidates = candidates::generate_candidates(state, alphabet, options.macro_provider)?;
+        let primitive_count = candidates.primitive_count;
+        let scored =
+            scoring::score_candidates(model, &candidates, registry, policy, options.config)?;
+        let selected_index = scored.selected_index;
+        let selected_cost = scored.selected_cost;
+        let selected_packet = scored.selected_packet;
+        let totals = scored.totals;
         let selected_index = selected_index
             .ok_or_else(|| BellmanError::Invalid("no finite Bellman candidate selected".into()))?;
         let min_primitive = totals[..primitive_count].iter().copied().reduce(f64::min);
@@ -242,7 +165,7 @@ fn select_backup_internal(
         let macro_margin = min_macro
             .zip(min_primitive)
             .map(|(macro_cost, primitive_cost)| macro_cost - primitive_cost);
-        let successor = successors[selected_index].clone();
+        let successor = candidates.successors[selected_index].clone();
         let selected_packet = selected_packet
             .ok_or_else(|| BellmanError::Invalid("selected successor packet is missing".into()))?;
         let packet_digest =
@@ -253,7 +176,7 @@ fn select_backup_internal(
                 parent: parent_packet.state_keys[0].clone(),
                 selected_index: Some(selected_index),
                 selected_cost,
-                candidate_count: successors.len(),
+                candidate_count: candidates.successors.len(),
                 primitive_count,
                 packet_sha256: super::fingerprint::hex_digest(&packet_digest),
                 macro_margin,
