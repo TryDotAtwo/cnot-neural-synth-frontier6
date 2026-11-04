@@ -22,7 +22,8 @@ pub(super) fn role_channels(id: FeatureId) -> (FeatureRole, usize) {
             1..=4 => (FeatureRole::Pair, 1),
             5 => (FeatureRole::Pair, 4),
             6 => (FeatureRole::Pair, 15),
-            7 => (FeatureRole::Global, 6),
+            // H07 is reserved as a post-forward diagnostic, not a model input.
+            7 => (FeatureRole::Group, 1),
             _ => unreachable!("validated H feature ordinal"),
         },
         b'I' => match ordinal {
