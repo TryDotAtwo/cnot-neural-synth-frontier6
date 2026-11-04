@@ -1,4 +1,5 @@
-use super::{AdamW, AdamWConfig, DecodedAdamW, TchTrainingError};
+use super::super::TchTrainingError;
+use super::{AdamW, AdamWConfig, DecodedAdamW};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Cursor;
