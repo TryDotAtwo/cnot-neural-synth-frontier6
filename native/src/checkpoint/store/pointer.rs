@@ -1,7 +1,7 @@
 use super::super::codec::validate_manifest_name;
 use super::super::integrity::canonical_bytes;
 use super::super::{CheckpointError, CheckpointManifest, CheckpointStore};
-use super::io::temporary_path;
+use super::io::{sync_directory, temporary_path};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 
@@ -38,6 +38,7 @@ impl CheckpointStore {
             file.write_all(&bytes)?;
             file.sync_all()?;
             fs::rename(&temporary, &path)?;
+            sync_directory(&self.root)?;
             Ok::<(), CheckpointError>(())
         })();
         if result.is_err() {

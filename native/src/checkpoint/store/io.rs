@@ -12,6 +12,14 @@ pub(super) fn temporary_path(root: &Path, name: &str) -> PathBuf {
     root.join(format!(".{name}.{}.{}.tmp", std::process::id(), suffix))
 }
 
+pub(super) fn sync_directory(path: &Path) -> Result<(), CheckpointError> {
+    #[cfg(unix)]
+    File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn write_immutable(
     path: &Path,
@@ -27,17 +35,21 @@ pub(super) fn write_immutable(
     if path.exists() {
         let mut existing = File::open(path)?;
         if digest_reader(&mut existing)? == expected_sha256 {
+            sync_directory(path.parent().ok_or(CheckpointError::Invalid(
+                "checkpoint path has no parent",
+            ))?)?;
             return Ok(());
         }
         return Err(CheckpointError::HashMismatch);
     }
-    let temporary = temporary_path(
-        path.parent()
-            .ok_or(CheckpointError::Invalid("checkpoint path has no parent"))?,
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .ok_or(CheckpointError::Invalid("checkpoint filename is not UTF-8"))?,
-    );
+    let parent = path
+        .parent()
+        .ok_or(CheckpointError::Invalid("checkpoint path has no parent"))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(CheckpointError::Invalid("checkpoint filename is not UTF-8"))?;
+    let temporary = temporary_path(parent, name);
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -52,10 +64,14 @@ pub(super) fn write_immutable(
         file.write_all(rng)?;
         file.sync_all()?;
         match fs::rename(&temporary, path) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                sync_directory(parent)?;
+                Ok(())
+            },
             Err(error) if path.exists() => {
                 let mut existing = File::open(path)?;
                 if digest_reader(&mut existing)? == expected_sha256 {
+                    sync_directory(parent)?;
                     let _ = fs::remove_file(&temporary);
                     Ok(())
                 } else {

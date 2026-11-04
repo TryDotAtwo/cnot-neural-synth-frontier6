@@ -16,10 +16,18 @@ unsafe extern "C" {
 /// Launches every ordered one-gate CNOT successor for a batch of equal-width states.
 ///
 /// # Safety
-/// Both pointers must refer to live CUDA device allocations on the active context.
-/// `input_device` must contain `batch * dimension * words_per_row` words; the output
-/// allocation must contain at least the returned word count. The stream must belong
-/// to the same CUDA context. The caller owns synchronization and buffer lifetimes.
+/// `input_device` contains row-major packed states with shape
+/// `[batch, dimension, words_per_row]`; bit `j` of row `i` is matrix entry `(i,j)`,
+/// and unused high bits in each final word are zero. `output_device` contains
+/// `[batch, dimension * (dimension - 1), dimension, words_per_row]`, with words
+/// contiguous and actions ordered control-major while omitting the diagonal target.
+/// The declared output capacity must cover the full checked output size, and the
+/// actual allocation must be at least that large.
+///
+/// The two allocations must not overlap. This launch is asynchronous: both buffers
+/// must remain live until `synchronize(stream)` completes, the input must not be
+/// modified before then, and the output must not be read or reused before then.
+/// `stream` must belong to the same CUDA context and remain live through synchronization.
 pub unsafe fn launch_all_to_all_children(
     input_device: *const u64,
     output_device: *mut u64,
