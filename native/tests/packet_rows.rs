@@ -76,13 +76,14 @@ fn all_model_input_registry() -> (FeatureRegistry, FeaturePolicy) {
             spec.wire_roles.clone()
         };
         spec = spec.with_provider_metadata(
-            "packet_rows_synthetic_all_inputs",
-            "packet_rows_synthetic_all_inputs_v1",
-            ["M"],
-            "exact_fixture",
-            "T1",
-            wire_roles,
-            false,
+            cnot103_native::schema::ProviderMetadata::new(
+                "packet_rows_synthetic_all_inputs",
+                "packet_rows_synthetic_all_inputs_v1",
+                "exact_fixture",
+                "T1",
+            )
+            .dependencies(["M"])
+            .wire_roles(wire_roles),
         );
         registry
             .register(Box::new(AllInputsFixture { spec }))

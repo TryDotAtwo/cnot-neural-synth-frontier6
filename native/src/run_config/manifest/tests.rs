@@ -1,3 +1,4 @@
+use super::validation::validate_sha256;
 use super::*;
 use crate::features::{FeaturePolicy, FeatureRegistry};
 use serde_json::{json, Value};

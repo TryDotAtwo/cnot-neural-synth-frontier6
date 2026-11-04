@@ -1,7 +1,7 @@
 use cnot103_native::{
-    all_feature_specs, register_general_compiler_bounds, CnotAlphabet, FeatureComputation,
-    FeatureId, FeaturePolicy, FeatureProducer, FeatureRegistry, FeatureRole, FeatureSpec,
-    FeatureValue, MatrixState,
+    all_feature_specs, register_general_compiler_bounds, schema::ProviderMetadata, CnotAlphabet,
+    FeatureComputation, FeatureId, FeaturePolicy, FeatureProducer, FeatureRegistry, FeatureRole,
+    FeatureSpec, FeatureValue, MatrixState,
 };
 
 struct DynamicPairFeature(FeatureSpec);
@@ -65,13 +65,8 @@ fn provider_can_declare_its_actual_dynamic_shape() {
     spec.channels = 3;
     spec.wire_roles.clear();
     spec = spec.with_provider_metadata(
-        "full_labeled_matrix",
-        "fixture_i11_pair_v1",
-        ["M"],
-        "exact",
-        "T1",
-        std::iter::empty::<&str>(),
-        false,
+        ProviderMetadata::new("full_labeled_matrix", "fixture_i11_pair_v1", "exact", "T1")
+            .dependencies(["M"]),
     );
 
     let mut registry = FeatureRegistry::new();
@@ -106,13 +101,8 @@ fn selected_specs_follow_policy_and_reject_unimplemented_ids() {
     spec.channels = 3;
     spec.wire_roles.clear();
     spec = spec.with_provider_metadata(
-        "full_labeled_matrix",
-        "fixture_i11_pair_v1",
-        ["M"],
-        "exact",
-        "T1",
-        std::iter::empty::<&str>(),
-        false,
+        ProviderMetadata::new("full_labeled_matrix", "fixture_i11_pair_v1", "exact", "T1")
+            .dependencies(["M"]),
     );
 
     let mut registry = FeatureRegistry::new();
@@ -234,13 +224,8 @@ fn feature_registry_contract_hash_binds_provider_metadata_stably() {
         spec.channels = 3;
         spec.wire_roles.clear();
         let spec = spec.with_provider_metadata(
-            "full_labeled_matrix",
-            version,
-            ["M"],
-            "exact",
-            "T1",
-            std::iter::empty::<&str>(),
-            false,
+            ProviderMetadata::new("full_labeled_matrix", version, "exact", "T1")
+                .dependencies(["M"]),
         );
         registry
             .register(Box::new(DynamicPairFeature(spec)))

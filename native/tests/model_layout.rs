@@ -51,13 +51,13 @@ fn dynamic_model_fixture(
     spec.channels = 3;
     spec.wire_roles.clear();
     spec = spec.with_provider_metadata(
-        "full_labeled_matrix",
-        "fixture_i11_pair_v1",
-        ["M"],
-        "exact",
-        "T1",
-        std::iter::empty::<&str>(),
-        false,
+        cnot103_native::schema::ProviderMetadata::new(
+            "full_labeled_matrix",
+            "fixture_i11_pair_v1",
+            "exact",
+            "T1",
+        )
+        .dependencies(["M"]),
     );
 
     let mut registry = FeatureRegistry::new();
