@@ -11,7 +11,7 @@ impl FeaturePacket {
         }
         if self.state_keys.len() != self.batch
             || self.alphabet_ids.len() != self.batch
-            || self.valid_nodes.len() != self.batch.checked_mul(self.nodes).unwrap_or(usize::MAX)
+            || self.valid_nodes.len() != self.batch.saturating_mul(self.nodes)
         {
             return Err(FeaturePacketError(
                 "feature packet batch metadata is malformed".into(),

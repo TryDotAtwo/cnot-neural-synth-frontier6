@@ -26,7 +26,7 @@ pub(super) struct PaidBasisFeatureCache {
 
 #[derive(Clone)]
 pub(super) enum CachedPaidBasisFeatures {
-    Computed(PaidBasisFeatureValues),
+    Computed(Box<PaidBasisFeatureValues>),
     Unavailable(FeatureStatus, String),
 }
 

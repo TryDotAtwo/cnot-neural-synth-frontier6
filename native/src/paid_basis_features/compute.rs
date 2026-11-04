@@ -77,7 +77,7 @@ pub(super) fn compute_paid_basis_features(
     }
 
     match assemble_feature_values(state, &alphabet, &relevant, &candidates) {
-        Ok(values) => CachedPaidBasisFeatures::Computed(values),
+        Ok(values) => CachedPaidBasisFeatures::Computed(Box::new(values)),
         Err((status, reason)) => fail(status, reason),
     }
 }

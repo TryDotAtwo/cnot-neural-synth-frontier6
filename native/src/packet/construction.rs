@@ -26,7 +26,7 @@ impl FeaturePacket {
                 "expected exactly {FEATURE_COUNT} features"
             )));
         }
-        if valid_nodes.len() != batch.checked_mul(nodes).unwrap_or(usize::MAX)
+        if valid_nodes.len() != batch.saturating_mul(nodes)
             || valid_nodes.iter().any(|value| *value > 1)
         {
             return Err(FeaturePacketError(
