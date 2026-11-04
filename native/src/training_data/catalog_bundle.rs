@@ -1,9 +1,15 @@
 use crate::alphabet::{CnotAlphabet, WordCertificate};
 use crate::state::{CnotGate, MatrixState};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 use super::{ExactCatalog, ExactCatalogEntry, TrainingDataError};
+mod decode;
+mod hashing;
+mod raw;
+
+use decode::{catalog_provenance_is_present, decode_catalog_state, is_sha256_digest};
+use hashing::CatalogHashingReader;
+use raw::ExactCatalogBundleBody;
 
 const EXACT_CATALOG_BUNDLE_SCHEMA: &str = "exact_distance_catalog_bundle_v1";
 const MAX_EXACT_CATALOG_DIMENSION: u32 = 256;
@@ -131,129 +137,4 @@ pub fn load_exact_catalogs_pinned(
         }
     }
     Ok(catalogs)
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExactCatalogBundleBody {
-    schema: String,
-    provenance: serde_json::Value,
-    catalogs: Vec<ExactCatalogWidth>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExactCatalogWidth {
-    dimension: u32,
-    entries: Vec<ExactCatalogRawEntry>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExactCatalogRawEntry {
-    packed_rows: Vec<serde_json::Number>,
-    distance: u64,
-    gates: Vec<ExactCatalogRawGate>,
-    producer: String,
-    lineage_id: String,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExactCatalogRawGate {
-    control: u32,
-    target: u32,
-}
-
-fn decode_catalog_state(
-    dimension: u32,
-    alphabet_id: &str,
-    packed_rows: Vec<serde_json::Number>,
-) -> Result<MatrixState, String> {
-    if packed_rows.len() != dimension as usize {
-        return Err("packed row count differs from matrix dimension".into());
-    }
-    let words_per_row = (dimension as usize)
-        .checked_add(63)
-        .ok_or_else(|| "packed row width overflow".to_owned())?
-        / 64;
-    let mut words = Vec::with_capacity(
-        (dimension as usize)
-            .checked_mul(words_per_row)
-            .ok_or_else(|| "packed matrix size overflow".to_owned())?,
-    );
-    for (row_index, value) in packed_rows.iter().enumerate() {
-        let text = value.to_string();
-        let bits = num_bigint::BigUint::parse_bytes(text.as_bytes(), 10)
-            .ok_or_else(|| format!("row {row_index} is not a nonnegative integer"))?;
-        if bits.bits() > u64::from(dimension) {
-            return Err(format!("row {row_index} has bits outside matrix width"));
-        }
-        let row_words = bits.to_u64_digits();
-        for word_index in 0..words_per_row {
-            words.push(row_words.get(word_index).copied().unwrap_or(0));
-        }
-    }
-    MatrixState::from_packed_rows(dimension, alphabet_id, words).map_err(|error| error.to_string())
-}
-
-fn catalog_provenance_is_present(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(value) => *value,
-        serde_json::Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-        serde_json::Value::String(value) => !value.trim().is_empty(),
-        serde_json::Value::Array(value) => !value.is_empty(),
-        serde_json::Value::Object(value) => !value.is_empty(),
-    }
-}
-
-fn is_sha256_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-struct CatalogHashingReader<R> {
-    inner: R,
-    hasher: Sha256,
-}
-
-impl<R> CatalogHashingReader<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            hasher: Sha256::new(),
-        }
-    }
-
-    fn finish(mut self) -> Result<String, TrainingDataError>
-    where
-        R: std::io::Read,
-    {
-        let mut buffer = [0u8; 1 << 16];
-        loop {
-            if std::io::Read::read(&mut self, &mut buffer).map_err(|error| {
-                TrainingDataError(format!("finish hashing exact catalog: {error}"))
-            })? == 0
-            {
-                break;
-            }
-        }
-        Ok(self
-            .hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect())
-    }
-}
-
-impl<R: std::io::Read> std::io::Read for CatalogHashingReader<R> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let count = self.inner.read(buffer)?;
-        self.hasher.update(&buffer[..count]);
-        Ok(count)
-    }
 }
