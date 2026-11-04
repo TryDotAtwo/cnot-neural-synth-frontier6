@@ -28,8 +28,7 @@ pub(super) fn assemble_feature_values(
     candidates: &[PaidShearCandidate],
 ) -> Result<PaidBasisFeatureValues, (FeatureStatus, String)> {
     let n = state.dimension() as usize;
-    let (d09, d10, d11, d12, d13) =
-        group_values::assemble_group_values(contexts, candidates, n)?;
+    let (d09, d10, d11, d12, d13) = group_values::assemble_group_values(contexts, candidates, n)?;
     let (d14, d14_provenance) =
         combined::assemble_combined_feature_value(state, alphabet, candidates)?;
 

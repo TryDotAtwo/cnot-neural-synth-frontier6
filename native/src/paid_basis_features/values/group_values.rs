@@ -1,17 +1,22 @@
+use super::super::helpers::resource;
 use super::super::{PaidBasisBlockContext, WIRE_ROLES};
 use super::exact_count;
-use super::super::helpers::resource;
 use crate::features::FeatureValue;
 use crate::packet::FeatureStatus;
-use crate::paid_basis::{BasisSide, PaidShearCandidate, BoundaryCancellation};
-use std::result::Result;
+use crate::paid_basis::{BasisSide, BoundaryCancellation, PaidShearCandidate};
 
 pub(super) fn assemble_group_values(
     contexts: &[&PaidBasisBlockContext],
     candidates: &[PaidShearCandidate],
     n: usize,
 ) -> Result<
-    (FeatureValue, FeatureValue, FeatureValue, FeatureValue, FeatureValue),
+    (
+        FeatureValue,
+        FeatureValue,
+        FeatureValue,
+        FeatureValue,
+        FeatureValue,
+    ),
     (FeatureStatus, String),
 > {
     let group_count = candidates.len();
