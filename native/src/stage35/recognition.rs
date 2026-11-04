@@ -1,5 +1,5 @@
 use super::math::{
-    bit, frame_for, gate, inverse_2x2, is_full_unit_alphabet, is_identity_row, multiply_2x2,
+    bit, frame_for, inverse_2x2, is_full_unit_alphabet, is_identity_row, multiply_2x2,
     restricted_row, support_components, FRAME_IDENTITY, FRAME_IDENTITY_WITH_SHARED, IDENTITY_FRAME,
 };
 use super::types::{
@@ -9,6 +9,8 @@ use super::types::{
 use super::{STAGE35_PRODUCER, STAGE35_THEOREM_SHA256};
 use crate::alphabet::{CnotAlphabet, WordCertificate};
 use crate::state::MatrixState;
+
+mod encoding;
 
 /// Recognize the theorem's exact family and return a replayable shortest word.
 /// Unsupported inputs have no distance label and are never encoded as zero.
@@ -91,42 +93,15 @@ pub fn recognize_stage35(
         (Stage35Branch::NonemptyFrameMotion, frame, cost)
     };
 
-    let mut encoder_gates = Vec::with_capacity(formula_cost);
-    match branch {
-        Stage35Branch::NoFrameMotion => {
-            for (column, value) in columns {
-                if value & 1 != 0 {
-                    encoder_gates.push(gate(column, active[0])?);
-                }
-                if value & 2 != 0 {
-                    encoder_gates.push(gate(column, active[1])?);
-                }
-            }
-        }
-        Stage35Branch::NonemptyFrameMotion => {
-            for (column, value) in &transformed {
-                if *value == 1 || *value == 2 {
-                    let target = if *value == 1 { active[0] } else { active[1] };
-                    encoder_gates.push(gate(*column, target)?);
-                }
-            }
-            let (control, target) = frame[0];
-            encoder_gates.push(gate(active[control], active[target])?);
-
-            let mut first_frame = IDENTITY_FRAME;
-            first_frame[target] ^= first_frame[control];
-            let first_inverse = inverse_2x2(first_frame)?;
-            let receiver = (0..2)
-                .find(|row| multiply_2x2(first_inverse, 1u8 << row) == 3)
-                .ok_or(Stage35Error::MissingFrame(first_frame))?;
-            for column in &shared {
-                encoder_gates.push(gate(*column, active[receiver])?);
-            }
-            for (control, target) in frame.iter().copied().skip(1) {
-                encoder_gates.push(gate(active[control], active[target])?);
-            }
-        }
-    }
+    let encoder_gates = encoding::encode_word(
+        branch,
+        frame,
+        formula_cost,
+        active_rows,
+        &columns,
+        &transformed,
+        &shared,
+    )?;
 
     if encoder_gates.len() != formula_cost {
         return Err(Stage35Error::FormulaWordLengthMismatch {
