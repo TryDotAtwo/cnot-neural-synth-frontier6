@@ -1,7 +1,7 @@
 //! Exposure-ledger serialization and checkpoint restoration for the objective.
 use std::collections::HashSet;
 
-use super::{EXPOSURE_SCHEMA, ExposureLedger, FullGraphObjective, validate_identity};
+use super::{validate_identity, ExposureLedger, FullGraphObjective, EXPOSURE_SCHEMA};
 use crate::checkpoint::CheckpointStore;
 use crate::nn_training::{NeuralTrainer, TchTrainingError};
 use crate::packet::StateIdentity;

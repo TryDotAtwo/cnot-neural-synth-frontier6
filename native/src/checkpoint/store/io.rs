@@ -35,9 +35,10 @@ pub(super) fn write_immutable(
     if path.exists() {
         let mut existing = File::open(path)?;
         if digest_reader(&mut existing)? == expected_sha256 {
-            sync_directory(path.parent().ok_or(CheckpointError::Invalid(
-                "checkpoint path has no parent",
-            ))?)?;
+            sync_directory(
+                path.parent()
+                    .ok_or(CheckpointError::Invalid("checkpoint path has no parent"))?,
+            )?;
             return Ok(());
         }
         return Err(CheckpointError::HashMismatch);
@@ -67,7 +68,7 @@ pub(super) fn write_immutable(
             Ok(()) => {
                 sync_directory(parent)?;
                 Ok(())
-            },
+            }
             Err(error) if path.exists() => {
                 let mut existing = File::open(path)?;
                 if digest_reader(&mut existing)? == expected_sha256 {

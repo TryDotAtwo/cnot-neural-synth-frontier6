@@ -2,7 +2,7 @@
 use super::compute::compute_paid_basis_features;
 use super::helpers::unavailable;
 use super::values::PaidBasisFeatureValues;
-use super::{CACHE_CAPACITY, PaidBasisBlockContext};
+use super::{PaidBasisBlockContext, CACHE_CAPACITY};
 use crate::features::{FeatureComputation, FeaturePolicy, FeatureProducer};
 use crate::packet::{FeatureStatus, StateIdentity};
 use crate::paid_basis::PaidShearConfig;

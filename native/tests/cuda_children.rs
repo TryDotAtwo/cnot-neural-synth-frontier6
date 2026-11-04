@@ -69,7 +69,10 @@ fn rust_cuda_ffi_writes_ordered_cnot_successors_across_packed_widths() {
             .map(|seed| input_state(dimension, seed))
             .collect::<Vec<_>>();
         let flat_input = states.iter().flatten().copied().collect::<Vec<_>>();
-        let input_i64 = flat_input.iter().map(|word| *word as i64).collect::<Vec<_>>();
+        let input_i64 = flat_input
+            .iter()
+            .map(|word| *word as i64)
+            .collect::<Vec<_>>();
         let expected = cpu_children(&states, dimension, words_per_row);
         let output_words = expected.len();
         let output_capacity = output_words as u64;
@@ -77,10 +80,7 @@ fn rust_cuda_ffi_writes_ordered_cnot_successors_across_packed_widths() {
         let input = Tensor::from_slice(&input_i64)
             .to_device(Device::Cuda(0))
             .contiguous();
-        let output = Tensor::empty(
-            [output_words as i64],
-            (Kind::Int64, Device::Cuda(0)),
-        );
+        let output = Tensor::empty([output_words as i64], (Kind::Int64, Device::Cuda(0)));
 
         // Ensure the tensor copy to the device has finished before the project
         // kernel uses the allocation on CUDA's default stream.

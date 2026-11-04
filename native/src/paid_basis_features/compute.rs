@@ -1,12 +1,12 @@
 //! Build verified exact-local candidates before deriving their feature values.
-use super::PaidBasisBlockContext;
 use super::cache::CachedPaidBasisFeatures;
 use super::helpers::{status_for_compile_error, workspace_estimate};
 use super::values::{assemble_feature_values, matrix_bit};
+use super::PaidBasisBlockContext;
 use crate::alphabet::CnotAlphabet;
 use crate::features::FeaturePolicy;
 use crate::packet::FeatureStatus;
-use crate::paid_basis::{PaidShearConfig, compile_paid_shear};
+use crate::paid_basis::{compile_paid_shear, PaidShearConfig};
 use crate::state::MatrixState;
 
 pub(super) fn compute_paid_basis_features(
