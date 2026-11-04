@@ -72,12 +72,14 @@ impl BasisField {
             template,
             block,
             &probabilities,
-            binding,
-            backend,
-            samples,
-            seed,
-            max_evaluations,
-            max_bytes,
+            objective::BasisLossOptions {
+                binding,
+                backend,
+                samples,
+                seed,
+                max_evaluations,
+                max_bytes,
+            },
         )?;
         Ok((result.loss, result.audit))
     }

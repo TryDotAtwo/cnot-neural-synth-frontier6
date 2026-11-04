@@ -5,20 +5,19 @@ use crate::features::FeatureValue;
 use crate::packet::FeatureStatus;
 use crate::paid_basis::{BasisSide, BoundaryCancellation, PaidShearCandidate};
 
+pub(super) struct PaidBasisGroupValues {
+    pub(super) d09: FeatureValue,
+    pub(super) d10: FeatureValue,
+    pub(super) d11: FeatureValue,
+    pub(super) d12: FeatureValue,
+    pub(super) d13: FeatureValue,
+}
+
 pub(super) fn assemble_group_values(
     contexts: &[&PaidBasisBlockContext],
     candidates: &[PaidShearCandidate],
     n: usize,
-) -> Result<
-    (
-        FeatureValue,
-        FeatureValue,
-        FeatureValue,
-        FeatureValue,
-        FeatureValue,
-    ),
-    (FeatureStatus, String),
-> {
+) -> Result<PaidBasisGroupValues, (FeatureStatus, String)> {
     let group_count = candidates.len();
     let incidence_count = group_count
         .checked_mul(n)
@@ -102,7 +101,13 @@ pub(super) fn assemble_group_values(
     let d12 = group_value(2, group_count, d12, token_valid.clone(), incidence.clone());
     let d13 = group_value(12, group_count, d13, token_valid, incidence);
 
-    Ok((d09, d10, d11, d12, d13))
+    Ok(PaidBasisGroupValues {
+        d09,
+        d10,
+        d11,
+        d12,
+        d13,
+    })
 }
 
 fn group_value(

@@ -2,7 +2,7 @@ use super::context::MatrixBoundaryContext;
 use super::{MatrixBoundaryError, MatrixBoundarySpec, PORT_WIRE_ROLES};
 use crate::features::{FeatureComputation, FeaturePolicy, FeatureProducer, FeatureRegistry};
 use crate::packet::FeatureStatus;
-use crate::schema::{FeatureId, FeatureRole, FeatureSpec, feature_spec};
+use crate::schema::{feature_spec, FeatureId, FeatureRole, FeatureSpec};
 use crate::state::MatrixState;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -132,13 +132,14 @@ pub fn register_matrix_boundaries(
             Vec::new()
         };
         let spec = spec.with_provider_metadata(
-            "explicit_y=M[outputs,inputs]x;other_inputs_zero;named_ports;I03_projected_relation_flag_not_generic_zero;I04_positive_product_weights_zero_phase_only;state_counts_as_log2",
-            producer_version.clone(),
-            ["M", "physical_boundary_spec", "exact_affine_relation"],
-            "exact",
-            "T2",
-            wire_roles,
-            false,
+            crate::schema::ProviderMetadata::new(
+                "explicit_y=M[outputs,inputs]x;other_inputs_zero;named_ports;I03_projected_relation_flag_not_generic_zero;I04_positive_product_weights_zero_phase_only;state_counts_as_log2",
+                producer_version.clone(),
+                "exact",
+                "T2",
+            )
+            .dependencies(["M", "physical_boundary_spec", "exact_affine_relation"])
+            .wire_roles(wire_roles),
         );
         registry.register(Box::new(MatrixBoundaryProducer {
             spec,

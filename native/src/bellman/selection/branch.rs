@@ -1,5 +1,5 @@
 use super::super::{BellmanBranchAudit, BellmanError, PreparedBranch};
-use super::{candidates, scoring, BellmanSelectionOptions};
+use super::{candidates, scoring, BellmanSelectionConfig};
 use crate::alphabet::CnotAlphabet;
 use crate::features::{FeaturePolicy, FeatureRegistry};
 use crate::model::FusionDistanceField;
@@ -11,7 +11,7 @@ pub(super) fn prepare_branch(
     registry: &FeatureRegistry,
     policy: &FeaturePolicy,
     alphabet: &CnotAlphabet,
-    options: &BellmanSelectionOptions<'_>,
+    options: &BellmanSelectionConfig<'_>,
 ) -> Result<PreparedBranch, BellmanError> {
     if state.alphabet_id() != alphabet.id() || state.dimension() != alphabet.dimension() {
         return Err(BellmanError::Invalid(
@@ -19,7 +19,7 @@ pub(super) fn prepare_branch(
         ));
     }
     let parent_packet = registry.build(std::slice::from_ref(state), policy)?;
-    if options.config.require_complete_model_input_coverage {
+    if options.require_complete_model_input_coverage {
         parent_packet
             .require_complete_model_input_coverage()
             .map_err(|error| BellmanError::Invalid(error.to_string()))?;
@@ -48,7 +48,7 @@ pub(super) fn prepare_branch(
 
     let candidates = candidates::generate_candidates(state, alphabet, options.macro_provider)?;
     let primitive_count = candidates.primitive_count;
-    let scored = scoring::score_candidates(model, &candidates, registry, policy, options.config)?;
+    let scored = scoring::score_candidates(model, &candidates, registry, policy, *options)?;
     let selected_index = scored.selected_index;
     let selected_cost = scored.selected_cost;
     let selected_packet = scored.selected_packet;

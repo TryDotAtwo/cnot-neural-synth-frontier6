@@ -1,5 +1,5 @@
-use super::super::{BasisBinding, BasisChoiceKind, BasisSide, BasisTemplate};
-use super::{BasisLossAudit, BasisLossBackend, BasisLossResult};
+use super::super::{BasisChoiceKind, BasisSide, BasisTemplate};
+use super::{BasisLossAudit, BasisLossBackend, BasisLossOptions, BasisLossResult};
 use crate::model::ModelError;
 use tch::Tensor;
 
@@ -8,12 +8,16 @@ pub(super) fn monte_carlo_loss(
     block: &[Vec<u8>],
     theta: &Tensor,
     probabilities: &[f64],
-    binding: BasisBinding,
-    samples: usize,
-    seed: u64,
-    max_evaluations: usize,
-    max_bytes: usize,
+    options: BasisLossOptions,
 ) -> Result<BasisLossResult, ModelError> {
+    let BasisLossOptions {
+        binding,
+        samples,
+        seed,
+        max_evaluations,
+        max_bytes,
+        ..
+    } = options;
     if samples == 0 {
         return Err(ModelError(
             "positive Monte Carlo sample count required".into(),

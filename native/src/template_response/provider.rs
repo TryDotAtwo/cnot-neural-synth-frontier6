@@ -23,7 +23,7 @@ pub(super) struct TemplateResponseCache {
 
 #[derive(Clone)]
 pub(super) enum CachedTemplateResponse {
-    Computed(TemplateResponseValues),
+    Computed(Box<TemplateResponseValues>),
     Unavailable(FeatureStatus, String),
 }
 
@@ -111,7 +111,7 @@ impl FeatureProducer for TemplateResponseProducer {
         }
         if policy.max_bytes.is_some_and(|limit| {
             template_response_workspace_bytes(state.dimension(), self.shared.config.choices.len())
-                .map_or(true, |bytes| bytes > limit)
+                .is_none_or(|bytes| bytes > limit)
         }) {
             return resource_limit("template_response_workspace_budget_exhausted");
         }

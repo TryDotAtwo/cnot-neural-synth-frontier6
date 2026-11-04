@@ -9,8 +9,8 @@ impl FusionDistanceField {
     }
 
     pub(crate) fn forward_encoded(&self, encoded: &EncodedState) -> FieldOutput {
-        let (family_tokens, family_masks) = self.family_heads.forward(&encoded);
-        let positive_value = self.fusion.forward(&encoded, &family_tokens, &family_masks);
+        let (family_tokens, family_masks) = self.family_heads.forward(encoded);
+        let positive_value = self.fusion.forward(encoded, &family_tokens, &family_masks);
         let value =
             Tensor::zeros_like(&positive_value).where_self(&encoded.identity, &positive_value);
         let (proposal_logits, qhat, action_mask) =

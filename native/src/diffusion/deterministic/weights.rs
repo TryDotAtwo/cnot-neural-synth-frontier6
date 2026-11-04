@@ -3,7 +3,7 @@
 use crate::state::MatrixState;
 
 pub(super) fn row_weights(state: &MatrixState) -> Vec<usize> {
-    let words = state.words_per_row() as usize;
+    let words = state.words_per_row();
     state
         .packed_rows()
         .chunks_exact(words)
@@ -23,7 +23,7 @@ pub(super) fn column_weights(state: &MatrixState) -> Vec<usize> {
 }
 
 pub(super) fn matrix_bit(state: &MatrixState, row: usize, column: usize) -> bool {
-    let words_per_row = state.words_per_row() as usize;
+    let words_per_row = state.words_per_row();
     let word = state.packed_rows()[row * words_per_row + column / 64];
     ((word >> (column % 64)) & 1) != 0
 }

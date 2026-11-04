@@ -1,6 +1,6 @@
 //! Shared-word Monte Carlo producer for diffusion features G07-G10.
 
-use super::{MAX_MC_WORKING_BYTES, ProfileCache, unavailable};
+use super::{unavailable, ProfileCache, MAX_MC_WORKING_BYTES};
 use crate::features::{FeatureComputation, FeaturePolicy, FeatureProducer, FeatureValue};
 use crate::packet::FeatureStatus;
 use crate::schema::FeatureSpec;

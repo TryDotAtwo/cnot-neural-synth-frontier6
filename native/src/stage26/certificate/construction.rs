@@ -47,7 +47,8 @@ pub(super) fn make_certificate(state: &MatrixState) -> Certificate {
     let inputs: BTreeSet<_> = retained
         .iter()
         .enumerate()
-        .filter_map(|(wire, keep)| keep.then(|| one_hot(wire)))
+        .filter(|(_, keep)| **keep)
+        .map(|(wire, _)| one_hot(wire))
         .collect();
     let targets: Vec<_> = projected_rows
         .iter()

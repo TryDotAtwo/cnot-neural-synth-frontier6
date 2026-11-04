@@ -6,7 +6,7 @@ use super::super::moments::{
 };
 use super::super::provider::{CachedTemplateResponse, TemplateResponseValues};
 use super::super::rational::{rational_to_f32, signed_rational_to_f32};
-use super::super::{RationalProbability, TemplateResponseConfig, TEMPLATE_RESPONSE_WIRE_ROLES};
+use super::super::{RationalProbability, TemplateResponseConfig};
 use crate::features::FeatureValue;
 use crate::state::MatrixState;
 
@@ -25,7 +25,7 @@ pub(super) fn build_response(
         choice_count
     ];
     let Some((e02_numerator, e02_denominator)) =
-        expected_cost_fraction(&assignment_costs, &midpoint)
+        expected_cost_fraction(assignment_costs, &midpoint)
     else {
         return super::cached_resource_limit("template_response_exact_rational_overflow");
     };
@@ -35,8 +35,7 @@ pub(super) fn build_response(
 
     let mut e03_values = Vec::with_capacity(config.points.len());
     for point in &config.points {
-        let Some((numerator, denominator)) = expected_cost_fraction(&assignment_costs, point)
-        else {
+        let Some((numerator, denominator)) = expected_cost_fraction(assignment_costs, point) else {
             return super::cached_resource_limit("template_response_exact_rational_overflow");
         };
         let Some(value) = rational_to_f32(numerator, denominator) else {
@@ -50,7 +49,7 @@ pub(super) fn build_response(
     for first in 0..choice_count {
         for second in first + 1..choice_count {
             let Some((numerator, denominator)) =
-                mixed_difference_at_midpoint(&assignment_costs, first, second)
+                mixed_difference_at_midpoint(assignment_costs, first, second)
             else {
                 return super::cached_resource_limit("template_response_mixed_difference_overflow");
             };
@@ -66,20 +65,20 @@ pub(super) fn build_response(
                 source_wires[config.choices[second].target],
             ];
             for node in 0..state.dimension() as usize {
-                for role in 0..TEMPLATE_RESPONSE_WIRE_ROLES.len() {
-                    e06_incidence.push(if wires[role] == node { 1.0 } else { 0.0 });
+                for wire in wires {
+                    e06_incidence.push(if wire == node { 1.0 } else { 0.0 });
                 }
             }
         }
     }
 
-    let Some(e07_cost) = conditional_round_cost(&assignment_costs, &midpoint) else {
+    let Some(e07_cost) = conditional_round_cost(assignment_costs, &midpoint) else {
         return super::cached_resource_limit("template_response_exact_rational_overflow");
     };
     let mut reverse_point = midpoint.clone();
     for index in (0..choice_count).rev() {
         let Some((zero_cost, one_cost)) =
-            conditional_choice_totals(&assignment_costs, &reverse_point, index)
+            conditional_choice_totals(assignment_costs, &reverse_point, index)
         else {
             return super::cached_resource_limit("template_response_exact_rational_overflow");
         };
@@ -97,7 +96,7 @@ pub(super) fn build_response(
     let mut multistart_costs = Vec::with_capacity(config.points.len() + 1);
     multistart_costs.push(e07_cost);
     for point in &config.points {
-        let Some(cost) = conditional_round_cost(&assignment_costs, point) else {
+        let Some(cost) = conditional_round_cost(assignment_costs, point) else {
             return super::cached_resource_limit("template_response_exact_rational_overflow");
         };
         multistart_costs.push(cost);
@@ -111,7 +110,7 @@ pub(super) fn build_response(
         .max()
         .expect("midpoint start exists");
 
-    CachedTemplateResponse::Computed(TemplateResponseValues {
+    CachedTemplateResponse::Computed(Box::new(TemplateResponseValues {
         e02: scalar_feature(e02_value),
         e03: FeatureValue {
             shape: vec![e03_values.len()],
@@ -144,7 +143,7 @@ pub(super) fn build_response(
             token_valid: Vec::new(),
             incidence: Vec::new(),
         },
-    })
+    }))
 }
 
 fn scalar_feature(value: f32) -> FeatureValue {

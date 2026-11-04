@@ -7,7 +7,7 @@
 
 use crate::features::{FeatureBuildError, FeatureComputation, FeatureRegistry};
 use crate::packet::FeatureStatus;
-use crate::schema::{FeatureId, feature_spec};
+use crate::schema::{feature_spec, FeatureId};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 

@@ -181,5 +181,6 @@ pub use basis::{
 #[cfg(feature = "torch")]
 pub use bellman::{
     recompute_backup, select_backup, select_backup_with_macros, BellmanBranchAudit,
-    BellmanDiagnostics, BellmanError, BellmanLoss, BellmanSelection, MacroProvider,
+    BellmanDiagnostics, BellmanError, BellmanLoss, BellmanSelection, BellmanSelectionConfig,
+    MacroProvider,
 };

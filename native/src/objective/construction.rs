@@ -1,6 +1,6 @@
 use super::{
     objective_config_digest, ExposureLedger, FullGraphObjective, FullGraphObjectiveConfig,
-    ObjectiveDiagnostics,
+    ObjectiveDiagnostics, ObjectiveFingerprintInput,
 };
 use crate::alphabet::CnotAlphabet;
 use crate::features::{FeaturePolicy, FeatureRegistry};
@@ -72,16 +72,16 @@ impl FullGraphObjective {
         }
 
         let feature_contract_sha256 = registry.contract_sha256();
-        let config_sha256 = objective_config_digest(
-            &alphabet_map,
-            &exact_map,
-            &policy_id,
-            &feature_contract_sha256,
-            &forbidden,
-            &config,
-            None,
-            None,
-        );
+        let config_sha256 = objective_config_digest(ObjectiveFingerprintInput {
+            alphabets: &alphabet_map,
+            catalogs: &exact_map,
+            policy_id: &policy_id,
+            feature_contract_sha256: &feature_contract_sha256,
+            forbidden: &forbidden,
+            config: &config,
+            training_records_sha256: None,
+            frozen_dataset_sha256: None,
+        });
         Ok(Self {
             alphabets: alphabet_map,
             exact_catalogs: exact_map,

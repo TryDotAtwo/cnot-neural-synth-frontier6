@@ -8,6 +8,9 @@ pub(super) struct Factor {
     pub(super) scope: Vec<usize>,
 }
 
+type HistoryEvent = (usize, usize);
+type HistoryFactorization = (Vec<HistoryEvent>, Vec<Factor>);
+
 impl Factor {
     fn new(terms: Vec<Vec<Constraint>>) -> Self {
         let scope = terms
@@ -20,9 +23,7 @@ impl Factor {
     }
 }
 
-pub(super) fn history_factors(
-    histories: &Histories,
-) -> Result<(Vec<(usize, usize)>, Vec<Factor>), Stage38Error> {
+pub(super) fn history_factors(histories: &Histories) -> Result<HistoryFactorization, Stage38Error> {
     validate_histories(histories)?;
     let n = histories.len();
     let mut events = Vec::new();
@@ -90,7 +91,7 @@ fn validate_histories(histories: &Histories) -> Result<(), Stage38Error> {
             if value.len() != words || value.iter().all(|word| *word == 0) {
                 return Err(Stage38Error::InvalidHistory("row width or nonzero value"));
             }
-            if n % 64 != 0 && value[words - 1] >> (n % 64) != 0 {
+            if !n.is_multiple_of(64) && value[words - 1] >> (n % 64) != 0 {
                 return Err(Stage38Error::InvalidHistory("row padding bits"));
             }
         }

@@ -7,6 +7,8 @@ use crate::packet::FeatureStatus;
 use crate::state::MatrixState;
 use std::collections::HashMap;
 
+type ExactWordSeries = Result<(Vec<(usize, u128)>, usize), (String, usize)>;
+
 /// Evaluates the source-defined exact positive endpoint word series for I10.
 ///
 /// This exposes the same scope, transition count, status, and exact degree
@@ -109,7 +111,7 @@ fn exact_word_series(
     target: &MatrixState,
     alphabet: &CnotAlphabet,
     config: I10Config,
-) -> Result<(Vec<(usize, u128)>, usize), (String, usize)> {
+) -> ExactWordSeries {
     let mut layer = HashMap::<Vec<u64>, u128>::new();
     let identity = MatrixState::identity(target.dimension(), target.alphabet_id())
         .map_err(|error| (format!("invalid_identity_state:{error}"), 0))?;

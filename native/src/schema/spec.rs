@@ -24,24 +24,60 @@ pub struct FeatureSpec {
     pub requires_solver_assisted: bool,
 }
 
-impl FeatureSpec {
-    pub fn with_provider_metadata(
-        mut self,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderMetadata {
+    scope: String,
+    producer_version: String,
+    dependencies: Vec<String>,
+    exactness: String,
+    cost_tier: String,
+    wire_roles: Vec<String>,
+    requires_solver_assisted: bool,
+}
+
+impl ProviderMetadata {
+    pub fn new(
         scope: impl Into<String>,
         producer_version: impl Into<String>,
-        dependencies: impl IntoIterator<Item = impl Into<String>>,
         exactness: impl Into<String>,
         cost_tier: impl Into<String>,
-        wire_roles: impl IntoIterator<Item = impl Into<String>>,
-        requires_solver_assisted: bool,
     ) -> Self {
-        self.scope = scope.into();
-        self.producer_version = producer_version.into();
-        self.dependencies = dependencies.into_iter().map(Into::into).collect();
-        self.exactness = exactness.into();
-        self.cost_tier = cost_tier.into();
-        self.wire_roles = wire_roles.into_iter().map(Into::into).collect();
-        self.requires_solver_assisted = requires_solver_assisted;
+        Self {
+            scope: scope.into(),
+            producer_version: producer_version.into(),
+            dependencies: Vec::new(),
+            exactness: exactness.into(),
+            cost_tier: cost_tier.into(),
+            wire_roles: Vec::new(),
+            requires_solver_assisted: false,
+        }
+    }
+
+    pub fn dependencies(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.dependencies = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn wire_roles(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.wire_roles = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn requires_solver_assisted(mut self, required: bool) -> Self {
+        self.requires_solver_assisted = required;
+        self
+    }
+}
+
+impl FeatureSpec {
+    pub fn with_provider_metadata(mut self, metadata: ProviderMetadata) -> Self {
+        self.scope = metadata.scope;
+        self.producer_version = metadata.producer_version;
+        self.dependencies = metadata.dependencies;
+        self.exactness = metadata.exactness;
+        self.cost_tier = metadata.cost_tier;
+        self.wire_roles = metadata.wire_roles;
+        self.requires_solver_assisted = metadata.requires_solver_assisted;
         self
     }
 }

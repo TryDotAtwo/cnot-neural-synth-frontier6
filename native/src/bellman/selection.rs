@@ -20,7 +20,17 @@ pub fn select_backup(
     chunk_size: Option<usize>,
 ) -> Result<BellmanSelection, BellmanError> {
     select_backup_with_macros(
-        model, variables, states, registry, policy, alphabet, None, chunk_size,
+        model,
+        variables,
+        states,
+        registry,
+        policy,
+        alphabet,
+        BellmanSelectionConfig {
+            macro_provider: None,
+            chunk_size,
+            require_complete_model_input_coverage: false,
+        },
     )
 }
 
@@ -32,35 +42,18 @@ pub fn select_backup_with_macros(
     registry: &FeatureRegistry,
     policy: &FeaturePolicy,
     alphabet: &CnotAlphabet,
-    macro_provider: Option<&dyn MacroProvider>,
-    chunk_size: Option<usize>,
+    options: BellmanSelectionConfig<'_>,
 ) -> Result<BellmanSelection, BellmanError> {
     select_backup_internal(
-        model,
-        variables,
-        states,
-        registry,
-        policy,
-        alphabet,
-        BellmanSelectionOptions {
-            macro_provider,
-            config: BellmanSelectionConfig {
-                chunk_size,
-                require_complete_model_input_coverage: false,
-            },
-        },
+        model, variables, states, registry, policy, alphabet, options,
     )
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct BellmanSelectionConfig {
+#[derive(Clone, Copy, Default)]
+pub struct BellmanSelectionConfig<'a> {
+    pub macro_provider: Option<&'a dyn MacroProvider>,
     pub chunk_size: Option<usize>,
     pub require_complete_model_input_coverage: bool,
-}
-
-struct BellmanSelectionOptions<'a> {
-    macro_provider: Option<&'a dyn MacroProvider>,
-    config: BellmanSelectionConfig,
 }
 
 pub(crate) fn select_backup_with_model_input_coverage(
@@ -79,9 +72,9 @@ pub(crate) fn select_backup_with_model_input_coverage(
         registry,
         policy,
         alphabet,
-        BellmanSelectionOptions {
+        BellmanSelectionConfig {
             macro_provider: None,
-            config,
+            ..config
         },
     )
 }
@@ -93,12 +86,12 @@ fn select_backup_internal(
     registry: &FeatureRegistry,
     policy: &FeaturePolicy,
     alphabet: &CnotAlphabet,
-    options: BellmanSelectionOptions<'_>,
+    options: BellmanSelectionConfig<'_>,
 ) -> Result<BellmanSelection, BellmanError> {
     if states.is_empty() {
         return Err(BellmanError::Invalid("empty Bellman batch".into()));
     }
-    if options.config.chunk_size.is_some_and(|size| size == 0) {
+    if options.chunk_size.is_some_and(|size| size == 0) {
         return Err(BellmanError::Invalid(
             "positive neighbor chunk size required".into(),
         ));

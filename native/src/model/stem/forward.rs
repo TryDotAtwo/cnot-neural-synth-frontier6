@@ -47,7 +47,17 @@ impl StructuralStem {
             mut context_masks,
             family_available,
         } = features::accumulate(
-            self, packet, device, batch, nodes, &valid, &pair_mask, wire, pair,
+            self,
+            packet,
+            features::FeatureAccumulationContext {
+                device,
+                batch,
+                nodes,
+                valid: &valid,
+                pair_mask: &pair_mask,
+            },
+            wire,
+            pair,
         )?;
 
         let count = sizes.clamp_min(1.0).view([batch, 1, 1]);

@@ -166,7 +166,7 @@ impl PythonRandom {
 
     fn randbelow(&mut self, upper: usize) -> usize {
         debug_assert!(upper > 0);
-        let bits = (usize::BITS - upper.leading_zeros()) as u32;
+        let bits = usize::BITS - upper.leading_zeros();
         loop {
             let value = self.getrandbits(bits);
             if value < upper as u64 {

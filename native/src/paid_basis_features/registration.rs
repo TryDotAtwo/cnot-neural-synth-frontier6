@@ -1,10 +1,10 @@
 //! Validate physical contexts and register the shared D09-D14 providers.
 use super::cache::{PaidBasisFeatureCache, PaidBasisFeatureProducer};
 use super::helpers::{config_digest, d_channels};
-use super::{D_IDS, MAX_CONTEXTS, PaidBasisBlockContext, WIRE_ROLES};
+use super::{PaidBasisBlockContext, D_IDS, MAX_CONTEXTS, WIRE_ROLES};
 use crate::features::{FeatureBuildError, FeatureRegistry};
 use crate::paid_basis::PaidShearConfig;
-use crate::schema::{FeatureId, FeatureRole, feature_spec};
+use crate::schema::{feature_spec, FeatureId, FeatureRole};
 use std::collections::HashSet;
 use std::sync::Arc;
 

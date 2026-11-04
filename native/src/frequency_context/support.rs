@@ -96,8 +96,15 @@ pub(super) fn gf2_rank(rows: &[Vec<u64>], columns: usize) -> Option<usize> {
         work.swap(rank, pivot);
         for row in 0..work.len() {
             if row != rank && work[row][word] & bit != 0 {
-                for index in 0..word_count {
-                    work[row][index] ^= work[rank][index];
+                let (target_words, pivot_words) = if row < rank {
+                    let (before, after) = work.split_at_mut(rank);
+                    (&mut before[row], &after[0])
+                } else {
+                    let (before, after) = work.split_at_mut(row);
+                    (&mut after[0], &before[rank])
+                };
+                for (target_word, &pivot_word) in target_words.iter_mut().zip(pivot_words) {
+                    *target_word ^= pivot_word;
                 }
             }
         }

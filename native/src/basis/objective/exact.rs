@@ -1,5 +1,5 @@
-use super::super::{BasisBinding, BasisChoiceKind, BasisSide, BasisTemplate};
-use super::{BasisLossAudit, BasisLossBackend, BasisLossResult};
+use super::super::{BasisChoiceKind, BasisSide, BasisTemplate};
+use super::{BasisLossAudit, BasisLossBackend, BasisLossOptions, BasisLossResult};
 use crate::model::ModelError;
 use tch::{Device, Kind, Tensor};
 
@@ -7,11 +7,9 @@ pub(super) fn exact_messages_loss(
     template: &BasisTemplate,
     block: &[Vec<u8>],
     theta: &Tensor,
-    binding: BasisBinding,
-    max_evaluations: usize,
-    max_bytes: usize,
+    options: BasisLossOptions,
 ) -> Result<BasisLossResult, ModelError> {
-    if max_evaluations < 1 {
+    if options.max_evaluations < 1 {
         return Err(ModelError(
             "resource_limit: exact contraction evaluation budget exhausted".into(),
         ));
@@ -32,10 +30,18 @@ pub(super) fn exact_messages_loss(
     let estimated_workspace_bytes = state_count
         .checked_mul(choice_count.saturating_mul(2).saturating_add(5))
         .and_then(|count| count.checked_mul(std::mem::size_of::<f64>()))
+        .and_then(|bytes| {
+            template
+                .source_wires
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())
+                .and_then(|column_bytes| bytes.checked_add(column_bytes))
+        })
         .ok_or_else(|| ModelError("resource_limit: exact workspace estimate overflow".into()))?;
-    if estimated_workspace_bytes > max_bytes {
+    if estimated_workspace_bytes > options.max_bytes {
         return Err(ModelError(format!(
-            "resource_limit: exact message workspace {estimated_workspace_bytes} bytes exceeds {max_bytes}"
+            "resource_limit: exact message workspace {estimated_workspace_bytes} bytes exceeds {}",
+            options.max_bytes
         )));
     }
 
@@ -51,11 +57,13 @@ pub(super) fn exact_messages_loss(
             }
         }
         BasisSide::Target => {
-            for source_column in 0..template.source_wires.len() {
-                let mut code = 0usize;
-                for target_row in 0..template.target_wires.len() {
-                    code |= usize::from(block[target_row][source_column]) << target_row;
+            let mut column_codes = vec![0usize; template.source_wires.len()];
+            for (target_row, row) in block.iter().enumerate() {
+                for (code, &bit) in column_codes.iter_mut().zip(row) {
+                    *code |= usize::from(bit) << target_row;
                 }
+            }
+            for code in column_codes {
                 initial[code] += 1.0;
             }
         }
@@ -108,7 +116,7 @@ pub(super) fn exact_messages_loss(
             BasisChoiceKind::Add => 2.0,
             BasisChoiceKind::Swap => 6.0,
         };
-        loss = loss + theta.select(0, index as i64) * price;
+        loss = std::ops::Add::add(loss, theta.select(0, index as i64) * price);
     }
     let value = loss
         .detach()
@@ -118,7 +126,7 @@ pub(super) fn exact_messages_loss(
     Ok(BasisLossResult {
         loss,
         audit: BasisLossAudit {
-            binding,
+            binding: options.binding,
             backend: BasisLossBackend::ExactMessages,
             physical_width: width,
             samples: 0,

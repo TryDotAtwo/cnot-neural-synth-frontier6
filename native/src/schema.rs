@@ -24,4 +24,7 @@ pub const FAMILY_COUNTS: [(u8, u8); 9] = [
 
 pub use id::FeatureId;
 pub(crate) use spec::is_reserved_native_layout;
-pub use spec::{all_feature_specs, all_model_input_specs, feature_spec, FeatureRole, FeatureSpec};
+pub use spec::{
+    all_feature_specs, all_model_input_specs, feature_spec, FeatureRole, FeatureSpec,
+    ProviderMetadata,
+};

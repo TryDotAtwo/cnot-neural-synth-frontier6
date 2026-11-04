@@ -98,17 +98,30 @@ pub(super) fn element_count(shape: &[usize]) -> Result<usize, FeatureBuildError>
         .ok_or_else(|| FeatureBuildError("feature tensor element count overflow".into()))
 }
 
+pub(super) struct FeatureRowTarget<'a> {
+    pub(super) batch_index: usize,
+    pub(super) state_nodes: usize,
+    pub(super) max_nodes: usize,
+    pub(super) max_groups: usize,
+    pub(super) values: &'a mut [f32],
+    pub(super) token_valid: &'a mut [u8],
+    pub(super) incidence: &'a mut [f32],
+}
+
 pub(super) fn copy_feature_row(
     spec: &FeatureSpec,
     value: &FeatureValue,
-    batch_index: usize,
-    state_nodes: usize,
-    max_nodes: usize,
-    max_groups: usize,
-    values: &mut [f32],
-    token_valid: &mut [u8],
-    incidence: &mut [f32],
+    target: FeatureRowTarget<'_>,
 ) -> Result<(), FeatureBuildError> {
+    let FeatureRowTarget {
+        batch_index,
+        state_nodes,
+        max_nodes,
+        max_groups,
+        values,
+        token_valid,
+        incidence,
+    } = target;
     match spec.role {
         FeatureRole::Node | FeatureRole::Global => {
             let per_row = if spec.role == FeatureRole::Node {

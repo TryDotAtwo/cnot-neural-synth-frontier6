@@ -60,9 +60,7 @@ impl MomentAccumulator {
                 self.sum_weight_pair[index] += weights[first] * weights[second];
                 let mut intersection = 0u32;
                 let mut xor_weight = 0u32;
-                for word in 0..columns[first].len() {
-                    let left = columns[first][word];
-                    let right = columns[second][word];
+                for (&left, &right) in columns[first].iter().zip(&columns[second]) {
                     intersection += (left & right).count_ones();
                     xor_weight += (left ^ right).count_ones();
                 }

@@ -94,6 +94,6 @@ pub struct Stage35Unsupported {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Stage35Result {
-    Exact(Stage35Exact),
+    Exact(Box<Stage35Exact>),
     Unsupported(Stage35Unsupported),
 }

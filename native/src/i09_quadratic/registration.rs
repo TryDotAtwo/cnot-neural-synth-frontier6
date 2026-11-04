@@ -42,14 +42,15 @@ pub fn register_i09_quadratic_response(
         .ok_or_else(|| FeatureBuildError("I09 channel count overflows the platform size".into()))?;
     let version = producer_version(&contexts, limits);
     let spec = spec.with_provider_metadata(
-        "pinned_stage60_optional_cnot_quadratic_equations;alpha,beta,rank_B,mixed_rank;not_solver_or_distance",
-        version,
-        ["M", "explicit_optional_cnot_context", "stage60_source_sha256"],
-        "exact_within_declared_context_and_resource_limits",
-        "T2",
-        ["equation_physical_support"],
-        false,
-    );
+            crate::schema::ProviderMetadata::new(
+                "pinned_stage60_optional_cnot_quadratic_equations;alpha,beta,rank_B,mixed_rank;not_solver_or_distance",
+                version,
+                "exact_within_declared_context_and_resource_limits",
+                "T2",
+            )
+            .dependencies(["M", "explicit_optional_cnot_context", "stage60_source_sha256"])
+            .wire_roles(["equation_physical_support"]),
+        );
     registry.register(Box::new(I09Producer {
         spec,
         contexts,

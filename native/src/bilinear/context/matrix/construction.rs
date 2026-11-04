@@ -20,7 +20,7 @@ impl BitMatrix {
                     row.len()
                 )));
             }
-            if ncols % 64 != 0
+            if !ncols.is_multiple_of(64)
                 && row
                     .last()
                     .is_some_and(|word| word & !((1u64 << (ncols % 64)) - 1) != 0)
@@ -75,7 +75,7 @@ impl BitMatrix {
         let expected = words_for(nrows).ok_or_else(|| "i05_column_width_overflow".to_string())?;
         if columns.iter().any(|column| {
             column.len() != expected
-                || (nrows % 64 != 0
+                || (!nrows.is_multiple_of(64)
                     && column
                         .last()
                         .is_some_and(|word| word & !((1u64 << (nrows % 64)) - 1) != 0))

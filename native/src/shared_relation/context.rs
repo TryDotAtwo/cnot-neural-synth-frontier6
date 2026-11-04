@@ -123,7 +123,7 @@ fn has_bits_above(words: &[u64], width: usize) -> bool {
     let full_words = width / 64;
     if words
         .iter()
-        .skip(full_words + usize::from(width % 64 != 0))
+        .skip(full_words + usize::from(!width.is_multiple_of(64)))
         .any(|v| *v != 0)
     {
         return true;

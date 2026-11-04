@@ -1,4 +1,7 @@
-use super::{is_sha256_hex, objective_config_digest, training_records_digest, FullGraphObjective};
+use super::{
+    is_sha256_hex, objective_config_digest, training_records_digest, FullGraphObjective,
+    ObjectiveFingerprintInput,
+};
 use crate::training_data::TrainingRecord;
 
 impl FullGraphObjective {
@@ -20,16 +23,16 @@ impl FullGraphObjective {
             return Err("frozen dataset must be bound before constructing the runner".into());
         }
         let policy_id = self.policy.id().map_err(|error| error.to_string())?;
-        self.config_sha256 = objective_config_digest(
-            &self.alphabets,
-            &self.exact_catalogs,
-            &policy_id,
-            &self.feature_contract_sha256,
-            &self.forbidden,
-            &self.config,
-            None,
-            Some(sha256),
-        );
+        self.config_sha256 = objective_config_digest(ObjectiveFingerprintInput {
+            alphabets: &self.alphabets,
+            catalogs: &self.exact_catalogs,
+            policy_id: &policy_id,
+            feature_contract_sha256: &self.feature_contract_sha256,
+            forbidden: &self.forbidden,
+            config: &self.config,
+            training_records_sha256: None,
+            frozen_dataset_sha256: Some(sha256),
+        });
         self.frozen_dataset_sha256 = Some(sha256.to_owned());
         Ok(())
     }
@@ -57,16 +60,16 @@ impl FullGraphObjective {
             }
         }
         let policy_id = self.policy.id().map_err(|error| error.to_string())?;
-        self.config_sha256 = objective_config_digest(
-            &self.alphabets,
-            &self.exact_catalogs,
-            &policy_id,
-            &self.feature_contract_sha256,
-            &self.forbidden,
-            &self.config,
-            Some(&records_digest),
-            Some(&dataset.sha256),
-        );
+        self.config_sha256 = objective_config_digest(ObjectiveFingerprintInput {
+            alphabets: &self.alphabets,
+            catalogs: &self.exact_catalogs,
+            policy_id: &policy_id,
+            feature_contract_sha256: &self.feature_contract_sha256,
+            forbidden: &self.forbidden,
+            config: &self.config,
+            training_records_sha256: Some(&records_digest),
+            frozen_dataset_sha256: Some(&dataset.sha256),
+        });
         self.training_records_sha256 = Some(records_digest);
         self.frozen_dataset_sha256 = Some(dataset.sha256.clone());
         Ok(())
@@ -87,16 +90,16 @@ impl FullGraphObjective {
         }
 
         let policy_id = self.policy.id().map_err(|error| error.to_string())?;
-        self.config_sha256 = objective_config_digest(
-            &self.alphabets,
-            &self.exact_catalogs,
-            &policy_id,
-            &self.feature_contract_sha256,
-            &self.forbidden,
-            &self.config,
-            Some(&digest),
-            self.frozen_dataset_sha256.as_deref(),
-        );
+        self.config_sha256 = objective_config_digest(ObjectiveFingerprintInput {
+            alphabets: &self.alphabets,
+            catalogs: &self.exact_catalogs,
+            policy_id: &policy_id,
+            feature_contract_sha256: &self.feature_contract_sha256,
+            forbidden: &self.forbidden,
+            config: &self.config,
+            training_records_sha256: Some(&digest),
+            frozen_dataset_sha256: self.frozen_dataset_sha256.as_deref(),
+        });
         self.training_records_sha256 = Some(digest);
         Ok(())
     }

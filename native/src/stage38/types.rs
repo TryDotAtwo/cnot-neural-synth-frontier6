@@ -89,7 +89,7 @@ pub struct Stage38ResourceLimit {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Stage38Result {
-    Exact(Stage38Exact),
+    Exact(Box<Stage38Exact>),
     CertifiedNoSolutionWithinScope(Stage38NoOneExcess),
     Unsupported(Stage38Unsupported),
     ResourceLimit(Stage38ResourceLimit),

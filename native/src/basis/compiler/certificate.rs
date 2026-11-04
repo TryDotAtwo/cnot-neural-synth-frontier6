@@ -73,7 +73,7 @@ pub(super) fn build(
         lineage_id: "basis_template".into(),
     };
     certificate
-        .verify(&alphabet)
+        .verify(alphabet)
         .map_err(|error| ModelError(error.to_string()))?;
 
     Ok(BasisCandidate {

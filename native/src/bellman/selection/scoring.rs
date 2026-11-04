@@ -18,7 +18,7 @@ pub(super) fn score_candidates(
     candidates: &CandidateSet,
     registry: &FeatureRegistry,
     policy: &FeaturePolicy,
-    config: BellmanSelectionConfig,
+    config: BellmanSelectionConfig<'_>,
 ) -> Result<ScoredCandidates, BellmanError> {
     let width = config.chunk_size.unwrap_or(candidates.successors.len());
     let mut best = f64::INFINITY;

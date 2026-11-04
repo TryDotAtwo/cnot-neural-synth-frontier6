@@ -97,7 +97,7 @@ pub(super) fn certify(
         .map(|row| u32::try_from(row).map_err(|_| Stage35Error::IndexOverflow))
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(Stage35Result::Exact(Stage35Exact {
+    Ok(Stage35Result::Exact(Box::new(Stage35Exact {
         alphabet_id: alphabet.id().to_owned(),
         distance,
         word,
@@ -114,5 +114,5 @@ pub(super) fn certify(
         shared_sources,
         lower_bound,
         encoder_gates,
-    }))
+    })))
 }

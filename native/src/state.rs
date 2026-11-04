@@ -77,7 +77,7 @@ impl MatrixState {
                 actual: rows.len(),
             });
         }
-        if n % 64 != 0 {
+        if !n.is_multiple_of(64) {
             let allowed = (1u64 << (n % 64)) - 1;
             if rows
                 .chunks_exact(words_per_row)
@@ -181,8 +181,7 @@ impl MatrixState {
     pub fn is_invertible(&self) -> bool {
         let n = self.n as usize;
         let mut rows = self.rows.clone();
-        let mut pivot_row = 0usize;
-        for column in 0..n {
+        for (pivot_row, column) in (0..n).enumerate() {
             let word = column / 64;
             let bit = 1u64 << (column % 64);
             let Some(found) =
@@ -206,7 +205,6 @@ impl MatrixState {
                     }
                 }
             }
-            pivot_row += 1;
         }
         true
     }

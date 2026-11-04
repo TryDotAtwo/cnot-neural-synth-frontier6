@@ -108,8 +108,10 @@ impl FeatureRegistry {
         crate::guarded_features::register_guarded_pair(&mut registry, max_n, 100_000)?;
         crate::guarded_features::register_guarded_zero_excess(&mut registry, max_n)?;
         crate::guarded_features::register_guarded_one_excess(&mut registry, max_n, 100_000)?;
-        let mut diffusion = crate::diffusion::DiffusionConfig::default();
-        diffusion.max_n = max_n;
+        let diffusion = crate::diffusion::DiffusionConfig {
+            max_n,
+            ..Default::default()
+        };
         crate::diffusion::register_diffusion(&mut registry, diffusion)?;
         crate::symmetry_alignment::register_symmetry_alignment_h06(&mut registry)?;
         Ok(registry)

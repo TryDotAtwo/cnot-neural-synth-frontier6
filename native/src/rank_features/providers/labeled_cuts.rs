@@ -7,7 +7,7 @@ use crate::features::{
 use crate::packet::FeatureStatus;
 use crate::rank_features::contexts::LabeledCut;
 use crate::rank_features::rank_math::projected_rank;
-use crate::schema::{FeatureId, FeatureRole, FeatureSpec, feature_spec};
+use crate::schema::{feature_spec, FeatureId, FeatureRole, FeatureSpec};
 use crate::state::MatrixState;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;

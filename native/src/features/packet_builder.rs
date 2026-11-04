@@ -1,6 +1,8 @@
 mod entry;
 mod validation;
 
+use entry::FeatureEntryContext;
+
 use super::registry::FeatureRegistry;
 use super::{validate_policy, FeatureBuildError, FeatureComputation, FeaturePolicy};
 use crate::packet::FeaturePacket;
@@ -113,13 +115,15 @@ impl FeatureRegistry {
                 .unwrap_or_else(|| feature_spec(id));
             entries.push(self.build_entry(
                 spec,
-                states,
-                nodes,
-                enabled.contains(&id),
-                budget_exhausted_before_compute,
-                &mut remaining_evaluations,
-                policy,
-                &structural_rows,
+                FeatureEntryContext {
+                    states,
+                    nodes,
+                    enabled: enabled.contains(&id),
+                    budget_exhausted: budget_exhausted_before_compute,
+                    remaining_evaluations: &mut remaining_evaluations,
+                    policy,
+                    structural_rows: &structural_rows,
+                },
             )?);
         }
         let policy_id = policy.id()?;

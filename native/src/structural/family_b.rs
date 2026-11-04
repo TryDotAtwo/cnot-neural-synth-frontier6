@@ -20,7 +20,7 @@ pub(super) fn compute(
     let transpose = &data.transpose;
     let row_weight = &data.row_weight;
     let col_weight = &data.col_weight;
-    let components = undirected_components(&adjacency, n);
+    let components = undirected_components(adjacency, n);
     let mut component_size = vec![0i64; n];
     let mut component_stats = vec![0i64; n * 3];
     let diagonal_residual = (0..n).map(|i| 1 - matrix[i * n + i]).collect::<Vec<_>>();
@@ -51,7 +51,7 @@ pub(super) fn compute(
         component_size.iter().map(|v| *v as f32).collect(),
     );
 
-    let reachability = transitive_closure(&adjacency, n);
+    let reachability = transitive_closure(adjacency, n);
     let mut mutual = vec![0u8; cells];
     for i in 0..n {
         for j in 0..n {
@@ -88,8 +88,7 @@ pub(super) fn compute(
     }
     let depth = dag_depth(&dag, sccs.len());
     let mut b04 = Vec::with_capacity(n * 3);
-    for node in 0..n {
-        let label = scc_label[node];
+    for &label in &scc_label {
         let base = label * sccs.len();
         let indegree = (0..sccs.len())
             .map(|i| dag[i * sccs.len() + label] as i64)
@@ -102,7 +101,7 @@ pub(super) fn compute(
     }
     put_node(output, 'B', 4, n, 3, b04);
 
-    let reciprocal = hadamard(&adjacency, &transpose, n);
+    let reciprocal = hadamard(adjacency, transpose, n);
     put_node(
         output,
         'B',
@@ -111,7 +110,7 @@ pub(super) fn compute(
         1,
         row_sums(&reciprocal, n).iter().map(|v| *v as f32).collect(),
     );
-    let paths = matmul(&adjacency, &adjacency, n)?;
+    let paths = matmul(adjacency, adjacency, n)?;
     put_pair(
         output,
         'B',
@@ -129,16 +128,16 @@ pub(super) fn compute(
         paths.iter().map(|v| (*v % 2) as f32).collect(),
     );
     // Python B08 uses the diagonal-free adjacency on both sides.
-    let adjacency_transpose = transpose_dense(&adjacency, n);
-    let at_a = matmul(&adjacency_transpose, &adjacency, n)?;
-    let a_at = matmul(&adjacency, &adjacency_transpose, n)?;
+    let adjacency_transpose = transpose_dense(adjacency, n);
+    let at_a = matmul(&adjacency_transpose, adjacency, n)?;
+    let a_at = matmul(adjacency, &adjacency_transpose, n)?;
     let mut b08 = Vec::with_capacity(cells * 2);
     for i in 0..cells {
         b08.push(at_a[i] as f32);
         b08.push(a_at[i] as f32);
     }
     put_pair(output, 'B', 8, n, 2, b08);
-    let paths3 = matmul(&paths, &adjacency, n)?;
+    let paths3 = matmul(&paths, adjacency, n)?;
     put_node(
         output,
         'B',
@@ -148,7 +147,7 @@ pub(super) fn compute(
         (0..n).map(|i| paths3[i * n + i] as f32).collect(),
     );
 
-    let undirected = undirected_adjacency(&adjacency, n);
+    let undirected = undirected_adjacency(adjacency, n);
     let common_neighbors = matmul(&undirected, &undirected, n)?;
     let mut b10 = Vec::with_capacity(n * 2);
     for i in 0..n {

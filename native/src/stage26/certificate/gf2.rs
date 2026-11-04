@@ -70,10 +70,7 @@ fn lowest_set_bit(value: &BigUint) -> Option<u64> {
 pub(super) fn low_basis(values: impl IntoIterator<Item = BigUint>) -> BTreeMap<u64, BigUint> {
     let mut pivots = BTreeMap::<u64, BigUint>::new();
     for mut value in values {
-        loop {
-            let Some(pivot) = lowest_set_bit(&value) else {
-                break;
-            };
+        while let Some(pivot) = lowest_set_bit(&value) {
             if let Some(existing) = pivots.get(&pivot) {
                 value ^= existing;
             } else {

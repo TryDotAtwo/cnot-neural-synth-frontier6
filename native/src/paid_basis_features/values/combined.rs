@@ -57,10 +57,7 @@ pub(super) fn assemble_combined_feature_value(
             .checked_add(1)
             .ok_or_else(|| resource("paid_basis_d14_gate_count_overflow"))?;
     }
-    let compatibility_counts = compatibility
-        .into_iter()
-        .map(|(gate, count)| (gate, count))
-        .collect::<HashMap<_, _>>();
+    let compatibility_counts = compatibility.into_iter().collect::<HashMap<_, _>>();
     let cancellation_counts = reduced
         .boundary_cancellations
         .iter()

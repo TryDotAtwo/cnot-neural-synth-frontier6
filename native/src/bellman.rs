@@ -10,8 +10,8 @@ mod recompute;
 mod selection;
 
 pub use recompute::recompute_backup;
-pub use selection::{select_backup, select_backup_with_macros};
-pub(crate) use selection::{select_backup_with_model_input_coverage, BellmanSelectionConfig};
+pub(crate) use selection::select_backup_with_model_input_coverage;
+pub use selection::{select_backup, select_backup_with_macros, BellmanSelectionConfig};
 
 use crate::alphabet::{CertificateError, WordCertificate};
 use crate::features::FeatureBuildError;

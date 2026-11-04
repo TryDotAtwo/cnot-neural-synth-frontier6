@@ -84,7 +84,6 @@ pub fn partial_shear(state: &MatrixState) -> Result<Option<ShearDecomposition>, 
     }
     let sources = (0..width).collect::<Vec<_>>();
     let targets = (width..n).collect::<Vec<_>>();
-    let words_per_row = state.words_per_row();
     let mut echelon = (0..width)
         .map(|row| state.row_words(row as u32).map(<[u64]>::to_vec))
         .collect::<Option<Vec<_>>>()
@@ -101,8 +100,11 @@ pub fn partial_shear(state: &MatrixState) -> Result<Option<ShearDecomposition>, 
         echelon.swap(pivot_row, found);
         for row in (pivot_row + 1)..width {
             if echelon[row][word] & bit != 0 {
-                for index in 0..words_per_row {
-                    echelon[row][index] ^= echelon[pivot_row][index];
+                let (before, after) = echelon.split_at_mut(row);
+                let target_row = &mut after[0];
+                let pivot = &before[pivot_row];
+                for (target_word, &pivot_word) in target_row.iter_mut().zip(pivot) {
+                    *target_word ^= pivot_word;
                 }
             }
         }
@@ -118,13 +120,13 @@ pub fn partial_shear(state: &MatrixState) -> Result<Option<ShearDecomposition>, 
 
     let pivot_words = width.div_ceil(64);
     let mut restriction = vec![vec![0u64; pivot_words]; width];
-    for source_row in 0..width {
+    for (source_row, restriction_row) in restriction.iter_mut().enumerate() {
         let row = state
             .row_words(source_row as u32)
             .ok_or_else(|| "partial-shear source row is absent".to_owned())?;
         for (pivot_index, &column) in pivot_columns.iter().enumerate() {
             if row[column / 64] & (1u64 << (column % 64)) != 0 {
-                restriction[source_row][pivot_index / 64] |= 1u64 << (pivot_index % 64);
+                restriction_row[pivot_index / 64] |= 1u64 << (pivot_index % 64);
             }
         }
     }

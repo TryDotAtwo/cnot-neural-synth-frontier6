@@ -22,7 +22,7 @@ pub(in crate::frozen_data) fn decode_state(raw: State) -> Result<MatrixState, Fr
             "matrix alphabet or row count mismatch".into(),
         ));
     }
-    let width = (raw.n as usize + 63) / 64;
+    let width = (raw.n as usize).div_ceil(64);
     let mut packed = Vec::with_capacity(raw.n as usize * width);
     for (i, value) in raw.packed_rows.iter().enumerate() {
         let text = value.to_string();

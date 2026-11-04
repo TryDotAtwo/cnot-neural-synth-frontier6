@@ -85,13 +85,13 @@ pub(in crate::stage38) fn count_histories(
         checked_power(component.len(), bag, max_entries)?;
 
         let mut lattice_values = vec![BigInt::from(0u8); component.len() + 1];
-        for q in 1..=component.len() {
-            lattice_values[q] = lattice_sum(q, &component_factors, &order, max_entries)?;
+        for (q, value) in lattice_values.iter_mut().enumerate().skip(1) {
+            *value = lattice_sum(q, &component_factors, &order, max_entries)?;
         }
         let m = component.len();
         let mut leading = BigInt::from(0u8);
-        for q in 0..=m {
-            let mut term = binomial(m, q) * &lattice_values[q];
+        for (q, lattice_value) in lattice_values.iter().enumerate() {
+            let mut term = binomial(m, q) * lattice_value;
             if (m - q) % 2 == 1 {
                 term = -term;
             }

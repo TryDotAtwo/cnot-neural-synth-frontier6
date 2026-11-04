@@ -1,24 +1,39 @@
 use super::super::registry::FeatureRegistry;
 use super::super::FeatureValue;
-use super::validation::{copy_feature_row, element_count, feature_shape, validate_value};
+use super::validation::{
+    copy_feature_row, element_count, feature_shape, validate_value, FeatureRowTarget,
+};
 use super::{FeatureBuildError, FeatureComputation, FeaturePolicy};
 use crate::packet::{FeatureEntry, FeatureStatus};
 use crate::schema::{FeatureId, FeatureRole, FeatureSpec};
 use crate::state::MatrixState;
 use std::collections::HashMap;
 
+pub(super) struct FeatureEntryContext<'a> {
+    pub(super) states: &'a [MatrixState],
+    pub(super) nodes: usize,
+    pub(super) enabled: bool,
+    pub(super) budget_exhausted: bool,
+    pub(super) remaining_evaluations: &'a mut Option<usize>,
+    pub(super) policy: &'a FeaturePolicy,
+    pub(super) structural_rows: &'a [Option<HashMap<FeatureId, FeatureValue>>],
+}
+
 impl FeatureRegistry {
     pub(super) fn build_entry(
         &self,
         spec: FeatureSpec,
-        states: &[MatrixState],
-        nodes: usize,
-        enabled: bool,
-        budget_exhausted: bool,
-        remaining_evaluations: &mut Option<usize>,
-        policy: &FeaturePolicy,
-        structural_rows: &[Option<HashMap<FeatureId, FeatureValue>>],
+        context: FeatureEntryContext<'_>,
     ) -> Result<FeatureEntry, FeatureBuildError> {
+        let FeatureEntryContext {
+            states,
+            nodes,
+            enabled,
+            budget_exhausted,
+            remaining_evaluations,
+            policy,
+            structural_rows,
+        } = context;
         let producer = self.providers.get(&spec.id);
         let mut results = Vec::with_capacity(states.len());
         let mut max_groups = 0usize;
@@ -39,21 +54,23 @@ impl FeatureRegistry {
                 .and_then(|row| row.get(&spec.id))
             {
                 FeatureComputation::Computed(value.clone())
-            } else if producer.is_none() {
+            } else if let Some(producer) = producer {
+                if remaining_evaluations.is_some_and(|remaining| remaining == 0) {
+                    FeatureComputation::Unavailable {
+                        status: FeatureStatus::ResourceLimit,
+                        reason: "feature_evaluation_budget_exhausted".into(),
+                    }
+                } else {
+                    if let Some(remaining) = remaining_evaluations {
+                        *remaining -= 1;
+                    }
+                    producer.compute(state, policy)
+                }
+            } else {
                 FeatureComputation::Unavailable {
                     status: FeatureStatus::Unsupported,
                     reason: "no_native_provider_registered".into(),
                 }
-            } else if remaining_evaluations.is_some_and(|remaining| remaining == 0) {
-                FeatureComputation::Unavailable {
-                    status: FeatureStatus::ResourceLimit,
-                    reason: "feature_evaluation_budget_exhausted".into(),
-                }
-            } else {
-                if let Some(remaining) = remaining_evaluations {
-                    *remaining -= 1;
-                }
-                producer.expect("checked above").compute(state, policy)
             };
             if let FeatureComputation::Computed(value)
             | FeatureComputation::ComputedWithProvenance { value, .. } = &result
@@ -129,13 +146,15 @@ impl FeatureRegistry {
                     copy_feature_row(
                         &spec,
                         &value,
-                        batch_index,
-                        state.dimension() as usize,
-                        nodes,
-                        max_groups,
-                        &mut values,
-                        &mut token_valid,
-                        &mut incidence,
+                        FeatureRowTarget {
+                            batch_index,
+                            state_nodes: state.dimension() as usize,
+                            max_nodes: nodes,
+                            max_groups,
+                            values: &mut values,
+                            token_valid: &mut token_valid,
+                            incidence: &mut incidence,
+                        },
                     )?;
                 }
                 FeatureComputation::ComputedWithProvenance {
@@ -149,13 +168,15 @@ impl FeatureRegistry {
                     copy_feature_row(
                         &spec,
                         &value,
-                        batch_index,
-                        state.dimension() as usize,
-                        nodes,
-                        max_groups,
-                        &mut values,
-                        &mut token_valid,
-                        &mut incidence,
+                        FeatureRowTarget {
+                            batch_index,
+                            state_nodes: state.dimension() as usize,
+                            max_nodes: nodes,
+                            max_groups,
+                            values: &mut values,
+                            token_valid: &mut token_valid,
+                            incidence: &mut incidence,
+                        },
                     )?;
                 }
             }

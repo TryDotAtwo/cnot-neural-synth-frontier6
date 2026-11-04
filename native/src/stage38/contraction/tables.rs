@@ -20,11 +20,11 @@ pub(super) fn lattice_sum(
         .map(|factor| factor_table(factor, q, max_entries))
         .collect::<Result<Vec<_>, _>>()?;
 
-    for variable in order.iter().copied() {
+    for variable in order {
         let mut selected = Vec::new();
         let mut remaining = Vec::new();
         for table in tables.drain(..) {
-            if table.scope.binary_search(&variable).is_ok() {
+            if table.scope.binary_search(variable).is_ok() {
                 selected.push(table);
             } else {
                 remaining.push(table);
@@ -47,7 +47,7 @@ pub(super) fn lattice_sum(
             .collect();
         let joint_size = checked_power(q, joint.len(), max_entries)?;
         let axis = joint
-            .binary_search(&variable)
+            .binary_search(variable)
             .map_err(|_| Stage38Error::ContractionInvariant("elimination variable is absent"))?;
         let mut reduced_scope = joint.clone();
         reduced_scope.remove(axis);
@@ -113,14 +113,14 @@ fn factor_table(factor: &Factor, q: usize, max_entries: usize) -> Result<Table, 
         .map(|(position, variable)| (variable, position))
         .collect();
     let mut digits = vec![0usize; factor.scope.len()];
-    for flat in 0..size {
+    for (flat, value) in values.iter_mut().enumerate() {
         decode_assignment(flat, q, &mut digits);
         for term in &factor.terms {
             if term
                 .iter()
                 .all(|(left, right)| digits[positions[left]] < digits[positions[right]])
             {
-                values[flat] += BigInt::from(1u8);
+                *value += BigInt::from(1u8);
             }
         }
     }

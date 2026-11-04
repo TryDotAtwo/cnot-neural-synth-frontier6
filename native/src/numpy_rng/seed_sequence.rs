@@ -34,8 +34,8 @@ pub(super) fn state_and_increment(seed: u64) -> (u128, u128) {
 fn seed_sequence_pool(entropy: &[u32]) -> [u32; 4] {
     let mut pool = [0u32; 4];
     let mut hash_const = INIT_A;
-    for index in 0..pool.len() {
-        pool[index] = hash_mix(entropy.get(index).copied().unwrap_or(0), &mut hash_const);
+    for (index, value) in pool.iter_mut().enumerate() {
+        *value = hash_mix(entropy.get(index).copied().unwrap_or(0), &mut hash_const);
     }
     for source in 0..pool.len() {
         let source_value = pool[source];

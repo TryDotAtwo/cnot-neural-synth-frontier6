@@ -13,17 +13,28 @@ pub(super) struct FeatureAccumulation {
     pub(super) family_available: HashMap<char, Tensor>,
 }
 
+pub(super) struct FeatureAccumulationContext<'a> {
+    pub(super) device: Device,
+    pub(super) batch: i64,
+    pub(super) nodes: i64,
+    pub(super) valid: &'a Tensor,
+    pub(super) pair_mask: &'a Tensor,
+}
+
 pub(super) fn accumulate(
     stem: &StructuralStem,
     packet: &FeaturePacket,
-    device: Device,
-    batch: i64,
-    nodes: i64,
-    valid: &Tensor,
-    pair_mask: &Tensor,
+    context: FeatureAccumulationContext<'_>,
     mut wire: Tensor,
     mut pair: Tensor,
 ) -> Result<FeatureAccumulation, ModelError> {
+    let FeatureAccumulationContext {
+        device,
+        batch,
+        nodes,
+        valid,
+        pair_mask,
+    } = context;
     let mut context_tokens = Vec::new();
     let mut context_masks = Vec::new();
     let mut family_available: HashMap<char, Tensor> = HashMap::new();

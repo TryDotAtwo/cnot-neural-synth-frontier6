@@ -62,7 +62,7 @@ pub(super) fn certify(
         })
         .collect::<Result<Vec<_>, Stage37Error>>()?;
 
-    Ok(Stage37Result::Exact(Stage37Exact {
+    Ok(Stage37Result::Exact(Box::new(Stage37Exact {
         state: state.clone(),
         alphabet_id: alphabet.id().to_owned(),
         distance: lower_bound,
@@ -72,5 +72,5 @@ pub(super) fn certify(
         parents: ordered_parents,
         word,
         source_notes_sha256: STAGE37_SOURCE_NOTES_SHA256,
-    }))
+    })))
 }

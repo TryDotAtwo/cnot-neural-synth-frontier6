@@ -85,13 +85,14 @@ pub fn register_symmetry_alignment_h06(
     spec.role = FeatureRole::Pair;
     spec.channels = H06_CHANNELS;
     let spec = spec.with_provider_metadata(
-        "physical_pair_differences_A15_A16_width2_D03_across_T_inverse_inverseT",
-        "physical_symmetry_alignment_v1",
-        ["M", "exact_GF2_inverse", "physical_wire_matching"],
-        "exact",
-        "T1",
-        std::iter::empty::<&str>(),
-        false,
+        crate::schema::ProviderMetadata::new(
+            "physical_pair_differences_A15_A16_width2_D03_across_T_inverse_inverseT",
+            "physical_symmetry_alignment_v1",
+            "exact",
+            "T1",
+        )
+        .dependencies(["M", "exact_GF2_inverse", "physical_wire_matching"])
+        .wire_roles(std::iter::empty::<&str>()),
     );
     registry.register(Box::new(H06Producer {
         spec,

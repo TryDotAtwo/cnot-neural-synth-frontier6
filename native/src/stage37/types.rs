@@ -85,7 +85,7 @@ pub struct Stage37Unsupported {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Stage37Result {
-    Exact(Stage37Exact),
-    NoZeroExcess(Stage37NoZeroExcess),
+    Exact(Box<Stage37Exact>),
+    NoZeroExcess(Box<Stage37NoZeroExcess>),
     Unsupported(Stage37Unsupported),
 }

@@ -24,6 +24,7 @@ pub use exposure::{ExposureAudit, ObjectiveDiagnostics, StateAdmission};
 use exposure::{ExposureLedger, EXPOSURE_SCHEMA};
 use fingerprint::{
     is_sha256_hex, objective_config_digest, training_records_digest, validate_identity,
+    ObjectiveFingerprintInput,
 };
 pub use runner::FullGraphObjectiveRunner;
 

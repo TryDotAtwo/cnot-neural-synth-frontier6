@@ -123,7 +123,7 @@ pub(super) fn recognize(
         ));
     }
 
-    Ok(Stage38Result::Exact(Stage38Exact {
+    Ok(Stage38Result::Exact(Box::new(Stage38Exact {
         state: state.clone(),
         alphabet_id: alphabet.id().to_owned(),
         distance: excluded_length,
@@ -136,5 +136,5 @@ pub(super) fn recognize(
         word,
         source_notes_sha256: STAGE38_SOURCE_NOTES_SHA256,
         source_implementation_sha256: STAGE38_SOURCE_IMPLEMENTATION_SHA256,
-    }))
+    })))
 }

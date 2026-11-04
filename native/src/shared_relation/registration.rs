@@ -41,14 +41,15 @@ pub fn register_shared_relation_contexts(
     spec.role = FeatureRole::Group;
     spec.channels = max_vectors + 2;
     let spec = spec.with_provider_metadata(
-        "selected_physical_row_vectors;full_labelled_kernel_K_and_UX_bits;fixed_independent_U;no_rank_only_replacement",
-        producer_version,
-        ["M", "labelled_rows", "ambient_coordinates", "covector_frame"],
-        "exact",
-        "T2",
-        ["vector_row", "covector_coordinate"],
-        false,
-    );
+            crate::schema::ProviderMetadata::new(
+                "selected_physical_row_vectors;full_labelled_kernel_K_and_UX_bits;fixed_independent_U;no_rank_only_replacement",
+                producer_version,
+                "exact",
+                "T2",
+            )
+            .dependencies(["M", "labelled_rows", "ambient_coordinates", "covector_frame"])
+            .wire_roles(["vector_row", "covector_coordinate"]),
+        );
     registry.register(Box::new(SharedRelationProducer {
         spec,
         contexts,

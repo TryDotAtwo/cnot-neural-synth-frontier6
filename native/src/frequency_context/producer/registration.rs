@@ -36,20 +36,21 @@ pub fn register_frequency_contexts(
     spec.role = FeatureRole::Global;
     spec.channels = 2;
     let spec = spec.with_provider_metadata(
-        concat!(
-            "explicit_full_stage52_interface;fixed_labelled_central_Fourier_sector;",
-            "kappa_and_log2_representation_dimension;not_distance"
-        ),
-        producer_version,
-        [
+        crate::schema::ProviderMetadata::new(
+            concat!(
+                "explicit_full_stage52_interface;fixed_labelled_central_Fourier_sector;",
+                "kappa_and_log2_representation_dimension;not_distance"
+            ),
+            producer_version,
+            "exact",
+            "T2",
+        )
+        .dependencies([
             "M",
             "physical_interface_partition",
             "central_frequency_matrix",
-        ],
-        "exact",
-        "T2",
-        std::iter::empty::<String>(),
-        false,
+        ])
+        .wire_roles(std::iter::empty::<String>()),
     );
     registry.register(Box::new(FrequencyContextProducer {
         spec,

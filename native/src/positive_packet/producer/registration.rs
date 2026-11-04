@@ -52,14 +52,15 @@ pub fn register_positive_packet_contexts(
     spec.role = FeatureRole::Group;
     spec.channels = 4;
     let spec = spec.with_provider_metadata(
-        "fixed_order_affine_optional_CNOT_packet;explicit_local_factors;cut,kappa,live,log2_state_upper_bound;not_distance",
-        producer_version,
-        ["M", "optional_physical_gate_slots", "local_factor_truth_tables"],
-        "exact",
-        "T2",
-        ["control", "target"],
-        false,
-    );
+            crate::schema::ProviderMetadata::new(
+                "fixed_order_affine_optional_CNOT_packet;explicit_local_factors;cut,kappa,live,log2_state_upper_bound;not_distance",
+                producer_version,
+                "exact",
+                "T2",
+            )
+            .dependencies(["M", "optional_physical_gate_slots", "local_factor_truth_tables"])
+            .wire_roles(["control", "target"]),
+        );
     registry.register(Box::new(PositivePacketProducer {
         spec,
         contexts,

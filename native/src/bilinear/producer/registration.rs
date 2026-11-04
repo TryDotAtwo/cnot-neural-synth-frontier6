@@ -32,17 +32,18 @@ pub fn register_bilinear_contexts(
     spec.role = FeatureRole::Global;
     spec.channels = 2;
     let spec = spec.with_provider_metadata(
-        concat!(
-            "explicit_stage55_UA=A0_DV=D0_DA=C_matrix_product_fiber;",
-            "C=current_labelled_physical_block;residual_rank_and_free_hidden_width;",
-            "augmentation_only;not_CNOT_distance"
-        ),
-        producer_version,
-        ["M", "physical_block", "independent_U_V", "labelled_A0_D0"],
-        "exact",
-        "T2",
-        std::iter::empty::<String>(),
-        false,
+        crate::schema::ProviderMetadata::new(
+            concat!(
+                "explicit_stage55_UA=A0_DV=D0_DA=C_matrix_product_fiber;",
+                "C=current_labelled_physical_block;residual_rank_and_free_hidden_width;",
+                "augmentation_only;not_CNOT_distance"
+            ),
+            producer_version,
+            "exact",
+            "T2",
+        )
+        .dependencies(["M", "physical_block", "independent_U_V", "labelled_A0_D0"])
+        .wire_roles(std::iter::empty::<String>()),
     );
     registry.register(Box::new(BilinearProducer {
         spec,

@@ -39,16 +39,21 @@ pub(crate) struct BasisLossResult {
     pub audit: BasisLossAudit,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct BasisLossOptions {
+    pub(crate) binding: BasisBinding,
+    pub(crate) backend: BasisLossBackend,
+    pub(crate) samples: usize,
+    pub(crate) seed: u64,
+    pub(crate) max_evaluations: usize,
+    pub(crate) max_bytes: usize,
+}
+
 pub(crate) fn paid_cost_loss(
     template: &BasisTemplate,
     block: &[Vec<u8>],
     probabilities: &Tensor,
-    binding: BasisBinding,
-    backend: BasisLossBackend,
-    samples: usize,
-    seed: u64,
-    max_evaluations: usize,
-    max_bytes: usize,
+    options: BasisLossOptions,
 ) -> Result<BasisLossResult, ModelError> {
     validation::validate_block(template, block)?;
     let theta = probabilities
@@ -71,25 +76,12 @@ pub(crate) fn paid_cost_loss(
         ));
     }
 
-    match backend {
-        BasisLossBackend::ExactMessages => exact::exact_messages_loss(
-            template,
-            block,
-            probabilities,
-            binding,
-            max_evaluations,
-            max_bytes,
-        ),
-        BasisLossBackend::MonteCarlo => monte_carlo::monte_carlo_loss(
-            template,
-            block,
-            probabilities,
-            &theta_values,
-            binding,
-            samples,
-            seed,
-            max_evaluations,
-            max_bytes,
-        ),
+    match options.backend {
+        BasisLossBackend::ExactMessages => {
+            exact::exact_messages_loss(template, block, probabilities, options)
+        }
+        BasisLossBackend::MonteCarlo => {
+            monte_carlo::monte_carlo_loss(template, block, probabilities, &theta_values, options)
+        }
     }
 }

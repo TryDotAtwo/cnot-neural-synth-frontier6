@@ -102,13 +102,13 @@ pub(super) fn analyze(
             .map(|row| u32::try_from(row).map_err(|_| Stage37Error::IndexOverflow))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(RecognitionPlan::Complete(Stage37Result::NoZeroExcess(
-            Stage37NoZeroExcess {
+            Box::new(Stage37NoZeroExcess {
                 state: state.clone(),
                 alphabet_id: alphabet.id().to_owned(),
                 excluded_length: lower_bound,
                 missing_rows,
                 source_notes_sha256: STAGE37_SOURCE_NOTES_SHA256,
-            },
+            }),
         )));
     }
 

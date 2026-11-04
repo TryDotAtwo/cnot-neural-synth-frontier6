@@ -49,13 +49,14 @@ pub fn register_stage26_features_with_budget(
             FeatureRole::Global
         };
         let spec = feature_spec(id).with_provider_metadata(
-            "checked_stage26_canonical_projection;global_lower_bound_not_optimum",
-            &version,
-            ["M", "stage26_source", "independent_certificate_checker"],
-            "exact",
-            "T2",
-            std::iter::empty::<&str>(),
-            false,
+            crate::schema::ProviderMetadata::new(
+                "checked_stage26_canonical_projection;global_lower_bound_not_optimum",
+                &version,
+                "exact",
+                "T2",
+            )
+            .dependencies(["M", "stage26_source", "independent_certificate_checker"])
+            .wire_roles(std::iter::empty::<&str>()),
         );
         let spec = FeatureSpec {
             role,

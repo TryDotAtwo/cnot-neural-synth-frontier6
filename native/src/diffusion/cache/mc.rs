@@ -70,7 +70,7 @@ impl ProfileCache {
 impl JointMoments {
     fn sample(state: &MatrixState, config: DiffusionConfig, seed: u64) -> Option<Self> {
         let n = state.dimension() as usize;
-        let words_per_row = state.words_per_row() as usize;
+        let words_per_row = state.words_per_row();
         let column_words = n.checked_add(63)? / 64;
         let lambda = n as f64 * config.mc_tau;
         if !lambda.is_finite() {
@@ -93,8 +93,15 @@ impl JointMoments {
                 let control = rng.integer(n)?;
                 let mut target = rng.integer(n - 1)?;
                 target += usize::from(target >= control);
-                for word in 0..words_per_row {
-                    rows[target][word] ^= rows[control][word];
+                let (target_row, control_row) = if target < control {
+                    let (before, after) = rows.split_at_mut(control);
+                    (&mut before[target], &after[0])
+                } else {
+                    let (before, after) = rows.split_at_mut(target);
+                    (&mut after[0], &before[control])
+                };
+                for (target_word, &control_word) in target_row.iter_mut().zip(control_row) {
+                    *target_word ^= control_word;
                 }
             }
 

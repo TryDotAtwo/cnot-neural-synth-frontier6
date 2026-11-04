@@ -70,7 +70,8 @@ pub(super) fn independently_verify(state: &MatrixState, certificate: &Certificat
         .retained
         .iter()
         .enumerate()
-        .filter_map(|(wire, keep)| keep.then(|| one_hot(wire)))
+        .filter(|(_, keep)| **keep)
+        .map(|(wire, _)| one_hot(wire))
         .collect();
     let targets: BTreeSet<_> = certificate
         .projected_rows

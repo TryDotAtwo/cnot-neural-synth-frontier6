@@ -6,7 +6,7 @@ use crate::features::{
 };
 use crate::packet::FeatureStatus;
 use crate::rank_features::rank_math::rank_binary_block;
-use crate::schema::{FeatureId, FeatureSpec, feature_spec};
+use crate::schema::{feature_spec, FeatureId, FeatureSpec};
 use crate::shear::partial_shear;
 use crate::state::MatrixState;
 

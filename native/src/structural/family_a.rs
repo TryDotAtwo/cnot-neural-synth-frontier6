@@ -167,7 +167,7 @@ pub(super) fn compute(
     put_pair(output, 'A', 18, n, 2, a18);
     put_pair(output, 'A', 19, n, 2, a19);
 
-    let residual_row_dot_matrix_transpose = matmul(&residual, &transpose, n)?;
+    let residual_row_dot_matrix_transpose = matmul(residual, transpose, n)?;
     let mut a20 = Vec::with_capacity(cells * 2);
     for i in 0..n {
         for j in 0..n {
