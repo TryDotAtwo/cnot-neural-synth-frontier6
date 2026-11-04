@@ -1,35 +1,17 @@
+//! Checked conversion from deserialized manifest context specifications.
+
+mod alphabet;
+mod matrix_boundary;
+mod optional_packet;
+mod template_response;
+
 use super::*;
-use crate::alphabet::CnotAlphabet;
 use crate::features::FeatureProviderContexts;
-use crate::matrix_boundary::{MatrixBoundarySpec, RationalWeight};
 use crate::{
-    BilinearContext, BlockContext, CnotGate, FrequencyContext, I09Context, I09Limits, I10Config,
-    LabeledCut, LocalBooleanFactor, OptionalGatePacket, PaidBasisBlockContext, PaidShearConfig,
-    RankIncrementProbe, RationalProbability, RestrictedIntersection, SharedRelationContext,
-    TemplateChoice, TemplateChoiceKind, TemplateResponseBudgets, TemplateResponseConfig,
+    BilinearContext, BlockContext, FrequencyContext, I09Context, I09Limits, I10Config, LabeledCut,
+    PaidBasisBlockContext, PaidShearConfig, RankIncrementProbe, RestrictedIntersection,
+    SharedRelationContext,
 };
-use num_bigint::BigUint;
-
-impl GateSpec {
-    pub(crate) fn build(self) -> CnotGate {
-        CnotGate {
-            control: self.control,
-            target: self.target,
-        }
-    }
-}
-
-impl AlphabetSpec {
-    pub(crate) fn build(&self) -> Result<CnotAlphabet, String> {
-        CnotAlphabet::new(
-            self.dimension,
-            self.id.clone(),
-            self.gates.iter().copied().map(GateSpec::build).collect(),
-            self.costs.clone(),
-        )
-        .map_err(|e| e.to_string())
-    }
-}
 
 impl FeatureContextsSpec {
     pub(crate) fn build(self) -> Result<FeatureProviderContexts, String> {
@@ -167,96 +149,5 @@ impl FeatureContextsSpec {
                 max_transitions: self.i10_config.max_transitions,
             },
         })
-    }
-}
-
-impl MatrixBoundarySpecInput {
-    pub(crate) fn build(self) -> Result<MatrixBoundarySpec, String> {
-        let mut spec = MatrixBoundarySpec::new(self.n, self.inputs, self.outputs)
-            .map_err(|e| e.to_string())?
-            .with_protected_inputs(self.protected_inputs)
-            .map_err(|e| e.to_string())?
-            .with_zero_outputs(self.zero_outputs)
-            .map_err(|e| e.to_string())?;
-        if !self.weights.is_empty() {
-            let weights = self
-                .weights
-                .into_iter()
-                .map(|[first, second]| {
-                    Ok((
-                        RationalWeight::new(first.numerator, first.denominator)
-                            .map_err(|e| e.to_string())?,
-                        RationalWeight::new(second.numerator, second.denominator)
-                            .map_err(|e| e.to_string())?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            spec = spec.with_weights(weights).map_err(|e| e.to_string())?;
-        }
-        Ok(spec)
-    }
-}
-
-impl TemplateResponseSpec {
-    pub(crate) fn build(self) -> Result<TemplateResponseConfig, String> {
-        let choices = self
-            .choices
-            .into_iter()
-            .map(|x| TemplateChoice::new(x.kind.into(), x.control, x.target))
-            .collect();
-        let points = self
-            .points
-            .into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|x| {
-                        RationalProbability::new(x.numerator, x.denominator)
-                            .map_err(|e| e.to_string())
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        TemplateResponseConfig::with_budgets(
-            choices,
-            points,
-            TemplateResponseBudgets {
-                max_width: self.budgets.max_width,
-                max_assignments: self.budgets.max_assignments,
-                max_evaluations: self.budgets.max_evaluations,
-                max_bytes: self.budgets.max_bytes,
-            },
-        )
-        .map_err(|e| e.to_string())
-    }
-}
-
-impl From<ChoiceKindSpec> for TemplateChoiceKind {
-    fn from(x: ChoiceKindSpec) -> Self {
-        match x {
-            ChoiceKindSpec::Add => Self::Add,
-            ChoiceKindSpec::Swap => Self::Swap,
-        }
-    }
-}
-
-impl OptionalGatePacketSpec {
-    pub(crate) fn build(self) -> Result<OptionalGatePacket, String> {
-        let gates = self.gates.into_iter().map(|[c, t]| (c, t)).collect();
-        let factors = self
-            .factors
-            .into_iter()
-            .map(|x| {
-                let allowed = x
-                    .allowed
-                    .iter()
-                    .map(|s| {
-                        s.parse::<BigUint>()
-                            .map_err(|e| format!("invalid decimal BigUint: {e}"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                LocalBooleanFactor::new(x.scope, allowed).map_err(|e| e.to_string())
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        OptionalGatePacket::new(self.n, gates, factors).map_err(|e| e.to_string())
     }
 }
