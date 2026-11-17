@@ -1,5 +1,5 @@
 name: Vast RTX 3060 Qhat4 epoch
-run-name: Qhat sample-4 full-model epoch with safe Vast error code
+run-name: Qhat4 full-model epoch, dev quality and private stage profile
 
 on:
   push:
@@ -60,4 +60,3 @@ jobs:
           else
             echo 'instance_stop=not_started'
           fi
-
