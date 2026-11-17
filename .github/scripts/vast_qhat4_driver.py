@@ -81,7 +81,8 @@ def start_response_summary(status, payload):
         'no_such_instance', 'not_found', 'rate_limit_exceeded',
     }
     safe_error = (
-        error_code if isinstance(error_code, str) and error_code in known_errors
+        error_code if isinstance(error_code, str) and
+        (error_code in known_errors or re.fullmatch(r'[A-Za-z0-9_]{1,64}', error_code))
         else 'other' if error_code else 'none'
     )
     message = payload.get('msg') or payload.get('detail')
