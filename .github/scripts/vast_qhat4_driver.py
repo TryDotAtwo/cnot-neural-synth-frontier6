@@ -66,6 +66,34 @@ def vast(args, timeout=60):
         raise GateError('Vast query could not be verified') from None
 
 
+def start_response_summary(status, payload):
+    if not isinstance(payload, dict):
+        return {
+            'start_api_http_status': status,
+            'start_api_success': 'unknown',
+            'start_api_error': 'unparsed',
+            'start_api_message_present': 'unknown',
+        }, False
+
+    error_code = payload.get('error')
+    known_errors = {
+        'auth_error', 'invalid_args', 'label_too_long', 'missing_billing',
+        'no_such_instance', 'not_found', 'rate_limit_exceeded',
+    }
+    safe_error = (
+        error_code if isinstance(error_code, str) and error_code in known_errors
+        else 'other' if error_code else 'none'
+    )
+    message = payload.get('msg') or payload.get('detail')
+    summary = {
+        'start_api_http_status': status,
+        'start_api_success': 'true' if payload.get('success') is True else 'false' if payload.get('success') is False else 'unknown',
+        'start_api_error': safe_error,
+        'start_api_message_present': 'true' if isinstance(message, str) and bool(message.strip()) else 'false',
+    }
+    return summary, payload.get('success') is True
+
+
 def vast_start_instance(timeout=75):
     key = env_value('VAST_API_KEY')
     request = urllib.request.Request(
@@ -78,8 +106,25 @@ def vast_start_instance(timeout=75):
         with urllib.request.urlopen(request, timeout=timeout) as response:
             if response.status < 200 or response.status >= 300:
                 raise GateError('Vast start request was rejected')
-            response.read()
+            body = response.read()
+            try:
+                payload = json.loads(body.decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                payload = None
+            summary, accepted = start_response_summary(response.status, payload)
+            print('start_api_result=' + json.dumps(summary, sort_keys=True, separators=(',', ':')))
+            write_output(summary)
+            if not accepted:
+                raise GateError('Vast start response did not confirm success')
     except urllib.error.HTTPError as error:
+        try:
+            body = error.read()
+            payload = json.loads(body.decode('utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
+        summary, _ = start_response_summary(error.code, payload)
+        print('start_api_result=' + json.dumps(summary, sort_keys=True, separators=(',', ':')))
+        write_output(summary)
         if 400 <= error.code < 500:
             raise GateError('Vast start request was rejected') from None
         raise GateError('Vast start request timed out or was not confirmed') from None
