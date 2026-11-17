@@ -1,5 +1,5 @@
 name: Vast RTX 3060 Qhat4 epoch
-run-name: Qhat sample-4 full-model epoch with checked Vast start reply
+run-name: Qhat sample-4 full-model epoch with safe Vast error code
 
 on:
   push:
