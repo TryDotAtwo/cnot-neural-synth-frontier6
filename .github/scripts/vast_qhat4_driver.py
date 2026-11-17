@@ -70,7 +70,7 @@ def vast_start_instance(timeout=75):
     key = env_value('VAST_API_KEY')
     try:
         proc = subprocess.run(
-            ['vastai', '--api-key', key, 'start', 'instance', str(INSTANCE_ID), '--raw'],
+            ['vastai', '--api-key', key, '--retry', '1', 'start', 'instance', str(INSTANCE_ID), '--raw'],
             capture_output=True, timeout=timeout, check=False,
         )
     except subprocess.TimeoutExpired:
@@ -271,10 +271,22 @@ def start():
         raise
     mark_started()
     deadline = time.monotonic() + 15 * 60
+    allowed_states = {
+        'running', 'stopped', 'starting', 'stopping', 'scheduling',
+        'loading', 'created', 'offline', 'unknown', 'exited', 'error',
+    }
+    last_actual = 'unknown'
+    last_intended = 'unknown'
+    last_endpoint = 'not_checked'
     while time.monotonic() < deadline:
         state = get_instance()
+        actual = state.get('actual_status')
+        intended = state.get('intended_status')
+        last_actual = actual.strip().lower() if isinstance(actual, str) and actual.strip().lower() in allowed_states else 'other'
+        last_intended = intended.strip().lower() if isinstance(intended, str) and intended.strip().lower() in allowed_states else 'other'
         if state.get('actual_status') == 'running' and state.get('intended_status') == 'running':
             endpoint = ssh_endpoint(get_api_instance())
+            last_endpoint = 'available' if endpoint else 'unavailable'
             if endpoint:
                 mark_key_attached()
                 attach_ephemeral_key(pubkey)
@@ -282,6 +294,13 @@ def start():
                 print('start_gate=pass')
                 return
         time.sleep(10)
+    diagnostic = {
+        'start_actual_status': last_actual,
+        'start_intended_status': last_intended,
+        'start_ssh_endpoint': last_endpoint,
+    }
+    write_output(diagnostic)
+    print('start_timeout=' + json.dumps(diagnostic, sort_keys=True, separators=(',', ':')))
     raise GateError('the existing instance did not start within the bounded window')
 
 
