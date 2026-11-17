@@ -7,6 +7,7 @@ Private detailed results stay on Vast; public status contains allowlisted gates.
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
@@ -178,14 +179,78 @@ def main():
         assert header['progress']==report['end_progress']
         return {'sha256':pointer['sha256'],'bytes':path.stat().st_size,'path':str(path),
                 'sampler_cursor':header['sampler']['cursor'],'sampler_epochs':header['sampler']['epochs']}
-    def train(label,cfg,timeout,expect_success=True):
+    def parse_stage_profile(path):
+        try:
+            lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+        except OSError:
+            return None
+        profiles = []
+        for line in lines:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict) and value.get('schema') == 'cnot103_stage_profile_v1':
+                profiles.append(value)
+        if len(profiles) != 1:
+            return None
+        profile = profiles[0]
+        number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+        stages = profile.get('stages')
+        if (not number(profile.get('wall_ms')) or not number(profile.get('unattributed_ms'))
+                or not isinstance(stages, dict) or not stages):
+            return None
+        clean_stages = {}
+        for name, stage in stages.items():
+            if (not isinstance(name, str) or not isinstance(stage, dict)
+                    or not isinstance(stage.get('calls'), int) or isinstance(stage.get('calls'), bool)
+                    or stage['calls'] < 0 or not number(stage.get('exclusive_ms'))
+                    or not number(stage.get('inclusive_ms'))):
+                return None
+            clean_stages[name] = {
+                'calls': stage['calls'],
+                'exclusive_ms': stage['exclusive_ms'],
+                'inclusive_ms': stage['inclusive_ms'],
+            }
+        chunk_start = profile.get('candidate_chunk_start_index')
+        if not isinstance(chunk_start, int) or isinstance(chunk_start, bool) or chunk_start < 0:
+            return None
+        chunk_times = profile.get('candidate_chunk_seconds')
+        if not isinstance(chunk_times, list) or not all(number(value) for value in chunk_times):
+            return None
+        chunk_probe = profile.get('candidate_chunk_probe')
+        if chunk_probe is not None:
+            if (not isinstance(chunk_probe, dict)
+                    or not isinstance(chunk_probe.get('limit'), int)
+                    or isinstance(chunk_probe.get('limit'), bool) or chunk_probe['limit'] < 0
+                    or not isinstance(chunk_probe.get('completed'), int)
+                    or isinstance(chunk_probe.get('completed'), bool) or chunk_probe['completed'] < 0):
+                return None
+            chunk_probe = {'limit': chunk_probe['limit'], 'completed': chunk_probe['completed']}
+        return {
+            'schema': 'cnot103_stage_profile_v1',
+            'wall_ms': profile['wall_ms'],
+            'unattributed_ms': profile['unattributed_ms'],
+            'candidate_chunk_probe': chunk_probe,
+            'candidate_chunk_start_index': chunk_start,
+            'candidate_chunk_seconds': chunk_times,
+            'stages': clean_stages,
+        }
+
+    def train(label,cfg,timeout,expect_success=True,run_env=None,capture_stage_profile=False):
         manifests=OUT/'durable-manifests';manifests.mkdir(exist_ok=True)
         manifest_path=manifests/(label+'.json');f.write(manifest_path,cfg)
-        folder,code,wall,samples=f.command(label,[str(bins/'cnot103-train'),str(manifest_path)],f.env,timeout,True)
+        command_env = f.env if run_env is None else run_env
+        folder,code,wall,samples=f.command(label,[str(bins/'cnot103-train'),str(manifest_path)],command_env,timeout,True)
         row={'name':label,'returncode':code,'wall_seconds':wall,'manifest_sha256':sha(manifest_path),
              'binary_sha256':sha(bins/'cnot103-train'),
              'gpu_peak_sampled_mib':max((s['memory_mib'] for s in samples),default=None),
              'gpu_mean_sampled_util':sum(s['util_percent'] for s in samples)/len(samples) if samples else None}
+        if capture_stage_profile:
+            profile = parse_stage_profile(folder/'stderr')
+            row['stage_profile_status'] = 'captured' if profile is not None else 'missing_or_invalid'
+            if profile is not None:
+                row['stage_profile'] = profile
         stderr=(folder/'stderr').read_text(errors='replace')
         if not expect_success:
             row['complete']=code!=0 and 'checkpoint contract differs' in stderr.lower()
@@ -249,6 +314,31 @@ def main():
     PUBLIC_STATUS.update(experiment='complete',
         qhat4_quality_gate='pass' if quality_gate else 'fail')
     write_public_status()
+    profile_label = 'stage-profile-qhat4-64-updates'
+    profile_env = dict(f.env)
+    profile_env['CNOT103_STAGE_PROFILE'] = '1'
+    try:
+        profile_row, _, _ = train(
+            profile_label,
+            durable_config('full10000-dev32',64,OUT/'checkpoint-stage-profile-64'),
+            600,
+            run_env=profile_env,
+            capture_stage_profile=True,
+        )
+        if not profile_row.get('complete'):
+            profile_row['stage_profile_status'] = 'run_failed'
+            save()
+    except Exception:
+        if not any(row.get('name') == profile_label for row in f.rows):
+            f.rows.append({
+                'name': profile_label,
+                'complete': False,
+                'stage_profile_status': 'run_failed',
+            })
+            try:
+                save()
+            except Exception:
+                pass
     f.status('finished')
 
 if __name__ == '__main__':
