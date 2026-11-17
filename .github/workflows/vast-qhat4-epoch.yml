@@ -1,4 +1,5 @@
 name: Vast RTX 3060 Qhat4 epoch
+run-name: Qhat sample-4 full-model epoch and dev gate
 
 on:
   push:
