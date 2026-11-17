@@ -68,17 +68,23 @@ def vast(args, timeout=60):
 
 def vast_start_instance(timeout=75):
     key = env_value('VAST_API_KEY')
+    request = urllib.request.Request(
+        f'{VAST_API}/instances/{INSTANCE_ID}/',
+        data=json.dumps({'state': 'running'}).encode('utf-8'),
+        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+        method='PUT',
+    )
     try:
-        proc = subprocess.run(
-            ['vastai', '--api-key', key, '--retry', '1', 'start', 'instance', str(INSTANCE_ID), '--raw'],
-            capture_output=True, timeout=timeout, check=False,
-        )
-    except subprocess.TimeoutExpired:
-        raise GateError('Vast start request timed out') from None
-    except OSError:
-        raise GateError('Vast start request could not be issued') from None
-    if proc.returncode:
-        raise GateError('Vast start request failed')
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status < 200 or response.status >= 300:
+                raise GateError('Vast start request was rejected')
+            response.read()
+    except urllib.error.HTTPError as error:
+        if 400 <= error.code < 500:
+            raise GateError('Vast start request was rejected') from None
+        raise GateError('Vast start request timed out or was not confirmed') from None
+    except (urllib.error.URLError, TimeoutError):
+        raise GateError('Vast start request timed out or was not confirmed') from None
 
 
 def get_instance():
@@ -262,9 +268,7 @@ def start():
         if 'timed out' in str(error):
             try:
                 state = get_instance()
-                if state.get('intended_status') == 'running' and state.get('actual_status') in (
-                    'running', 'starting', 'scheduling', 'loading',
-                ):
+                if state.get('intended_status') == 'running':
                     mark_started()
             except GateError:
                 pass
