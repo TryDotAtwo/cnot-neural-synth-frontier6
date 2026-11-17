@@ -66,6 +66,21 @@ def vast(args, timeout=60):
         raise GateError('Vast query could not be verified') from None
 
 
+def vast_start_instance(timeout=75):
+    key = env_value('VAST_API_KEY')
+    try:
+        proc = subprocess.run(
+            ['vastai', '--api-key', key, 'start', 'instance', str(INSTANCE_ID), '--raw'],
+            capture_output=True, timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise GateError('Vast start request timed out') from None
+    except OSError:
+        raise GateError('Vast start request could not be issued') from None
+    if proc.returncode:
+        raise GateError('Vast start request failed')
+
+
 def get_instance():
     rows = vast(['show', 'instances', '--raw'])
     if not isinstance(rows, list):
@@ -241,8 +256,20 @@ def mark_key_attached():
 def start():
     preflight()
     pubkey = generate_key()
+    try:
+        vast_start_instance()
+    except GateError as error:
+        if 'timed out' in str(error):
+            try:
+                state = get_instance()
+                if state.get('intended_status') == 'running' and state.get('actual_status') in (
+                    'running', 'starting', 'scheduling', 'loading',
+                ):
+                    mark_started()
+            except GateError:
+                pass
+        raise
     mark_started()
-    vast(['start', 'instance', str(INSTANCE_ID)], timeout=75)
     deadline = time.monotonic() + 15 * 60
     while time.monotonic() < deadline:
         state = get_instance()
@@ -570,6 +597,8 @@ def failure_category(error):
     message = str(error).lower()
     if 'budget' in message or 'billing' in message:
         return 'budget'
+    if 'vast start' in message:
+        return 'vast_start'
     if 'ssh' in message:
         return 'ssh'
     if 'remote' in message or 'dataset' in message or 'trainer' in message:
