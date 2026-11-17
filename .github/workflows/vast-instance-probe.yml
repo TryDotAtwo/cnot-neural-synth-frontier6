@@ -1,0 +1,288 @@
+name: Vast guarded startup probe
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: vast-guarded-startup-probe
+  cancel-in-progress: false
+
+jobs:
+  guarded-probe:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+      VAST_INSTANCE_ID: ${{ vars.VAST_INSTANCE_ID }}
+    steps:
+      - name: Read provider state and guard remote access
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          api_key = os.environ.get("VAST_API_KEY", "")
+          instance_id = os.environ.get("VAST_INSTANCE_ID", "")
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "vast-probe-report.json"
+          connection_path = Path(os.environ["RUNNER_TEMP"]) / "vast-probe-connection.json"
+          allowed_states = {
+              "running", "stopped", "starting", "stopping", "scheduling",
+              "loading", "created", "offline", "unknown", "exited", "error",
+          }
+          checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+          report = {
+              "schema": "vast-guarded-startup-probe-v1",
+              "checked_at_utc": checked_at,
+              "instance_found": False,
+              "provider_state": "not_checked",
+              "remote_probe": "not_run",
+              "reason": "not_checked",
+              "mutation_performed": False,
+              "raw_remote_output_published": False,
+              "ok": False,
+          }
+          connection = None
+
+          def safe_state(value):
+              if not isinstance(value, str):
+                  return "unavailable"
+              value = value.strip().lower()
+              return value if value in allowed_states else "other"
+
+          try:
+              if not api_key or not re.fullmatch(r"[0-9]{1,20}", instance_id):
+                  report["reason"] = "missing_configuration"
+              else:
+                  request = Request(
+                      "https://console.vast.ai/api/v0/instances/",
+                      headers={
+                          "Authorization": f"Bearer {api_key}",
+                          "Accept": "application/json",
+                          "User-Agent": "TheQuantumProject-GitHub-Actions/1.0",
+                      },
+                      method="GET",
+                  )
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.loads(response.read())
+                  if isinstance(payload, list):
+                      records = payload
+                  elif isinstance(payload, dict) and isinstance(payload.get("instances"), list):
+                      records = payload["instances"]
+                  else:
+                      records = None
+                  if records is None:
+                      report["reason"] = "unexpected_response_shape"
+                  else:
+                      matches = [
+                          row for row in records
+                          if isinstance(row, dict) and str(row.get("id")) == instance_id
+                      ]
+                      if len(matches) != 1:
+                          report["reason"] = (
+                              "fixed_instance_not_found" if not matches
+                              else "fixed_instance_ambiguous"
+                          )
+                      else:
+                          row = matches[0]
+                          state = safe_state(row.get("actual_status"))
+                          if state == "unavailable":
+                              state = safe_state(row.get("cur_state"))
+                          report["instance_found"] = True
+                          report["provider_state"] = state
+                          if state == "running":
+                              host = row.get("ssh_host")
+                              port = row.get("ssh_port")
+                              if (
+                                  isinstance(host, str)
+                                  and re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host)
+                                  and isinstance(port, int)
+                                  and 1 <= port <= 65535
+                              ):
+                                  connection = {"host": host, "port": port, "instance_id": instance_id}
+                                  report["remote_probe"] = "ssh_pending"
+                                  report["reason"] = "provider_running"
+                                  report["ok"] = True
+                              else:
+                                  report["reason"] = "ssh_endpoint_unavailable"
+                          else:
+                              report["remote_probe"] = "skipped"
+                              report["reason"] = "provider_not_running"
+                              report["ok"] = True
+          except HTTPError as exc:
+              report["reason"] = f"http_{exc.code}"
+          except URLError:
+              report["reason"] = "network_error"
+          except (json.JSONDecodeError, UnicodeDecodeError):
+              report["reason"] = "invalid_json_response"
+          except Exception:
+              report["reason"] = "unexpected_client_error"
+
+          if connection is not None:
+              connection_path.write_text(json.dumps(connection), encoding="utf-8")
+          report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output_file:
+              output_file.write(f"provider_state={report['provider_state']}\n")
+              output_file.write(f"ssh_required={'true' if connection is not None else 'false'}\n")
+          print(
+              "Provider preflight completed; state="
+              f"{report['provider_state']}; SSH required={'yes' if connection is not None else 'no'}."
+          )
+          if not report["ok"]:
+              sys.exit(1)
+          PY
+
+      - name: Read only the fixed startup marker over SSH
+        id: remote_probe
+        if: steps.preflight.outputs.ssh_required == 'true'
+        shell: bash
+        env:
+          VAST_SSH_PRIVATE_KEY: ${{ secrets.VAST_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import shlex
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "vast-probe-report.json"
+          connection_path = Path(os.environ["RUNNER_TEMP"]) / "vast-probe-connection.json"
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          key_text = os.environ.get("VAST_SSH_PRIVATE_KEY", "")
+          if not key_text:
+              report["remote_probe"] = "failed"
+              report["reason"] = "ssh_key_not_configured"
+              report["ok"] = False
+              report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+              sys.exit(1)
+
+          try:
+              connection = json.loads(connection_path.read_text(encoding="utf-8"))
+              host = connection["host"]
+              port = int(connection["port"])
+              instance_id = connection["instance_id"]
+              if (
+                  not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host)
+                  or not re.fullmatch(r"[0-9]{1,20}", str(instance_id))
+                  or not 1 <= port <= 65535
+              ):
+                  raise ValueError("invalid endpoint")
+
+              runner_temp = Path(os.environ["RUNNER_TEMP"])
+              key_path = runner_temp / "vast-probe-key"
+              known_hosts = runner_temp / "vast-probe-known-hosts"
+              key_path.write_text(key_text.rstrip() + "\n", encoding="utf-8")
+              key_path.chmod(0o600)
+              remote_path = (
+                  "/workspace/cnot103-full3060/longrun-v84-state-"
+                  f"{instance_id}/longrun-startup-status.txt"
+              )
+              remote_command = (
+                  f"if test -r {shlex.quote(remote_path)}; "
+                  f"then head -c 64 {shlex.quote(remote_path)}; else exit 44; fi"
+              )
+              env = {k: v for k, v in os.environ.items() if k != "VAST_SSH_PRIVATE_KEY"}
+              completed = subprocess.run(
+                  [
+                      "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                      "-o", "StrictHostKeyChecking=accept-new",
+                      "-o", f"UserKnownHostsFile={known_hosts}", "-o", "LogLevel=ERROR",
+                      "-o", "IdentitiesOnly=yes", "-i", str(key_path),
+                      "-p", str(port), f"root@{host}", remote_command,
+                  ],
+                  env=env,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  timeout=20,
+                  check=False,
+              )
+              if completed.returncode == 0 and completed.stdout.strip() == b"watchdog-armed":
+                  report["remote_probe"] = "startup_marker_present"
+                  report["reason"] = "fixed_marker_matched"
+                  report["ok"] = True
+              elif completed.returncode == 44:
+                  report["remote_probe"] = "startup_marker_missing"
+                  report["reason"] = "fixed_marker_not_found"
+                  report["ok"] = True
+              else:
+                  report["remote_probe"] = "failed"
+                  report["reason"] = "ssh_or_marker_check_failed"
+                  report["ok"] = False
+              report["ssh_attempted"] = True
+          except subprocess.TimeoutExpired:
+              report["remote_probe"] = "failed"
+              report["reason"] = "ssh_timeout"
+              report["ssh_attempted"] = True
+              report["ok"] = False
+          except Exception:
+              report["remote_probe"] = "failed"
+              report["reason"] = "ssh_client_error"
+              report["ssh_attempted"] = True
+              report["ok"] = False
+          finally:
+              try:
+                  key_path.unlink(missing_ok=True)
+                  known_hosts.unlink(missing_ok=True)
+                  connection_path.unlink(missing_ok=True)
+              except Exception:
+                  pass
+
+          report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          print(
+              "Fixed remote marker probe completed; result="
+              f"{report['remote_probe']}; raw output was not published."
+          )
+          if not report["ok"]:
+              sys.exit(1)
+          PY
+
+      - name: Write a redacted Actions summary
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "vast-probe-report.json"
+          if report_path.exists():
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+          else:
+              report = {"provider_state": "not_checked", "remote_probe": "not_run", "reason": "no_report"}
+          summary = (
+              "## Vast guarded startup probe\n\n"
+              f"- Provider state: `{report.get('provider_state', 'not_checked')}`\n"
+              f"- Fixed remote marker: `{report.get('remote_probe', 'not_run')}`\n"
+              f"- Reason: `{report.get('reason', 'unknown')}`\n"
+              f"- Vast mutation: `{'yes' if report.get('mutation_performed') else 'none'}`\n"
+              "- Raw remote output: `not published`\n"
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary_file:
+              summary_file.write(summary)
+          PY
+
+      - name: Save the redacted probe report in Actions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-probe-${{ steps.preflight.outputs.provider_state }}-ssh-${{ steps.preflight.outputs.ssh_required }}-${{ github.run_id }}
+          path: ${{ github.workspace }}/vast-probe-report.json
+          if-no-files-found: warn
+          retention-days: 7
