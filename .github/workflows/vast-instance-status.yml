@@ -1,0 +1,154 @@
+name: Vast instance status
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "17 * * * *"
+  push:
+    branches:
+      - codex/vast-runner-status
+    paths:
+      - .github/workflows/vast-instance-status.yml
+      - AGENTS.md
+
+permissions: {}
+
+concurrency:
+  group: vast-instance-status
+  cancel-in-progress: false
+
+jobs:
+  read-only-status:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+      VAST_INSTANCE_ID: ${{ vars.VAST_INSTANCE_ID }}
+    steps:
+      - name: Query the fixed instance with GET only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          api_key = os.environ.get("VAST_API_KEY", "")
+          instance_id = os.environ.get("VAST_INSTANCE_ID", "")
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "vast-status-report.json"
+          allowed_states = {
+              "running", "stopped", "starting", "stopping", "scheduling",
+              "loading", "created", "offline", "unknown", "exited", "error",
+          }
+          checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+          report = {
+              "schema": "vast-read-only-status-v1",
+              "checked_at_utc": checked_at,
+              "request": "GET /api/v0/instances/",
+              "instance_found": False,
+              "provider_state": "not_checked",
+              "mutation_performed": False,
+              "remote_shell_accessed": False,
+              "ok": False,
+          }
+
+          def safe_state(value):
+              if not isinstance(value, str):
+                  return "unavailable"
+              normalized = value.strip().lower()
+              return normalized if normalized in allowed_states else "other"
+
+          try:
+              if not api_key or not re.fullmatch(r"[0-9]{1,20}", instance_id):
+                  report["failure"] = "missing_configuration"
+              else:
+                  request = Request(
+                      "https://console.vast.ai/api/v0/instances/",
+                      headers={
+                          "Authorization": f"Bearer {api_key}",
+                          "Accept": "application/json",
+                          "User-Agent": "TheQuantumProject-GitHub-Actions/1.0",
+                      },
+                      method="GET",
+                  )
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.loads(response.read())
+                  if isinstance(payload, list):
+                      records = payload
+                  elif isinstance(payload, dict) and isinstance(payload.get("instances"), list):
+                      records = payload["instances"]
+                  else:
+                      records = None
+                  if records is None:
+                      report["failure"] = "unexpected_response_shape"
+                  else:
+                      matches = [
+                          row for row in records
+                          if isinstance(row, dict) and str(row.get("id")) == instance_id
+                      ]
+                      if len(matches) == 1:
+                          row = matches[0]
+                          state = safe_state(row.get("actual_status"))
+                          if state == "unavailable":
+                              state = safe_state(row.get("cur_state"))
+                          if state == "unavailable":
+                              state = safe_state(row.get("next_state"))
+                          report["instance_found"] = True
+                          report["provider_state"] = state
+                          report["ok"] = True
+                      elif len(matches) == 0:
+                          report["failure"] = "fixed_instance_not_found"
+                      else:
+                          report["failure"] = "fixed_instance_ambiguous"
+          except HTTPError as exc:
+              report["failure"] = f"http_{exc.code}"
+          except URLError:
+              report["failure"] = "network_error"
+          except (json.JSONDecodeError, UnicodeDecodeError):
+              report["failure"] = "invalid_json_response"
+          except Exception:
+              report["failure"] = "unexpected_client_error"
+
+          report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          if report["ok"]:
+              summary = (
+                  "## Vast read-only status\n\n"
+                  f"- Checked: `{checked_at}`\n"
+                  f"- Fixed instance match: `yes`\n"
+                  f"- Provider state: `{report['provider_state']}`\n"
+                  "- Vast mutation: `none`\n"
+                  "- Remote shell: `not used`\n"
+                  "- Raw instance data and training outputs: `not published`\n"
+              )
+              print(f"Vast read-only query succeeded; provider state: {report['provider_state']}.")
+          else:
+              reason = report.get("failure", "unknown_failure")
+              summary = (
+                  "## Vast read-only status\n\n"
+                  f"- Checked: `{checked_at}`\n"
+                  f"- Result: `failed ({reason})`\n"
+                  "- Vast mutation: `none`\n"
+                  "- Raw response: `not published`\n"
+              )
+              print(f"Vast read-only query failed ({reason}).")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary_file:
+              summary_file.write(summary)
+          if not report["ok"]:
+              sys.exit(1)
+          PY
+
+      - name: Save the redacted status report in Actions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-readonly-status-${{ github.run_id }}
+          path: ${{ github.workspace }}/vast-status-report.json
+          if-no-files-found: error
+          retention-days: 7
