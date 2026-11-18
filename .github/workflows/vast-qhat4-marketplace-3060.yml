@@ -1,5 +1,5 @@
 name: Qhat4 full-gradient epoch on RTX 3060
-run-name: Qhat4 full-gradient epoch and quality gates on RTX 3060
+run-name: Qhat4 full-gradient epoch and quality gates on RTX 3060 (wait for stop)
 on:
   push:
     branches:
@@ -20,7 +20,7 @@ jobs:
   train:
     if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
     runs-on: ubuntu-latest
-    timeout-minutes: 185
+    timeout-minutes: 360
     env:
       VAST_INSTANCE_ID: auto
       CNOT103_QHAT4_ROOT: /workspace/qhat4-recovery-${{ github.run_id }}-${{ github.run_attempt }}

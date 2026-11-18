@@ -241,15 +241,23 @@ def api_instance():
     return driver.get_api_instance()
 
 
-def wait_stopped(timeout=180):
+def wait_stopped(timeout=180, interval=10, reissue_if_running=False):
     deadline = time.monotonic() + timeout
+    stop_reissued = False
     while time.monotonic() < deadline:
         row = api_instance()
         if row.get("label") != LABEL or not is_3060(row):
             raise driver.GateError("marketplace target identity changed")
         if status_stopped(row):
             return True
-        time.sleep(10)
+        if (
+            reissue_if_running and not stop_reissued
+            and row.get("actual_status") == "running"
+            and row.get("intended_status") == "stopped"
+        ):
+            stop_by_id()
+            stop_reissued = True
+        time.sleep(interval)
     return False
 
 
@@ -262,33 +270,32 @@ def stop_new_instance_before_copy(row):
 
 
 def select_target():
-    global TARGET_CREATED
     matches = [row for row in instance_rows() if row.get("label") == LABEL]
     if len(matches) > 1:
         raise driver.GateError("stable marketplace label is ambiguous")
-    if matches:
-        row = matches[0]
-        if not is_3060(row):
-            raise driver.GateError("stable label does not identify an RTX 3060")
-        if not status_stopped(row):
-            raise driver.GateError("existing stable-label RTX 3060 is not stopped")
+    if not matches:
+        raise driver.GateError("stable-label RTX 3060 is missing; refusing to create a replacement")
+
+    row = matches[0]
+    if not is_3060(row):
+        raise driver.GateError("stable label does not identify an RTX 3060")
+    if status_stopped(row):
         configure_target(row.get("id"))
         print("marketplace_target=reused")
         return row
 
-    spent = driver.project_charges()
-    offers = eligible_offers()
-    eligible = []
-    for rate, negative_reliability, offer_id in offers:
-        if spent + 3.5 * rate + 5.0 < 20.0:
-            eligible.append((rate, negative_reliability, offer_id))
-    if not eligible:
-        raise driver.GateError("live Vast budget gate rejected all eligible offers")
+    if (
+        row.get("actual_status") not in {"loading", "stopping", "running"}
+        or row.get("intended_status") != "stopped"
+    ):
+        raise driver.GateError("existing stable-label RTX 3060 is not safely stopping")
 
-    _, _, offer_id = eligible[0]
-    row = create_once(offer_id)
-    TARGET_CREATED = True
-    stop_new_instance_before_copy(row)
+    configure_target(row.get("id"))
+    print("marketplace_target=waiting_for_stopped")
+    if not wait_stopped(timeout=7200, interval=30, reissue_if_running=True):
+        raise driver.GateError("existing stable-label RTX 3060 did not reach stopped within wait window")
+    row = api_instance()
+    print("marketplace_target=reused")
     return row
 
 
@@ -323,7 +330,7 @@ def finalize():
         try:
             if started or key_attached:
                 driver.stop_if_owned()
-            elif TARGET_CREATED:
+            else:
                 current = api_instance()
                 if not status_stopped(current):
                     stop_by_id()
