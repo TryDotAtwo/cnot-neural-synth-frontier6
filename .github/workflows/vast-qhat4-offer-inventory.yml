@@ -63,6 +63,25 @@ jobs:
           from vast_qhat4_driver import project_charges
 
           spent = project_charges()
+          instances = cli_json(['show', 'instances'])
+          if not isinstance(instances, list):
+              raise RuntimeError('instance_shape_invalid')
+          for role, ident, labels in (
+              ('source', 61081857, {'cnot103-longrun-original-3060-v84', 'cnot103-longrun-original-3060-v84-r2'}),
+              ('fallback', 60932086, {'cnot103-original-full-rtx3060-20261116-v3'}),
+          ):
+              matches = [x for x in instances if isinstance(x, dict) and str(x.get('id')) == str(ident) and x.get('label') in labels]
+              if len(matches) == 1:
+                  row = matches[0]
+                  image = row.get('image') or row.get('docker_image') or row.get('image_name')
+                  if isinstance(image, str) and image and all(c.isalnum() or c in '._/@:-' for c in image):
+                      print(f'{role}_docker_image={image}')
+                  template = row.get('template_hash_id')
+                  if isinstance(template, str) and template and all(c.isalnum() or c in '._-' for c in template):
+                      print(f'{role}_template_hash={template}')
+                  disk = numeric(row.get('disk_space') or row.get('disk'))
+                  if disk is not None:
+                      print(f'{role}_disk_gb={disk:g}')
           rows = offer_rows('gpu_name=RTX_3060 num_gpus=1')
           verified_rows = offer_rows('gpu_name=RTX_3060 num_gpus=1 verified=true')
 
