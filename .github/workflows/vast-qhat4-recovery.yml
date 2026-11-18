@@ -1,0 +1,74 @@
+name: Vast RTX 3060 Qhat4 recovery epoch
+run-name: Qhat4 full-model epoch and dev quality on existing RTX 3060
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vast-qhat4-recovery.yml
+  workflow_dispatch: {}
+
+concurrency:
+  group: cnot103-vast-qhat4-epoch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  one-epoch:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 185
+    env:
+      VAST_STARTED_BY_WORKFLOW: 'false'
+      VAST_EPHEMERAL_KEY_ATTACHED: 'false'
+      VAST_INSTANCE_ID: '60932086'
+      CNOT103_QHAT4_ROOT: '/workspace/qhat4-recovery-${{ github.run_id }}-${{ github.run_attempt }}'
+    steps:
+      - name: Checkout controller and trainer
+        uses: actions/checkout@v4
+
+      - name: Check controller syntax before Vast operations
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          for name in (
+              '.github/scripts/vast_qhat4_driver.py',
+              '.github/scripts/train_qhat4_epoch.py',
+          ):
+              ast.parse(Path(name).read_text(encoding='utf-8'), filename=name)
+          print('controller_syntax=pass')
+          PY
+
+      - name: Install Vast CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli_venv="${RUNNER_TEMP}/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Check budget, copy pinned inputs, and start existing RTX 3060
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_qhat4_driver.py start
+
+      - name: Run the bounded full-model epoch and dev comparison
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_qhat4_driver.py run
+
+      - name: Remove the temporary key and stop only the instance started here
+        if: always()
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: |
+          if [ -f .github/scripts/vast_qhat4_driver.py ]; then
+            python3 .github/scripts/vast_qhat4_driver.py cleanup
+          else
+            echo 'instance_stop=not_started'
+          fi
