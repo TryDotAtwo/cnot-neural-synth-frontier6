@@ -1,5 +1,5 @@
 name: Read Qhat4 marketplace RTX 3060 status
-run-name: Read-only Qhat4 RTX 3060 status recheck 03-50 UTC
+run-name: Read-only Qhat4 RTX 3060 status recheck 06-02 UTC
 on:
   push:
     branches:
