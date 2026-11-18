@@ -1,0 +1,96 @@
+name: Qhat4 RTX 3060 offer inventory
+run-name: Read-only RTX 3060 capacity and budget gate
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vast-qhat4-offer-inventory.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cnot103-vast-qhat4-offer-inventory
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout controller
+        uses: actions/checkout@v4
+
+      - name: Install Vast CLI
+        run: |
+          set -euo pipefail
+          cli_venv="${RUNNER_TEMP}/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Read current charges and verified single-GPU RTX 3060 offers
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          def cli_json(args):
+              proc = subprocess.run(
+                  ['vastai', '--api-key', os.environ['VAST_API_KEY'], *args, '--raw'],
+                  check=False, capture_output=True, text=True, timeout=90,
+              )
+              if proc.returncode:
+                  raise RuntimeError('vast_query_failed')
+              return json.loads(proc.stdout)
+
+          sys.path.insert(0, '.github/scripts')
+          from vast_qhat4_driver import project_charges
+
+          spent = project_charges()
+          rows = cli_json([
+              'search', 'offers',
+              'gpu_name=RTX_3060 num_gpus=1 gpu_ram>=12000 compute_cap>=8.6 reliability>=0.99 verified=true rentable=true direct_port_count>=1',
+              '--order=dph_total', '--limit=100',
+          ])
+          if isinstance(rows, dict):
+              rows = rows.get('offers', rows.get('results'))
+          if not isinstance(rows, list):
+              raise RuntimeError('offer_shape_invalid')
+
+          def number(value):
+              return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+          eligible = []
+          for row in rows:
+              if not isinstance(row, dict):
+                  continue
+              name = str(row.get('gpu_name', '')).casefold().replace(' ', '').replace('_', '')
+              if ('rtx' not in name or '3060' not in name
+                      or row.get('num_gpus') != 1
+                      or not number(row.get('gpu_ram')) or row['gpu_ram'] < 12000
+                      or not number(row.get('compute_cap')) or row['compute_cap'] < 8.6
+                      or not number(row.get('reliability')) or row['reliability'] < 0.99
+                      or row.get('verified') is not True or row.get('rentable') is not True
+                      or not number(row.get('dph_total')) or row['dph_total'] <= 0
+                      or not number(row.get('direct_port_count')) or row['direct_port_count'] < 1):
+                  continue
+              rate = float(row['dph_total'])
+              if spent + 3.5 * rate + 5.0 < 20.0:
+                  eligible.append(rate)
+
+          print('offer_inventory=complete')
+          print(f'eligible_verified_rtx3060_count={len(eligible)}')
+          if eligible:
+              print(f'lowest_eligible_total_usd_per_hour={min(eligible):.4f}')
+              print('budget_gate=pass runtime_reserve_hours=3.5 transfer_reserve_usd=5.00')
+          else:
+              print('budget_gate=no_eligible_offer_under_cap')
+          PY
