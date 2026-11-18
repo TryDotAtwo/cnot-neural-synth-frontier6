@@ -25,6 +25,7 @@ jobs:
       VAST_STARTED_BY_WORKFLOW: 'false'
       VAST_EPHEMERAL_KEY_ATTACHED: 'false'
       VAST_INSTANCE_ID: 'auto'
+      VAST_AUTO_TARGET_SKIP_RANK: '1'
       CNOT103_QHAT4_ROOT: '/workspace/qhat4-recovery-${{ github.run_id }}-${{ github.run_attempt }}'
     steps:
       - name: Checkout controller and trainer
