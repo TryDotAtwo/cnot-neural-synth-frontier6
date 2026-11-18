@@ -1,5 +1,5 @@
 name: Stop Qhat4 marketplace RTX 3060
-run-name: Cleanup-only Qhat4 RTX 3060 stop verification
+run-name: Cleanup-only Qhat4 RTX 3060 stop verification 14-45 UTC
 on:
   push:
     branches:
