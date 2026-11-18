@@ -118,6 +118,8 @@ def main():
         last_actual = "unknown"
         last_intended = "unknown"
         for attempt in range(91):
+            if attempt > 0 and attempt % 6 == 0:
+                stop(instance_id)
             current = instance_detail(instance_id)
             if current.get("label") != LABEL or not is_3060(current):
                 print("cleanup_target=identity_mismatch")
