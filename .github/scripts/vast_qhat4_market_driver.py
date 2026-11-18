@@ -148,7 +148,7 @@ def eligible_offers():
 
 
 def create_once(offer_id):
-    global CREATE_ATTEMPTED
+    global CREATE_ATTEMPTED, TARGET_CREATED
     command = [
         "vastai", "--api-key", driver.env_value("VAST_API_KEY"),
         "create", "instance", str(offer_id),
@@ -161,7 +161,14 @@ def create_once(offer_id):
             command, capture_output=True, timeout=120, check=False
         )
     except (OSError, subprocess.TimeoutExpired):
-        raise driver.GateError("single marketplace create request was not confirmed") from None
+        print("instance_create=response_uncertain")
+        row = resolve_label()
+        if row is None:
+            raise driver.GateError("single marketplace create request was not confirmed") from None
+        configure_target(row.get("id"))
+        TARGET_CREATED = True
+        print("marketplace_target=created")
+        return row
 
     try:
         payload = json.loads(proc.stdout.decode("utf-8"))
@@ -174,7 +181,7 @@ def create_once(offer_id):
         if re.fullmatch(r"[0-9]{1,20}", str(candidate)):
             reported_id = str(candidate)
             configure_target(reported_id)
-            globals()["TARGET_CREATED"] = True
+            TARGET_CREATED = True
 
     response_accepted = (
         proc.returncode == 0
