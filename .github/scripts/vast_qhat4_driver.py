@@ -189,11 +189,11 @@ def prepare_fallback_inputs():
         and isinstance(source_location, str) and isinstance(target_location, str)
         and source_location.strip().casefold() == target_location.strip().casefold()
     )
-    if not same_machine and not same_local_network:
-        print('input_copy_preflight=blocked network=non_local')
-        raise GateError('source and destination are not on the same host or local network')
-    transfer_mode = 'same_machine' if same_machine else 'same_local_network'
-    if not same_local_network and not same_machine:
+    if same_machine:
+        transfer_mode = 'same_machine'
+    elif same_local_network:
+        transfer_mode = 'same_local_network'
+    else:
         transfer_mode = 'internet'
         rate = target.get('dph_total')
         if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0:
