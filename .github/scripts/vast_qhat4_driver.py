@@ -253,8 +253,8 @@ def select_existing_target():
     envfile = os.environ.get('GITHUB_ENV')
     if envfile:
         with open(envfile, 'a', encoding='utf-8') as stream:
-            stream.write(f'VAST_SELECTED_INSTANCE_ID={ident}\\n')
-            stream.write(f'VAST_SELECTED_INSTANCE_LABEL={label}\\n')
+            stream.write(f'VAST_SELECTED_INSTANCE_ID={ident}\n')
+            stream.write(f'VAST_SELECTED_INSTANCE_LABEL={label}\n')
     print('target_selection=selected existing_rtx3060=1')
 
 
