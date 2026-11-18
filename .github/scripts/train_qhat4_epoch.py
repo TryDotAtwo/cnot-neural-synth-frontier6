@@ -20,7 +20,7 @@ RUN_TAG = os.environ.get('CNOT103_QHAT4_RUN_TAG', 'manual')
 if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', RUN_TAG):
     raise ValueError('invalid Qhat4 run tag')
 OUT = ROOT / f'batched-probe-v18-qhat4-{RUN_TAG}'
-V84_INPUT = ROOT / 'longrun-v84-20261117-r2' / 'longrun-input-v84'
+V84_INPUT = ROOT / 'longrun-input-v84'
 SOURCE_ARCHIVE = V84_INPUT / 'proposal-source.tar.gz'
 SOURCE_RECEIPT = V84_INPUT / 'proposal-source-receipt.json'
 EXPECTED_SOURCE_SHA256 = '404004ac816b159705d904664f815f31ac8e2aee59d33fd9b3672af1eeb7ac4f'
