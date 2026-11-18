@@ -75,33 +75,54 @@ jobs:
           def truth(value):
               return value is True or value == 1 or (isinstance(value, str) and value.casefold() == 'true')
 
-          candidates = []
+          single = []
           for row in rows:
               if not isinstance(row, dict):
                   continue
               name = str(row.get('gpu_name', '')).casefold().replace(' ', '').replace('_', '')
-              ngpu = numeric(row.get('num_gpus'))
-              if 'rtx' not in name or '3060' not in name or ngpu != 1:
-                  continue
+              if 'rtx' in name and '3060' in name and numeric(row.get('num_gpus')) == 1:
+                  single.append(row)
+
+          counts = {
+              'ram12': 0, 'compute86': 0, 'reliability95': 0, 'verified': 0,
+              'rentable': 0, 'direct_ssh': 0, 'hardware_eligible': 0,
+              'within_budget': 0,
+          }
+          hardware_rates = []
+          eligible_rates = []
+          for row in single:
               ram = numeric(row.get('gpu_ram'))
               cc = numeric(row.get('compute_cap'))
               reliability = numeric(row.get('reliability'))
               rate = numeric(row.get('dph_total'))
               ports = numeric(row.get('direct_port_count'))
-              if (ram is None or ram < 12000 or cc is None or cc < 8.6
-                      or reliability is None or reliability < 0.95
-                      or not truth(row.get('verified')) or not truth(row.get('rentable'))
-                      or rate is None or rate <= 0 or ports is None or ports < 1):
-                  continue
-              if spent + 3.5 * rate + 5.0 < 20.0:
-                  candidates.append(rate)
+              checks = {
+                  'ram12': ram is not None and ram >= 12000,
+                  'compute86': cc is not None and cc >= 8.6,
+                  'reliability95': reliability is not None and reliability >= 0.95,
+                  'verified': truth(row.get('verified')),
+                  'rentable': truth(row.get('rentable')),
+                  'direct_ssh': ports is not None and ports >= 1,
+              }
+              for key, ok in checks.items():
+                  counts[key] += int(ok)
+              hardware_ok = all(checks.values()) and rate is not None and rate > 0
+              if hardware_ok:
+                  counts['hardware_eligible'] += 1
+                  hardware_rates.append(rate)
+                  if spent + 3.5 * rate + 5.0 < 20.0:
+                      counts['within_budget'] += 1
+                      eligible_rates.append(rate)
 
           print('offer_inventory=complete')
-          print(f'rtx3060_single_gpu_rows={sum(1 for r in rows if isinstance(r, dict) and "3060" in str(r.get("gpu_name", "")).casefold() and numeric(r.get("num_gpus")) == 1)}')
-          print(f'eligible_12gb_verified_reliable_direct_offers={len(candidates)}')
-          if candidates:
-              print(f'lowest_eligible_total_usd_per_hour={min(candidates):.4f}')
+          print(f'rtx3060_single_gpu_rows={len(single)}')
+          for key, value in counts.items():
+              print(f'{key}_count={value}')
+          if hardware_rates:
+              print(f'lowest_hardware_eligible_total_usd_per_hour={min(hardware_rates):.4f}')
+          if eligible_rates:
+              print(f'lowest_within_budget_total_usd_per_hour={min(eligible_rates):.4f}')
               print('budget_gate=pass runtime_reserve_hours=3.5 transfer_reserve_usd=5.00')
           else:
-              print('budget_gate=no_eligible_offer_under_cap')
+              print('budget_gate=no_hardware_eligible_offer_under_cap')
           PY
