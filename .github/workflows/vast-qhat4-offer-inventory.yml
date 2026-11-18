@@ -51,18 +51,20 @@ jobs:
                   raise RuntimeError('vast_query_failed')
               return json.loads(proc.stdout)
 
+          def offer_rows(query):
+              rows = cli_json(['search', 'offers', query, '--order=dph_total', '--limit=100'])
+              if isinstance(rows, dict):
+                  rows = rows.get('offers', rows.get('results'))
+              if not isinstance(rows, list):
+                  raise RuntimeError('offer_shape_invalid')
+              return rows
+
           sys.path.insert(0, '.github/scripts')
           from vast_qhat4_driver import project_charges
 
           spent = project_charges()
-          rows = cli_json([
-              'search', 'offers', 'gpu_name=RTX_3060 num_gpus=1',
-              '--order=dph_total', '--limit=100',
-          ])
-          if isinstance(rows, dict):
-              rows = rows.get('offers', rows.get('results'))
-          if not isinstance(rows, list):
-              raise RuntimeError('offer_shape_invalid')
+          rows = offer_rows('gpu_name=RTX_3060 num_gpus=1')
+          verified_rows = offer_rows('gpu_name=RTX_3060 num_gpus=1 verified=true')
 
           def numeric(value):
               if isinstance(value, bool) or value is None:
@@ -83,45 +85,36 @@ jobs:
               if 'rtx' in name and '3060' in name and numeric(row.get('num_gpus')) == 1:
                   single.append(row)
 
-          counts = {
-              'ram12': 0, 'compute86': 0, 'reliability95': 0, 'verified': 0,
-              'rentable': 0, 'direct_ssh': 0, 'hardware_eligible': 0,
-              'within_budget': 0,
-          }
           hardware_rates = []
-          eligible_rates = []
+          budget_rates = []
           for row in single:
               ram = numeric(row.get('gpu_ram'))
               cc = numeric(row.get('compute_cap'))
               reliability = numeric(row.get('reliability'))
               rate = numeric(row.get('dph_total'))
               ports = numeric(row.get('direct_port_count'))
-              checks = {
-                  'ram12': ram is not None and ram >= 12000,
-                  'compute86': cc is not None and cc >= 8.6,
-                  'reliability95': reliability is not None and reliability >= 0.95,
-                  'verified': truth(row.get('verified')),
-                  'rentable': truth(row.get('rentable')),
-                  'direct_ssh': ports is not None and ports >= 1,
-              }
-              for key, ok in checks.items():
-                  counts[key] += int(ok)
-              hardware_ok = all(checks.values()) and rate is not None and rate > 0
+              hardware_ok = (
+                  ram is not None and ram >= 12000
+                  and cc is not None and cc >= 8.6
+                  and reliability is not None and reliability >= 0.95
+                  and truth(row.get('rentable'))
+                  and ports is not None and ports >= 1
+                  and rate is not None and rate > 0
+              )
               if hardware_ok:
-                  counts['hardware_eligible'] += 1
                   hardware_rates.append(rate)
                   if spent + 3.5 * rate + 5.0 < 20.0:
-                      counts['within_budget'] += 1
-                      eligible_rates.append(rate)
+                      budget_rates.append(rate)
 
           print('offer_inventory=complete')
           print(f'rtx3060_single_gpu_rows={len(single)}')
-          for key, value in counts.items():
-              print(f'{key}_count={value}')
+          print(f'explicit_verified_search_rows={len(verified_rows)}')
+          print(f'12gb_cc86_reliable_rentable_ssh_rows={len(hardware_rates)}')
+          print(f'within_budget_rows={len(budget_rates)}')
           if hardware_rates:
               print(f'lowest_hardware_eligible_total_usd_per_hour={min(hardware_rates):.4f}')
-          if eligible_rates:
-              print(f'lowest_within_budget_total_usd_per_hour={min(eligible_rates):.4f}')
+          if budget_rates:
+              print(f'lowest_within_budget_total_usd_per_hour={min(budget_rates):.4f}')
               print('budget_gate=pass runtime_reserve_hours=3.5 transfer_reserve_usd=5.00')
           else:
               print('budget_gate=no_hardware_eligible_offer_under_cap')
