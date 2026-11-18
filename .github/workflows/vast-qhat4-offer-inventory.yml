@@ -71,14 +71,21 @@ jobs:
               ('fallback', 60932086, {'cnot103-original-full-rtx3060-20261116-v3'}),
           ):
               matches = [x for x in instances if isinstance(x, dict) and str(x.get('id')) == str(ident) and x.get('label') in labels]
-              if len(matches) == 1:
-                  row = matches[0]
-                  image = row.get('image') or row.get('docker_image') or row.get('image_name')
-                  if isinstance(image, str) and image and all(c.isalnum() or c in '._/@:-' for c in image):
-                      print(f'{role}_docker_image={image}')
-                  template = row.get('template_hash_id')
-                  if isinstance(template, str) and template and all(c.isalnum() or c in '._-' for c in template):
-                      print(f'{role}_template_hash={template}')
+              detail = cli_json(['show', 'instance', str(ident)])
+              if isinstance(detail, list) and len(detail) == 1:
+                  detail = detail[0]
+              row = dict(matches[0]) if len(matches) == 1 else {}
+              if isinstance(detail, dict):
+                  row.update(detail)
+              print(f'{role}_instance_metadata_found={str(bool(row)).lower()}')
+              image = row.get('image') or row.get('docker_image') or row.get('image_name') or row.get('container_image')
+              if isinstance(image, str) and image and all(c.isalnum() or c in '._/@:-' for c in image):
+                  print(f'{role}_docker_image={image}')
+              else:
+                  print(f'{role}_docker_image=unavailable')
+              template = row.get('template_hash_id')
+              if isinstance(template, str) and template and all(c.isalnum() or c in '._-' for c in template):
+                  print(f'{role}_template_hash={template}')
           rows = offer_rows('gpu_name=RTX_3060 num_gpus=1')
           verified_rows = offer_rows('gpu_name=RTX_3060 num_gpus=1 verified=true')
 
