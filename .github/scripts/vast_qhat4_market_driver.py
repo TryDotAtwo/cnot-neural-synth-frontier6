@@ -153,7 +153,8 @@ def eligible_offers():
     if not eligible:
         summary = ",".join(f"{key}:{rejected[key]}" for key in sorted(rejected)) or "none"
         print(f"offer_filter_summary=rows:{len(rows)} eligible:0 rejected:{summary}")
-        raise driver.GateError("no verified RTX 3060 offer meets the hardware gates")    eligible.sort()
+        raise driver.GateError("no verified RTX 3060 offer meets the hardware gates")
+    eligible.sort()
     return eligible
 
 
