@@ -1,5 +1,5 @@
 name: Vast RTX 3060 Qhat4 epoch
-run-name: Qhat4 full-gradient epoch retry 15-24 UTC
+run-name: Qhat4 full-gradient epoch on an eligible existing 3060 15-31 UTC
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
     env:
       VAST_STARTED_BY_WORKFLOW: false
       VAST_EPHEMERAL_KEY_ATTACHED: false
-      CNOT103_QHAT4_ROOT: /workspace/cnot103-full3060
+      CNOT103_QHAT4_ROOT: /workspace/qhat4-recovery-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout controller and trainer
         uses: actions/checkout@v4
@@ -41,20 +41,20 @@ jobs:
       - name: Check budget and start the authorized instance
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-          VAST_INSTANCE_ID: 61081857
+          VAST_INSTANCE_ID: auto
         run: python3 .github/scripts/vast_qhat4_driver.py start
 
       - name: Run the bounded full-model epoch and dev comparison
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-          VAST_INSTANCE_ID: 61081857
+          VAST_INSTANCE_ID: auto
         run: python3 .github/scripts/vast_qhat4_driver.py run
 
       - name: Remove the temporary key and stop only the instance started here
         if: always()
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-          VAST_INSTANCE_ID: 61081857
+          VAST_INSTANCE_ID: auto
         run: |
           if [ -f .github/scripts/vast_qhat4_driver.py ]; then
             python3 .github/scripts/vast_qhat4_driver.py cleanup
