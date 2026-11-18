@@ -57,7 +57,7 @@ def is_3060(row):
 
 def instance_rows():
     rows = driver.vast(
-        ["show", "instances", "--raw", "--limit", "100"], timeout=90
+        ["show", "instances", "--raw"], timeout=90
     )
     if not isinstance(rows, list):
         raise driver.GateError("Vast instance list has an unknown shape")
@@ -349,6 +349,33 @@ def finalize():
     })
 
 
+def safe_failure_code(error):
+    message = str(error).casefold()
+    if "instance list has an unknown shape" in message:
+        return "instance_list_shape"
+    if "stable marketplace label is ambiguous" in message:
+        return "stable_label_ambiguous"
+    if "is not stopped" in message:
+        return "target_not_stopped"
+    if "does not identify an rtx 3060" in message:
+        return "target_gpu_mismatch"
+    if "budget" in message:
+        return "budget_gate"
+    if "offer" in message:
+        return "offer_gate"
+    if "create" in message:
+        return "create_gate"
+    if "copy" in message:
+        return "copy_gate"
+    if "start" in message or "ssh" in message:
+        return "start_gate"
+    if "remote" in message or "dataset" in message or "trainer" in message:
+        return "training_gate"
+    if "instance" in message or "state" in message:
+        return "instance_state"
+    return "operational"
+
+
 def main():
     global MARKETPLACE_GATE
     os.environ.setdefault("VAST_STARTED_BY_WORKFLOW", "false")
@@ -374,6 +401,7 @@ def main():
             category = "operational"
         print("marketplace_gate=fail")
         print(f"failure_category={category}")
+        print(f"runner_failure={safe_failure_code(error)}")
     finally:
         finalize()
 
