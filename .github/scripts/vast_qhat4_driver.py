@@ -24,11 +24,43 @@ INSTANCE_LABELS_BY_ID = {
         'cnot103-original-full-rtx3060-20261116-v3',
     },
 }
-INSTANCE_ID = int(os.environ.get('VAST_INSTANCE_ID', '61081857'))
-if INSTANCE_ID not in INSTANCE_LABELS_BY_ID:
-    raise ValueError('unsupported fixed RTX 3060 instance')
-INSTANCE_LABELS = INSTANCE_LABELS_BY_ID[INSTANCE_ID]
 SOURCE_INSTANCE_ID = 61081857
+OWNED_IDS = {
+    60488802, 60491053, 60509722, 60522214, 60585616, 60586973, 60588069,
+    60621205, 60622406, 60626596, 60642345, 60646895, 60654590, 60658156,
+    60660708, 60667533, 60674887, 60694337, 60695154, 60729505, 60745475,
+    60749603, 60917228, 60919132, 60932086, 61081857,
+}
+REQUESTED_INSTANCE_ID = os.environ.get('VAST_INSTANCE_ID', '61081857').strip()
+SELECTED_INSTANCE_ID = os.environ.get('VAST_SELECTED_INSTANCE_ID', '').strip()
+SELECTED_INSTANCE_LABEL = os.environ.get('VAST_SELECTED_INSTANCE_LABEL', '').strip()
+if SELECTED_INSTANCE_ID:
+    if not re.fullmatch(r'[0-9]{1,20}', SELECTED_INSTANCE_ID):
+        raise ValueError('invalid selected existing instance id')
+    INSTANCE_ID = int(SELECTED_INSTANCE_ID)
+    if INSTANCE_ID not in OWNED_IDS:
+        raise ValueError('selected instance is outside the owned inventory')
+    if SELECTED_INSTANCE_LABEL:
+        if not re.fullmatch(r'(?i)cnot103[a-z0-9_.-]{1,120}', SELECTED_INSTANCE_LABEL):
+            raise ValueError('invalid selected existing instance label')
+        if INSTANCE_ID in INSTANCE_LABELS_BY_ID and SELECTED_INSTANCE_LABEL not in INSTANCE_LABELS_BY_ID[INSTANCE_ID]:
+            raise ValueError('selected existing instance label does not match its fixed identity')
+        INSTANCE_LABELS = {SELECTED_INSTANCE_LABEL}
+    elif INSTANCE_ID in INSTANCE_LABELS_BY_ID:
+        INSTANCE_LABELS = INSTANCE_LABELS_BY_ID[INSTANCE_ID]
+    else:
+        raise ValueError('selected existing instance label is missing')
+elif REQUESTED_INSTANCE_ID == 'auto':
+    INSTANCE_ID = 0
+    INSTANCE_LABELS = set()
+else:
+    try:
+        INSTANCE_ID = int(REQUESTED_INSTANCE_ID)
+    except ValueError:
+        raise ValueError('invalid fixed RTX 3060 instance') from None
+    if INSTANCE_ID not in INSTANCE_LABELS_BY_ID:
+        raise ValueError('unsupported fixed RTX 3060 instance')
+    INSTANCE_LABELS = INSTANCE_LABELS_BY_ID[INSTANCE_ID]
 SOURCE_INSTANCE_LABELS = INSTANCE_LABELS_BY_ID[SOURCE_INSTANCE_ID]
 VAST_ROOT = pathlib.Path(os.environ.get('CNOT103_QHAT4_ROOT', '/workspace/cnot103-full3060'))
 SOURCE_ROOT = pathlib.Path('/workspace/cnot103-full3060')
@@ -36,12 +68,6 @@ TRAINER = '.github/scripts/train_qhat4_epoch.py'
 EXPECTED_DATASET_SHA256 = 'eb71744c2afcef922596bc9956abfd8390a661273fa6461dd277a04fd85e9b86'
 EXPECTED_FULL_TEMPLATE_SHA256 = 'e8bd14165c8176fd602953f8db2fa93c38757e1b1610d24f5ff3e3af03120a94'
 EXPECTED_PROPOSAL_SOURCE_SHA256 = '404004ac816b159705d904664f815f31ac8e2aee59d33fd9b3672af1eeb7ac4f'
-OWNED_IDS = {
-    60488802, 60491053, 60509722, 60522214, 60585616, 60586973, 60588069,
-    60621205, 60622406, 60626596, 60642345, 60646895, 60654590, 60658156,
-    60660708, 60667533, 60674887, 60694337, 60695154, 60729505, 60745475,
-    60749603, 60917228, 60919132, 60932086, 61081857,
-}
 VAST_API = 'https://console.vast.ai/api/v0'
 
 
@@ -167,6 +193,69 @@ def copy_container_path(source_id, source_path, destination_id, destination_path
         raise GateError('the pinned inactive-instance data copy did not finish') from None
     if proc.returncode:
         raise GateError('the pinned inactive-instance data copy did not pass')
+
+
+def select_existing_target():
+    global INSTANCE_ID, INSTANCE_LABELS
+    if REQUESTED_INSTANCE_ID != 'auto' or SELECTED_INSTANCE_ID:
+        return
+    rows = vast(['show', 'instances', '--raw'])
+    if not isinstance(rows, list):
+        raise GateError('Vast instance list has an unknown shape')
+    source_rows = [row for row in rows if isinstance(row, dict)
+                   and str(row.get('id')) == str(SOURCE_INSTANCE_ID)
+                   and row.get('label') in SOURCE_INSTANCE_LABELS]
+    if len(source_rows) != 1:
+        raise GateError('the pinned source instance was not found exactly once')
+    source = source_rows[0]
+    if source.get('actual_status') not in ('stopped', 'exited') or source.get('intended_status') != 'stopped':
+        raise GateError('the pinned source instance is not stopped')
+    rejected_start_ids = {60932086, SOURCE_INSTANCE_ID}
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ident = int(row.get('id'))
+        except (TypeError, ValueError):
+            continue
+        label = row.get('label')
+        gpu = row.get('gpu_name')
+        if (ident not in OWNED_IDS or ident in rejected_start_ids
+                or not isinstance(label, str)
+                or not re.fullmatch(r'(?i)cnot103[a-z0-9_.-]{1,120}', label)
+                or not isinstance(gpu, str) or '3060' not in gpu.casefold()):
+            continue
+        if row.get('actual_status') not in ('stopped', 'exited') or row.get('intended_status') != 'stopped':
+            continue
+        rate = row.get('dph_total')
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0:
+            continue
+        same_machine = (source.get('machine_id') is not None
+                        and row.get('machine_id') is not None
+                        and str(source.get('machine_id')) == str(row.get('machine_id')))
+        source_host, target_host = source.get('host_id'), row.get('host_id')
+        source_location, target_location = source.get('geolocation'), row.get('geolocation')
+        same_local_network = (
+            source_host is not None and target_host is not None
+            and str(source_host) == str(target_host)
+            and isinstance(source_location, str) and isinstance(target_location, str)
+            and source_location.strip().casefold() == target_location.strip().casefold()
+        )
+        priority = 0 if same_machine else 1 if same_local_network else 2
+        candidates.append((priority, float(rate), ident, label))
+    if not candidates:
+        print('target_selection=none')
+        raise GateError('no unattempted stopped owned RTX 3060 instance is available')
+    _, _, ident, label = min(candidates)
+    INSTANCE_ID = ident
+    INSTANCE_LABELS = {label}
+    envfile = os.environ.get('GITHUB_ENV')
+    if envfile:
+        with open(envfile, 'a', encoding='utf-8') as stream:
+            stream.write(f'VAST_SELECTED_INSTANCE_ID={ident}\\n')
+            stream.write(f'VAST_SELECTED_INSTANCE_LABEL={label}\\n')
+    print('target_selection=selected existing_rtx3060=1')
 
 
 def prepare_fallback_inputs():
@@ -310,8 +399,13 @@ def write_output(values):
 
 
 def preflight():
-    configured_id = int(env_value('VAST_INSTANCE_ID'))
-    if configured_id != INSTANCE_ID:
+    configured_id = env_value('VAST_INSTANCE_ID')
+    if configured_id == 'auto':
+        if INSTANCE_ID not in OWNED_IDS or INSTANCE_ID in {0, SOURCE_INSTANCE_ID}:
+            raise GateError('no authorized existing target was selected')
+        if SELECTED_INSTANCE_ID and int(SELECTED_INSTANCE_ID) != INSTANCE_ID:
+            raise GateError('selected existing instance id changed unexpectedly')
+    elif int(configured_id) != INSTANCE_ID:
         raise GateError('configured instance id does not match the authorized instance')
     instance = get_instance()
     if instance.get('actual_status') not in ('exited', 'stopped') or instance.get('intended_status') != 'stopped':
@@ -326,7 +420,7 @@ def preflight():
 
 
 def attach_ephemeral_key(pubkey):
-    ident = int(env_value('VAST_INSTANCE_ID'))
+    ident = INSTANCE_ID
     request = urllib.request.Request(
         f'{VAST_API}/instances/{ident}/ssh',
         data=json.dumps({'ssh_key': pubkey.strip()}).encode('utf-8'),
@@ -382,6 +476,7 @@ def mark_key_attached():
 
 
 def start():
+    select_existing_target()
     preflight()
     prepare_fallback_inputs()
     pubkey = generate_key()
@@ -778,6 +873,8 @@ def main():
     if op == 'start':
         start()
     elif op == 'run':
+        if REQUESTED_INSTANCE_ID == 'auto' and not SELECTED_INSTANCE_ID:
+            raise GateError('auto-selected target is missing for the training step')
         state = get_instance()
         if state.get('actual_status') != 'running' or state.get('label') not in INSTANCE_LABELS:
             raise GateError('the authorized instance is not running')
