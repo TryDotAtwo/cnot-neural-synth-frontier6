@@ -15,8 +15,7 @@ LABEL = "cnot103-qhat4-training-v1"
 IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
 DISK_GB = "64"
 OFFER_QUERY = (
-    "gpu_name=RTX_3060 num_gpus=1 verified=true gpu_ram>=12000 "
-    "compute_cap>=8.6 reliability>=0.95 rentable=true direct_port_count>=1"
+    "gpu_name=RTX_3060 num_gpus=1 verified=true"
 )
 
 TARGET_CONFIGURED = False
