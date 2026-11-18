@@ -1,5 +1,5 @@
 name: Vast RTX 3060 Qhat4 epoch
-run-name: Qhat4 full-gradient epoch on an eligible existing 3060 15-31 UTC
+run-name: Qhat4 full-gradient epoch on next existing 3060 candidate 15-44 UTC
 
 on:
   push:
@@ -42,6 +42,7 @@ jobs:
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
           VAST_INSTANCE_ID: auto
+          VAST_AUTO_TARGET_SKIP_RANK: "1"
         run: python3 .github/scripts/vast_qhat4_driver.py start
 
       - name: Run the bounded full-model epoch and dev comparison
