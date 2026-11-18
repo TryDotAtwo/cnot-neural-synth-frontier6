@@ -79,9 +79,6 @@ jobs:
                   template = row.get('template_hash_id')
                   if isinstance(template, str) and template and all(c.isalnum() or c in '._-' for c in template):
                       print(f'{role}_template_hash={template}')
-                  disk = numeric(row.get('disk_space') or row.get('disk'))
-                  if disk is not None:
-                      print(f'{role}_disk_gb={disk:g}')
           rows = offer_rows('gpu_name=RTX_3060 num_gpus=1')
           verified_rows = offer_rows('gpu_name=RTX_3060 num_gpus=1 verified=true')
 
