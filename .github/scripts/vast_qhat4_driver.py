@@ -193,6 +193,13 @@ def prepare_fallback_inputs():
         print('input_copy_preflight=blocked network=non_local')
         raise GateError('source and destination are not on the same host or local network')
     transfer_mode = 'same_machine' if same_machine else 'same_local_network'
+    if not same_local_network and not same_machine:
+        transfer_mode = 'internet'
+        rate = target.get('dph_total')
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0:
+            raise GateError('cross-host transfer budget rate is unavailable')
+        if project_charges() + 3.5 * float(rate) + 5.0 >= 20.0:
+            raise GateError('budget gate lacks cross-host transfer reserve')
     print(f'input_copy_preflight=pass transfer_mode={transfer_mode}')
     expected_root = pathlib.Path(f'/workspace/qhat4-recovery-{run_tag()}')
     if VAST_ROOT != expected_root:
@@ -202,10 +209,14 @@ def prepare_fallback_inputs():
         ('/workspace/cnot103-full3060/full10000-dev32', f'{VAST_ROOT}/'),
         ('/workspace/cnot103-full3060/full-template.json', f'{VAST_ROOT}/full-template.json'),
         ('/workspace/cnot103-full3060/followup.py', f'{VAST_ROOT}/followup.py'),
-        ('/workspace/cnot103-full3060/longrun-v84-20261117-r2', f'{VAST_ROOT}/'),
+        ('/workspace/cnot103-full3060/longrun-v84-20261117-r2/longrun-input-v84', f'{VAST_ROOT}/'),
     ]
     for source_path, destination_path in copy_units:
         copy_container_path(SOURCE_INSTANCE_ID, source_path, INSTANCE_ID, destination_path)
+    if transfer_mode == 'internet':
+        rate = float(target['dph_total'])
+        if project_charges() + 3.5 * rate + 1.5 >= 20.0:
+            raise GateError('budget gate after cross-host transfer did not pass')
     print(f'input_copy=accepted units={len(copy_units)} transfer_mode={transfer_mode}')
 
 def get_api_instance():
@@ -469,12 +480,12 @@ python3 - <<'PY'
 import hashlib, json
 from pathlib import Path
 r=Path('__QHAT4_ROOT__')
-v84=r/'longrun-v84-20261117-r2'/'longrun-input-v84'
+v84=r/'longrun-input-v84'
 required=['followup.py','full-template.json',
           'full10000-dev32/dataset.json','full10000-dev32/receipt.json',
-          'longrun-v84-20261117-r2/longrun-input-v84/payload-installed.json',
-          'longrun-v84-20261117-r2/longrun-input-v84/proposal-source.tar.gz',
-          'longrun-v84-20261117-r2/longrun-input-v84/proposal-source-receipt.json']
+          'longrun-input-v84/payload-installed.json',
+          'longrun-input-v84/proposal-source.tar.gz',
+          'longrun-input-v84/proposal-source-receipt.json']
 assert all((r/x).is_file() for x in required)
 receipt=json.loads((r/'full10000-dev32/receipt.json').read_bytes())
 dataset=r/'full10000-dev32/dataset.json'
@@ -487,7 +498,7 @@ source_receipt=json.loads((v84/'proposal-source-receipt.json').read_bytes())
 assert hashlib.file_digest(source.open('rb'),'sha256').hexdigest() == '__SOURCE_SHA256__'
 assert source_receipt['sha256'] == '__SOURCE_SHA256__'
 assert source_receipt['bytes'] == source.stat().st_size
-assert sum((r/x).stat().st_size for x in required) <= 512 * 1024 * 1024
+assert sum((r/x).stat().st_size for x in required) <= 256 * 1024 * 1024
 assert not (r/'batched-probe-v18-qhat4-__TAG__').exists()
 assert not (r/'train_qhat4_epoch_v18-__TAG__.py').exists()
 assert not (r/'driver-console-v18-qhat4-__TAG__.log').exists()
