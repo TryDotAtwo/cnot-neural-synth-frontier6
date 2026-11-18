@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/workflows/vast-qhat4-marketplace-3060.yml
+      - .github/scripts/vast_qhat4_market_driver.py
   workflow_dispatch: {}
 
 permissions:
