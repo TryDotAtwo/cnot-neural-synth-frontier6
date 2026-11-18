@@ -92,14 +92,12 @@ def stop(instance_id):
 
 
 def instance_detail(instance_id):
-    value = cli_json(["show", "instance", str(instance_id)])
-    if isinstance(value, list) and len(value) == 1:
-        value = value[0]
-    if isinstance(value, dict) and isinstance(value.get("instance"), dict):
-        value = value["instance"]
-    if not isinstance(value, dict):
-        fail("Vast instance detail has an unknown shape")
-    return value
+    matches = [item for item in rows() if str(item.get("id")) == str(instance_id)]
+    if len(matches) != 1:
+        fail("Vast target did not resolve uniquely in the instance list")
+    return matches[0]
+
+
 def main():
     matches = [item for item in rows() if item.get("label") == LABEL]
     if len(matches) != 1:
