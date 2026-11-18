@@ -181,8 +181,9 @@ def prepare_fallback_inputs():
     target_machine = target.get('machine_id')
     if source_machine is None or target_machine is None or str(source_machine) != str(target_machine):
         raise GateError('same-host transfer could not be verified')
-    if not re.fullmatch(r'/workspace/qhat4-recovery-[0-9]{1,20}-[0-9]{1,10}', str(VAST_ROOT)):
-        raise GateError('fallback input path is not a fresh run-specific directory')
+    expected_root = pathlib.Path(f'/workspace/qhat4-recovery-{run_tag()}')
+    if VAST_ROOT != expected_root:
+        raise GateError('fallback input path is not this workflow run directory')
 
     copy_units = [
         ('/workspace/cnot103-full3060/full10000-dev32', f'{VAST_ROOT}/'),
@@ -440,9 +441,12 @@ def remote_run(script, state):
 
 def run_experiment(state):
     tag = run_tag()
+    expected_root = SOURCE_ROOT if INSTANCE_ID == SOURCE_INSTANCE_ID else pathlib.Path(f'/workspace/qhat4-recovery-{tag}')
+    if VAST_ROOT != expected_root:
+        raise GateError('experiment root does not match the authorized instance and run')
     pubkey = pathlib.Path(str(key_paths()[0]) + '.pub').read_text(encoding='ascii').strip()
     pre = r'''set -eu
-ROOT=/workspace/cnot103-full3060
+ROOT=__QHAT4_ROOT__
 ID="${CONTAINER_ID:-${VAST_CONTAINERLABEL:-}}"
 ID="${ID#C.}"
 test "$ID" = "__INSTANCE_ID__"
@@ -451,7 +455,7 @@ if pgrep -x cnot103-train >/dev/null 2>&1; then exit 31; fi
 python3 - <<'PY'
 import hashlib, json
 from pathlib import Path
-r=Path('/workspace/cnot103-full3060')
+r=Path('__QHAT4_ROOT__')
 v84=r/'longrun-v84-20261117-r2'/'longrun-input-v84'
 required=['followup.py','full-template.json',
           'full10000-dev32/dataset.json','full10000-dev32/receipt.json',
@@ -470,6 +474,7 @@ source_receipt=json.loads((v84/'proposal-source-receipt.json').read_bytes())
 assert hashlib.file_digest(source.open('rb'),'sha256').hexdigest() == '__SOURCE_SHA256__'
 assert source_receipt['sha256'] == '__SOURCE_SHA256__'
 assert source_receipt['bytes'] == source.stat().st_size
+assert sum((r/x).stat().st_size for x in required) <= 512 * 1024 * 1024
 assert not (r/'batched-probe-v18-qhat4-__TAG__').exists()
 assert not (r/'train_qhat4_epoch_v18-__TAG__.py').exists()
 assert not (r/'driver-console-v18-qhat4-__TAG__.log').exists()
@@ -481,6 +486,7 @@ PY
     pre = pre.replace('__TEMPLATE_SHA256__', EXPECTED_FULL_TEMPLATE_SHA256)
     pre = pre.replace('__SOURCE_SHA256__', EXPECTED_PROPOSAL_SOURCE_SHA256)
     pre = pre.replace('__TAG__', tag)
+    pre = pre.replace('__QHAT4_ROOT__', str(VAST_ROOT))
     pre = pre.replace('__INSTANCE_ID__', str(INSTANCE_ID))
     pre_result = remote_run(pre, state)
     if pre_result != 'remote_preflight=pass':
@@ -566,13 +572,14 @@ printf '%s\n' 'watchdog=armed'
 
     run_script = r'''set +e
 export CNOT103_QHAT4_RUN_TAG=__TAG__
-cd /workspace/cnot103-full3060
+export CNOT103_QHAT4_ROOT=__QHAT4_ROOT__
+cd __QHAT4_ROOT__
 timeout --signal=TERM --kill-after=90s 165m python3 -u train_qhat4_epoch_v18-__TAG__.py > driver-console-v18-qhat4-__TAG__.log 2>&1
 rc=$?
 python3 - <<'PY'
 import json
 from pathlib import Path
-p=Path('/workspace/cnot103-full3060/batched-probe-v18-qhat4-__TAG__/public-status.json')
+p=Path('__QHAT4_ROOT__/batched-probe-v18-qhat4-__TAG__/public-status.json')
 allowed={'experiment','epoch','model_contract_gate','runtime_gate','qhat4_quality_gate'}
 if not p.is_file():
     print('run_status=missing')
@@ -584,6 +591,7 @@ PY
 exit "$rc"
 '''
     run_script = run_script.replace('__TAG__', tag)
+    run_script = run_script.replace('__QHAT4_ROOT__', str(VAST_ROOT))
     try:
         proc = subprocess.run(
             ssh_command(host, port), input=run_script.encode('utf-8'),
