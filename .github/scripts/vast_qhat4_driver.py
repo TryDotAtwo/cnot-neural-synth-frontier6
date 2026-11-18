@@ -589,7 +589,7 @@ import hashlib, json
 from pathlib import Path
 r=Path('/workspace/cnot103-full3060')
 v84=r/'longrun-v84-20261117-r2'/'longrun-input-v84'
-required=['batched-source.tar.gz','batched-source.json','followup.py','full-template.json',
+required=['followup.py','full-template.json',
           'full10000-dev32/dataset.json','full10000-dev32/receipt.json',
           'longrun-v84-20261117-r2/longrun-input-v84/payload-installed.json',
           'longrun-v84-20261117-r2/longrun-input-v84/proposal-source.tar.gz',
