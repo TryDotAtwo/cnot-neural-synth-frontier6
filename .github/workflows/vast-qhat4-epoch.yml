@@ -1,5 +1,5 @@
 name: Vast RTX 3060 Qhat4 epoch
-run-name: Qhat4 full-gradient epoch and quality checks on an existing RTX 3060
+run-name: Qhat4 full-gradient epoch on next owned RTX 3060 candidate
 
 on:
   push:
@@ -25,6 +25,7 @@ jobs:
       VAST_STARTED_BY_WORKFLOW: false
       VAST_EPHEMERAL_KEY_ATTACHED: false
       CNOT103_QHAT4_ROOT: /workspace/qhat4-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+      VAST_AUTO_TARGET_SKIP_RANK: "1"
     steps:
       - name: Checkout controller and trainer
         uses: actions/checkout@v4
