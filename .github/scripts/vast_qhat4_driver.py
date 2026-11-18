@@ -581,10 +581,8 @@ def run_experiment(state):
 ROOT=/workspace/cnot103-full3060
 ID="${CONTAINER_ID:-${VAST_CONTAINERLABEL:-}}"
 ID="${ID#C.}"
-test "$ID" = "61081857"
+test "$ID" = "__INSTANCE_ID__"
 test -n "${CONTAINER_API_KEY:-}"
-test -s "$ROOT/longrun-v84-state-$ID/longrun-startup-status.txt"
-grep -qx 'watchdog-armed' "$ROOT/longrun-v84-state-$ID/longrun-startup-status.txt"
 if pgrep -x cnot103-train >/dev/null 2>&1; then exit 31; fi
 python3 - <<'PY'
 import hashlib, json
@@ -619,6 +617,7 @@ PY
     pre = pre.replace('__TEMPLATE_SHA256__', EXPECTED_FULL_TEMPLATE_SHA256)
     pre = pre.replace('__SOURCE_SHA256__', EXPECTED_PROPOSAL_SOURCE_SHA256)
     pre = pre.replace('__TAG__', tag)
+    pre = pre.replace('__INSTANCE_ID__', str(INSTANCE_ID))
     pre_result = remote_run(pre, state)
     if pre_result != 'remote_preflight=pass':
         raise GateError('remote preflight response was invalid')
@@ -626,8 +625,9 @@ PY
     arm = r'''set -eu
 ROOT=/workspace/cnot103-full3060
 ID="${CONTAINER_ID:-${VAST_CONTAINERLABEL:-}}"; ID="${ID#C.}"
-test "$ID" = "61081857"
+test "$ID" = "__INSTANCE_ID__"
 test -n "${CONTAINER_API_KEY:-}"
+mkdir -p "$ROOT/longrun-v84-state-$ID"
 PUBKEY=''' + repr(pubkey) + r'''
 WATCH="$ROOT/longrun-v84-state-$ID/qhat4-watchdog-__TAG__.py"
 PIDFILE="$ROOT/longrun-v84-state-$ID/qhat4-watchdog-__TAG__.pid"
@@ -637,7 +637,7 @@ test ! -e "$PIDFILE"
 cat > "$WATCH" <<'PY'
 import json, os, time, urllib.request
 from pathlib import Path
-ident='61081857'
+ident='__INSTANCE_ID__'
 pubkey=''' + repr(pubkey) + r'''
 time.sleep(10800)
 auth=Path('/root/.ssh/authorized_keys')
@@ -677,6 +677,7 @@ chmod 600 "$PIDFILE"
 printf '%s\n' 'watchdog=armed'
 '''
     arm = arm.replace('__TAG__', tag)
+    arm = arm.replace('__INSTANCE_ID__', str(INSTANCE_ID))
     if remote_run(arm, state) != 'watchdog=armed':
         raise GateError('bounded remote watchdog was not confirmed')
 
@@ -769,7 +770,7 @@ if auth.exists():
     tmp.write_text('\n'.join(lines)+'\n' if lines else '')
     tmp.chmod(0o600)
     tmp.replace(auth)
-state=Path('/workspace/cnot103-full3060/longrun-v84-state-61081857')
+state=Path('/workspace/cnot103-full3060/longrun-v84-state-__INSTANCE_ID__')
 pidfile=state/'qhat4-watchdog-__TAG__.pid'
 if pidfile.is_file():
     try:
@@ -786,6 +787,7 @@ print('ephemeral_key_removed=pass')
 PY
 '''
     script = script.replace('__TAG__', run_tag())
+    script = script.replace('__INSTANCE_ID__', str(INSTANCE_ID))
     try:
         return remote_run(script, state) == 'ephemeral_key_removed=pass'
     except GateError:
