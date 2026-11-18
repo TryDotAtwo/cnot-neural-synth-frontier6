@@ -15,7 +15,7 @@ import tarfile
 import time
 from pathlib import Path
 
-ROOT = Path('/workspace/cnot103-full3060')
+ROOT = Path(os.environ.get('CNOT103_QHAT4_ROOT', '/workspace/cnot103-full3060'))
 RUN_TAG = os.environ.get('CNOT103_QHAT4_RUN_TAG', 'manual')
 if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', RUN_TAG):
     raise ValueError('invalid Qhat4 run tag')
