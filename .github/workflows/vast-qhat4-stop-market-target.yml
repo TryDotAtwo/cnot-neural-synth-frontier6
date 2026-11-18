@@ -1,0 +1,49 @@
+name: Stop Qhat4 marketplace RTX 3060
+run-name: Cleanup-only Qhat4 RTX 3060 stop verification
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vast-qhat4-stop-market-target.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cnot103-vast-qhat4-target-cleanup
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout cleanup controller
+        uses: actions/checkout@v4
+
+      - name: Parse cleanup source before contacting Vast
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          path = ".github/scripts/vast_qhat4_stop_market_target.py"
+          ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
+          print("cleanup_source_parse=pass")
+          PY
+
+      - name: Install Vast CLI
+        run: |
+          set -euo pipefail
+          cli_venv="$RUNNER_TEMP/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Stop and verify the uniquely labeled target
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 -u .github/scripts/vast_qhat4_stop_market_target.py
