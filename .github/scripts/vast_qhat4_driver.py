@@ -244,6 +244,16 @@ def select_existing_target():
         )
         priority = 0 if same_machine else 1 if same_local_network else 2
         candidates.append((priority, float(rate), ident, label))
+    skip_rank_raw = os.environ.get('VAST_AUTO_TARGET_SKIP_RANK', '').strip()
+    if skip_rank_raw:
+        if not re.fullmatch(r'[0-9]{1,2}', skip_rank_raw):
+            raise GateError('automatic target skip rank is invalid')
+        skip_rank = int(skip_rank_raw)
+        candidates.sort()
+        if 1 <= skip_rank <= len(candidates):
+            del candidates[skip_rank - 1]
+        else:
+            candidates.clear()
     if not candidates:
         print('target_selection=none')
         raise GateError('no unattempted stopped owned RTX 3060 instance is available')
