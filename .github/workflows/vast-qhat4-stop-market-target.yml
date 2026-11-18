@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/workflows/vast-qhat4-stop-market-target.yml
+      - .github/scripts/vast_qhat4_stop_market_target.py
   workflow_dispatch: {}
 
 permissions:
