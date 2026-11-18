@@ -9,18 +9,30 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
-INSTANCE_ID = 61081857
-INSTANCE_LABELS = {
-    'cnot103-longrun-original-3060-v84',
-    'cnot103-longrun-original-3060-v84-r2',
+INSTANCE_LABELS_BY_ID = {
+    61081857: {
+        'cnot103-longrun-original-3060-v84',
+        'cnot103-longrun-original-3060-v84-r2',
+    },
+    60932086: {
+        'cnot103-original-full-rtx3060-20261116-v3',
+    },
 }
+INSTANCE_ID = int(os.environ.get('VAST_INSTANCE_ID', '61081857'))
+if INSTANCE_ID not in INSTANCE_LABELS_BY_ID:
+    raise ValueError('unsupported fixed RTX 3060 instance')
+INSTANCE_LABELS = INSTANCE_LABELS_BY_ID[INSTANCE_ID]
+SOURCE_INSTANCE_ID = 61081857
+SOURCE_INSTANCE_LABELS = INSTANCE_LABELS_BY_ID[SOURCE_INSTANCE_ID]
 VAST_ROOT = pathlib.Path('/workspace/cnot103-full3060')
+SOURCE_ROOT = pathlib.Path('/workspace/cnot103-full3060')
 TRAINER = '.github/scripts/train_qhat4_epoch.py'
 EXPECTED_DATASET_SHA256 = 'eb71744c2afcef922596bc9956abfd8390a661273fa6461dd277a04fd85e9b86'
 EXPECTED_FULL_TEMPLATE_SHA256 = 'e8bd14165c8176fd602953f8db2fa93c38757e1b1610d24f5ff3e3af03120a94'
@@ -133,14 +145,189 @@ def vast_start_instance(timeout=75):
         raise GateError('Vast start request timed out or was not confirmed') from None
 
 
-def get_instance():
+def get_instance(instance_id=None, expected_labels=None):
+    ident = INSTANCE_ID if instance_id is None else int(instance_id)
+    labels = INSTANCE_LABELS if expected_labels is None else expected_labels
     rows = vast(['show', 'instances', '--raw'])
     if not isinstance(rows, list):
         raise GateError('Vast instance list has an unknown shape')
-    matches = [x for x in rows if x.get('id') == INSTANCE_ID]
-    if len(matches) != 1 or matches[0].get('label') not in INSTANCE_LABELS:
+    matches = [x for x in rows if str(x.get('id')) == str(ident)]
+    if len(matches) != 1 or matches[0].get('label') not in labels:
         raise GateError('the expected existing instance was not found exactly once')
     return matches[0]
+
+
+TRANSFER_FILES = [
+    'followup.py',
+    'full-template.json',
+    'full10000-dev32/dataset.json',
+    'full10000-dev32/receipt.json',
+    'longrun-v84-20261117-r2/longrun-input-v84/payload-installed.json',
+    'longrun-v84-20261117-r2/longrun-input-v84/proposal-source.tar.gz',
+    'longrun-v84-20261117-r2/longrun-input-v84/proposal-source-receipt.json',
+]
+MAX_TRANSFER_BYTES = 512 * 1024 * 1024
+
+
+def execute_container(instance_id, code, timeout=120):
+    command = 'python3 -c ' + shlex.quote(code)
+    try:
+        proc = subprocess.run(
+            ['vastai', '--api-key', env_value('VAST_API_KEY'), 'execute', str(instance_id), command],
+            capture_output=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise GateError('inactive-container file preflight did not finish') from None
+    if proc.returncode:
+        raise GateError('inactive-container file preflight did not pass')
+    output = proc.stdout.decode('utf-8', errors='replace')
+    marker = 'QHAT4_EXEC_RESULT='
+    values = []
+    for line in output.splitlines():
+        offset = line.find(marker)
+        if offset >= 0:
+            values.append(line[offset + len(marker):].strip())
+    if len(values) != 1:
+        raise GateError('inactive-container result was not uniquely identified')
+    try:
+        value = json.loads(values[0])
+    except json.JSONDecodeError:
+        raise GateError('inactive-container result was invalid') from None
+    if not isinstance(value, dict):
+        raise GateError('inactive-container result had an unknown shape')
+    return value
+
+
+def inventory_code(root, files):
+    return f"""
+import hashlib, json
+from pathlib import Path
+root = Path({str(root)!r})
+rows = {{}}
+for rel in {list(files)!r}:
+    path = root / rel
+    if path.is_symlink():
+        rows[rel] = {{'exists': True, 'regular': False}}
+    elif path.is_file():
+        with path.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        rows[rel] = {{'exists': True, 'regular': True, 'bytes': path.stat().st_size, 'sha256': digest}}
+    elif path.exists():
+        rows[rel] = {{'exists': True, 'regular': False}}
+    else:
+        rows[rel] = {{'exists': False, 'regular': False}}
+def receipt_value(rel, key):
+    path = root / rel
+    if not path.is_file() or path.is_symlink():
+        return None
+    return json.loads(path.read_bytes()).get(key)
+result = {{
+    'root_exists': root.exists(),
+    'files': rows,
+    'dataset_receipt_sha256': receipt_value('full10000-dev32/receipt.json', 'sha256'),
+    'proposal_source_receipt_sha256': receipt_value(
+        'longrun-v84-20261117-r2/longrun-input-v84/proposal-source-receipt.json', 'sha256'),
+    'proposal_source_receipt_bytes': receipt_value(
+        'longrun-v84-20261117-r2/longrun-input-v84/proposal-source-receipt.json', 'bytes'),
+}}
+print('QHAT4_EXEC_RESULT=' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+"""
+
+
+def prepare_fallback_inputs():
+    if INSTANCE_ID == SOURCE_INSTANCE_ID:
+        return
+    target = get_instance()
+    source = get_instance(SOURCE_INSTANCE_ID, SOURCE_INSTANCE_LABELS)
+    for row in (source, target):
+        actual = row.get('actual_status')
+        intended = row.get('intended_status')
+        if actual not in ('stopped', 'exited') or intended != 'stopped':
+            raise GateError('source and destination must both be stopped for file copy')
+    source_machine = source.get('machine_id')
+    target_machine = target.get('machine_id')
+    if source_machine is None or target_machine is None:
+        raise GateError('same-host transfer could not be verified')
+    if str(source_machine) != str(target_machine):
+        raise GateError('same-host transfer could not be verified')
+
+    source_inventory = execute_container(
+        SOURCE_INSTANCE_ID, inventory_code(SOURCE_ROOT, TRANSFER_FILES))
+    source_files = source_inventory.get('files')
+    if not source_inventory.get('root_exists') or not isinstance(source_files, dict):
+        raise GateError('the pinned source input set was unavailable')
+    if set(source_files) != set(TRANSFER_FILES):
+        raise GateError('the source input manifest did not match its allowlist')
+    if any(not source_files[name].get('exists') or not source_files[name].get('regular')
+           for name in TRANSFER_FILES):
+        raise GateError('the pinned source input set was incomplete')
+    if source_files['full-template.json']['sha256'] != EXPECTED_FULL_TEMPLATE_SHA256:
+        raise GateError('the full model template hash did not match')
+    if source_files['full10000-dev32/dataset.json']['sha256'] != EXPECTED_DATASET_SHA256:
+        raise GateError('the 10,000-row dataset hash did not match')
+    proposal_rel = 'longrun-v84-20261117-r2/longrun-input-v84/proposal-source.tar.gz'
+    proposal_row = source_files[proposal_rel]
+    if proposal_row['sha256'] != EXPECTED_PROPOSAL_SOURCE_SHA256:
+        raise GateError('the pinned proposal source hash did not match')
+    if source_inventory.get('dataset_receipt_sha256') != EXPECTED_DATASET_SHA256:
+        raise GateError('the dataset receipt did not match')
+    if source_inventory.get('proposal_source_receipt_sha256') != EXPECTED_PROPOSAL_SOURCE_SHA256:
+        raise GateError('the proposal receipt did not match')
+    if source_inventory.get('proposal_source_receipt_bytes') != proposal_row['bytes']:
+        raise GateError('the proposal receipt byte count did not match')
+    total_bytes = sum(source_files[name]['bytes'] for name in TRANSFER_FILES)
+    if total_bytes > MAX_TRANSFER_BYTES:
+        raise GateError('the pinned input transfer exceeded its fixed byte limit')
+
+    target_inventory = execute_container(
+        INSTANCE_ID, inventory_code(VAST_ROOT, TRANSFER_FILES))
+    target_files = target_inventory.get('files')
+    if not isinstance(target_files, dict) or set(target_files) != set(TRANSFER_FILES):
+        raise GateError('the destination input manifest had an unknown shape')
+    missing = []
+    for name in TRANSFER_FILES:
+        existing = target_files[name]
+        if not existing.get('exists'):
+            missing.append(name)
+        elif existing != source_files[name]:
+            raise GateError('the destination contains conflicting protected input data')
+
+    if missing:
+        setup_code = f"""
+import json
+from pathlib import Path
+root = Path({str(VAST_ROOT)!r})
+if root.exists() and (root.is_symlink() or not root.is_dir()):
+    raise SystemExit(2)
+root.mkdir(parents=True, exist_ok=True)
+for rel in {missing!r}:
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+print('QHAT4_EXEC_RESULT=' + json.dumps({{'created': True}}, separators=(',', ':')))
+"""
+        setup = execute_container(INSTANCE_ID, setup_code)
+        if setup.get('created') is not True:
+            raise GateError('the destination input paths were not prepared')
+        for rel in missing:
+            source_path = SOURCE_ROOT / rel
+            target_path = VAST_ROOT / rel
+            try:
+                proc = subprocess.run(
+                    ['vastai', '--api-key', env_value('VAST_API_KEY'), 'copy',
+                     f'C.{SOURCE_INSTANCE_ID}:{source_path}',
+                     f'C.{INSTANCE_ID}:{target_path}'],
+                    capture_output=True, timeout=600, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                raise GateError('the pinned input copy did not finish') from None
+            if proc.returncode:
+                raise GateError('the pinned input copy did not pass')
+
+    final_inventory = execute_container(
+        INSTANCE_ID, inventory_code(VAST_ROOT, TRANSFER_FILES))
+    final_files = final_inventory.get('files')
+    if not isinstance(final_files, dict) or final_files != source_files:
+        raise GateError('the destination input hashes did not match the source')
+    print(f'input_copy=pass files={len(TRANSFER_FILES)} bytes={total_bytes}')
 
 
 def get_api_instance():
@@ -307,6 +494,7 @@ def mark_key_attached():
 
 def start():
     preflight()
+    prepare_fallback_inputs()
     pubkey = generate_key()
     try:
         vast_start_instance()
