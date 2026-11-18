@@ -52,7 +52,7 @@ jobs:
           "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
-      - name: Check budget, copy same-host/local-network inputs, and start existing RTX 3060
+      - name: Check budget, copy bounded qhat4 inputs, and start existing RTX 3060
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
         run: python3 .github/scripts/vast_qhat4_driver.py start
