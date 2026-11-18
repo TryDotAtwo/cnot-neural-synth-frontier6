@@ -114,10 +114,10 @@ def main():
     print("cleanup_target=verified")
     if not stopped(row):
         stop(instance_id)
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + 900
         last_actual = "unknown"
         last_intended = "unknown"
-        for attempt in range(19):
+        for attempt in range(91):
             current = instance_detail(instance_id)
             if current.get("label") != LABEL or not is_3060(current):
                 print("cleanup_target=identity_mismatch")
@@ -131,7 +131,7 @@ def main():
             if stopped(current):
                 print("instance_stop=verified")
                 return 0
-            if time.monotonic() >= deadline or attempt == 18:
+            if time.monotonic() >= deadline or attempt == 90:
                 break
             time.sleep(10)
         print(f"stop_last_state=actual:{last_actual},intended:{last_intended}")
