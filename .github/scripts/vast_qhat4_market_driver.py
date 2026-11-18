@@ -112,8 +112,10 @@ def eligible_offers():
         raise driver.GateError("offer search response has an unknown shape")
 
     eligible = []
+    rejected = {}
     for row in rows:
         if not isinstance(row, dict):
+            rejected["row_shape"] = rejected.get("row_shape", 0) + 1
             continue
         name = str(row.get("gpu_name") or "").casefold().replace("_", "").replace(" ", "")
         gpu_count = number(row.get("num_gpus"))
@@ -122,28 +124,36 @@ def eligible_offers():
         reliability = number(row.get("reliability"))
         rate = number(row.get("dph_total"))
         ports = number(row.get("direct_port_count"))
-        offer_id = row.get("ask_id", row.get("id"))
-        if (
-            "rtx" not in name or "3060" not in name
-            or gpu_count != 1
-            or memory is None or memory < 12000
-            or capability is None or capability < 8.6
-            or reliability is None or reliability < 0.95
-            or not truth(row.get("rentable"))
-            or ports is None or ports < 1
-            or rate is None or rate <= 0
-            or not re.fullmatch(r"[0-9]{1,20}", str(offer_id))
-        ):
+        offer_id = row.get("ask_id") or row.get("id") or row.get("offer_id")
+        checks = (
+            ("gpu_name", "rtx" in name and "3060" in name),
+            ("gpu_count", gpu_count == 1),
+            ("gpu_ram", memory is not None and memory >= 12000),
+            ("compute_cap", capability is not None and capability >= 8.6),
+            ("reliability", reliability is not None and reliability >= 0.95),
+            ("rentable", truth(row.get("rentable"))),
+            ("direct_port", ports is not None and ports >= 1),
+            ("rate", rate is not None and rate > 0),
+            ("offer_id", re.fullmatch(r"[0-9]{1,20}", str(offer_id)) is not None),
+        )
+        failed = next((name for name, passed in checks if not passed), None)
+        if failed:
+            rejected[failed] = rejected.get(failed, 0) + 1
             continue
         # The query itself requires verified=true. Reject an explicit false value,
         # while allowing the raw CLI response to omit the filtered field.
-        if "verified" in row and not truth(row.get("verified")):
+        verified = row.get("verified")
+        if verified is False or verified == 0 or (
+            isinstance(verified, str) and verified.strip().casefold() == "false"
+        ):
+            rejected["verified"] = rejected.get("verified", 0) + 1
             continue
         eligible.append((rate, -reliability, int(offer_id)))
 
     if not eligible:
-        raise driver.GateError("no verified RTX 3060 offer meets the hardware gates")
-    eligible.sort()
+        summary = ",".join(f"{key}:{rejected[key]}" for key in sorted(rejected)) or "none"
+        print(f"offer_filter_summary=rows:{len(rows)} eligible:0 rejected:{summary}")
+        raise driver.GateError("no verified RTX 3060 offer meets the hardware gates")    eligible.sort()
     return eligible
 
 
