@@ -179,8 +179,21 @@ def prepare_fallback_inputs():
             raise GateError('source and destination must both be stopped for file copy')
     source_machine = source.get('machine_id')
     target_machine = target.get('machine_id')
-    if source_machine is None or target_machine is None or str(source_machine) != str(target_machine):
-        raise GateError('same-host transfer could not be verified')
+    same_machine = (source_machine is not None and target_machine is not None
+                    and str(source_machine) == str(target_machine))
+    source_host, target_host = source.get('host_id'), target.get('host_id')
+    source_location, target_location = source.get('geolocation'), target.get('geolocation')
+    same_local_network = (
+        source_host is not None and target_host is not None
+        and str(source_host) == str(target_host)
+        and isinstance(source_location, str) and isinstance(target_location, str)
+        and source_location.strip().casefold() == target_location.strip().casefold()
+    )
+    if not same_machine and not same_local_network:
+        print('input_copy_preflight=blocked network=non_local')
+        raise GateError('source and destination are not on the same host or local network')
+    transfer_mode = 'same_machine' if same_machine else 'same_local_network'
+    print(f'input_copy_preflight=pass transfer_mode={transfer_mode}')
     expected_root = pathlib.Path(f'/workspace/qhat4-recovery-{run_tag()}')
     if VAST_ROOT != expected_root:
         raise GateError('fallback input path is not this workflow run directory')
@@ -193,7 +206,7 @@ def prepare_fallback_inputs():
     ]
     for source_path, destination_path in copy_units:
         copy_container_path(SOURCE_INSTANCE_ID, source_path, INSTANCE_ID, destination_path)
-    print(f'input_copy=accepted units={len(copy_units)} same_host=1')
+    print(f'input_copy=accepted units={len(copy_units)} transfer_mode={transfer_mode}')
 
 def get_api_instance():
     request = urllib.request.Request(
@@ -726,6 +739,14 @@ def cleanup_runner_key():
 
 def failure_category(error):
     message = str(error).lower()
+    if 'same host or local network' in message or 'local network' in message:
+        return 'copy_network'
+    if 'fallback input path' in message or 'experiment root' in message:
+        return 'fallback_path'
+    if 'data copy' in message or ' copy ' in message:
+        return 'data_copy'
+    if 'vast query' in message:
+        return 'vast_query'
     if 'budget' in message or 'billing' in message:
         return 'budget'
     if 'vast start' in message:
