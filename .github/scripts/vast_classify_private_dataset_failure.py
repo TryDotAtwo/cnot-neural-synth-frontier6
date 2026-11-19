@@ -198,24 +198,161 @@ elif [ -s "$BUILDER_LOG" ] && grep -Eq '^(OSError|PermissionError|FileNotFoundEr
 elif [ -s "$BUILDER_LOG" ]; then
   detail=builder_exception_other
 elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ] && [ -x "$VALIDATOR_BIN" ]; then
-  DATA_SHA="$(tr -d '\\r\\n' <"$SHA")"
-  case "$DATA_SHA" in *[!0-9a-f]*|'') detail=dataset_checksum_sidecar_invalid ;; esac
-  if [ "$detail" = unavailable ]; then
-    if [ "$(expr length "$DATA_SHA")" -ne 64 ]; then
-      detail=dataset_checksum_sidecar_invalid
-    elif "$VALIDATOR_BIN" "$DATA" "$DATA_SHA" >"$ROOT/classifier-validation.private.log" 2>&1; then
-      if grep -Fq 'frozen_data_validation=accepted' "$ROOT/classifier-validation.private.log"; then
-        detail=validator_recheck_passed
-      else
-        detail=validator_recheck_missing_marker
-      fi
-    elif grep -Fq 'frozen_data_validation=failed' "$ROOT/classifier-validation.private.log"; then
-      detail=validator_recheck_failed
-    elif grep -Eiq 'error while loading shared libraries|command not found|permission denied' "$ROOT/classifier-validation.private.log"; then
-      detail=validator_runtime_error
+  DATA_SHA="$(tr -d '\\r\\n' < "$SHA")"
+  if ! printf '%s' "$DATA_SHA" | grep -Eq '^[0-9a-f]{64}
+elif [ -e "$DATA" ] || [ -e "$SHA" ] || [ -e "$RECEIPT" ]; then
+  if [ ! -x "$VALIDATOR_BIN" ]; then
+    detail=validator_binary_missing
+  else
+    detail=dataset_artifacts_incomplete
+  fi
+else
+  detail=dataset_outputs_missing
+fi
+printf 'dataset_failure_detail=%s\\n' "$detail"
+"""
+
+
+def main() -> int:
+    checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    detail = "unavailable"
+    cleanup = "not_needed"
+    temp_dir: pathlib.Path | None = None
+    instance_id: int | None = None
+    public_key = ""
+    attach_attempted = False
+    api_key = os.environ.get("VAST_API_KEY", "")
+
+    try:
+        if not api_key:
+            detail = "api_auth_failed"
+            raise RuntimeError()
+        rows = target_rows(api_json(api_key, "/instances/"))
+        running = [row for row in rows if state(row) == "running"]
+        if not running:
+            detail = "target_not_running"
+            raise RuntimeError()
+        if len(running) != 1:
+            detail = "target_ambiguous"
+            raise RuntimeError()
+        if safe_budget_projection(rows) != "within_48h_cap":
+            detail = "budget_gate_closed"
+            raise RuntimeError()
+
+        target = running[0]
+        candidate = target.get("id")
+        host = target.get("ssh_host")
+        port = target.get("ssh_port")
+        if not isinstance(candidate, int) or isinstance(candidate, bool) or candidate <= 0:
+            detail = "endpoint_unavailable"
+            raise RuntimeError()
+        if not isinstance(host, str) or not re.fullmatch(r"ssh[0-9]+\.vast\.ai", host.casefold()):
+            detail = "endpoint_unavailable"
+            raise RuntimeError()
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            detail = "endpoint_unavailable"
+            raise RuntimeError()
+        instance_id = candidate
+
+        temp_dir = pathlib.Path(tempfile.mkdtemp(prefix="vast-private-dataset-classifier-"))
+        key_path = temp_dir / "temporary"
+        known_hosts = temp_dir / "known_hosts"
+        generated = subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"gha-dataset-classifier-{RUN_ID}-{ATTEMPT}", "-f", str(key_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if generated.returncode != 0:
+            detail = "key_generation_failed"
+            raise RuntimeError()
+        public_key = key_path.with_suffix(".pub").read_text(encoding="utf-8").strip()
+
+        attach_attempted = True
+        attached = api_json(api_key, f"/instances/{instance_id}/ssh", "POST", {"ssh_key": public_key})
+        if not isinstance(attached, dict) or attached.get("success") is not True:
+            detail = "key_attach_failed"
+            raise RuntimeError()
+        if find_attached_key_id(api_key, instance_id, public_key) is None:
+            detail = "key_attach_unconfirmed"
+            raise RuntimeError()
+        time.sleep(12)
+
+        proc = remote_dataset.remote_bash(host, port, key_path, known_hosts, REMOTE_CLASSIFIER)
+        if proc is None:
+            detail = "ssh_timeout_or_connection_failure"
+        elif proc.returncode == 255:
+            detail = classify_ssh_failure(proc.stderr or "")
+        elif proc.returncode == 0:
+            found = next(
+                (
+                    line.partition("=")[2]
+                    for line in proc.stdout.splitlines()
+                    if line.startswith("dataset_failure_detail=")
+                    and line.partition("=")[2] in DETAIL_CLASSES
+                ),
+                None,
+            )
+            detail = found or "remote_read_failed"
+        else:
+            detail = "remote_read_failed"
+    except ApiFailure as error:
+        detail = "api_auth_failed" if error.status in {401, 403} else "api_failed"
+    except (OSError, subprocess.TimeoutExpired):
+        detail = "controller_failed"
+    except RuntimeError:
+        pass
+    except Exception:
+        detail = "controller_failed"
+    finally:
+        if attach_attempted and api_key and instance_id is not None and public_key:
+            try:
+                key_id = find_attached_key_id(api_key, instance_id, public_key)
+                if key_id is None:
+                    cleanup = "not_found"
+                else:
+                    detached = api_json(api_key, f"/instances/{instance_id}/ssh/{key_id}", "DELETE")
+                    cleanup = "detached" if isinstance(detached, dict) and detached.get("success") is True else "failed"
+            except (ApiFailure, ValueError):
+                cleanup = "failed"
+        if temp_dir is not None:
+            for name in ("temporary", "temporary.pub", "known_hosts"):
+                try:
+                    (temp_dir / name).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                temp_dir.rmdir()
+            except OSError:
+                pass
+
+    if detail not in DETAIL_CLASSES:
+        detail = "unavailable"
+    if cleanup not in {"detached", "not_needed", "not_found", "failed"}:
+        cleanup = "failed"
+    print(f"checked_at_utc={checked}")
+    print(f"dataset_failure_detail={detail}")
+    print(f"temporary_ssh_key={cleanup}")
+    return 0 if detail in DETAIL_CLASSES and cleanup in {"detached", "not_needed"} else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+; then
+    detail=dataset_checksum_sidecar_invalid
+  elif "$VALIDATOR_BIN" "$DATA" "$DATA_SHA" >"$ROOT/classifier-validation.private.log" 2>&1; then
+    if grep -Fq 'frozen_data_validation=accepted' "$ROOT/classifier-validation.private.log"; then
+      detail=validator_recheck_passed
     else
-      detail=validator_recheck_failed
+      detail=validator_recheck_missing_marker
     fi
+  elif grep -Fq 'frozen_data_validation=failed' "$ROOT/classifier-validation.private.log"; then
+    detail=validator_recheck_failed
+  elif grep -Eiq 'error while loading shared libraries|command not found|permission denied' "$ROOT/classifier-validation.private.log"; then
+    detail=validator_runtime_error
+  else
+    detail=validator_recheck_failed
   fi
 elif [ -e "$DATA" ] || [ -e "$SHA" ] || [ -e "$RECEIPT" ]; then
   if [ ! -x "$VALIDATOR_BIN" ]; then
