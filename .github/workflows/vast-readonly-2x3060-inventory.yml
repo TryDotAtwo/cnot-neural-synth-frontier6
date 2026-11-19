@@ -7,6 +7,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/vast_readonly_inventory.py
+      - .github/scripts/vast_rebuild_remote_dataset.py
       - .github/workflows/vast-readonly-2x3060-inventory.yml
 
 permissions:
