@@ -173,7 +173,7 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
     let paths = artifacts::resolve(path, &raw, &manifest)?;
 
     let devices = manifest.training.effective_cuda_devices();
-    crate::stage_profile::measure("cuda_init", || {
+    crate::stage_profile::measure("cuda_init", || -> Result<(), String> {
         for &index in &devices {
             crate::torch_device::require_cuda_device(index)?;
         }
