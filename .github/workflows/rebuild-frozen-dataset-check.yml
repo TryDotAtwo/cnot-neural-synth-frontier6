@@ -6,7 +6,9 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/rebuild_frozen_dataset.py
+      - .github/scripts/fetch_public_holdout.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
+      - native/src/bin/cnot103_validate_data.rs
 
 permissions:
   contents: read
@@ -24,4 +26,14 @@ jobs:
           python-version: "3.12"
       - name: Verify deterministic record and matrix routines
         run: python .github/scripts/rebuild_frozen_dataset.py --self-test
+
+      - name: Parse the remote holdout fetcher without network access
+        run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/fetch_public_holdout.py').read_text(encoding='utf-8'))"
+
+      - name: Compile the canonical frozen-data validator
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the validator without CUDA or project data
+        working-directory: native
+        run: cargo check --no-default-features --bin cnot103-validate-data
 

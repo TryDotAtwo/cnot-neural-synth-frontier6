@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sqlite3
 import sys
 import time
@@ -399,6 +400,7 @@ def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict,
             "builder_schema": "deterministic_walk_shear_composition_v1",
             "seed_base": seed_base,
             "heldout_source": "TryDotAtwo/quantum-generator",
+            "heldout_source_revision": None,
             "heldout_sqlite_sha256": None,
         },
         "symmetries": SYMMETRIES,
@@ -513,6 +515,7 @@ def run(args: argparse.Namespace) -> None:
     holdout_sha = sha256_file(holdout_path)
     dev, test = read_holdout(holdout_path)
     body, stats = build_body(dev, test, args.seed)
+    body["provenance"]["heldout_source_revision"] = args.source_revision
     body["provenance"]["heldout_sqlite_sha256"] = holdout_sha
     raw = write_json_new(output_path, body)
     dataset_sha = hashlib.sha256(raw).hexdigest()
@@ -528,6 +531,7 @@ def run(args: argparse.Namespace) -> None:
         "dataset_sha256": dataset_sha,
         "dataset_bytes": len(raw),
         "holdout_sqlite_sha256": holdout_sha,
+        "holdout_source_revision": args.source_revision,
         "seed_base": args.seed,
         **stats,
     }
@@ -541,6 +545,7 @@ def main() -> int:
     parser.add_argument("--holdout-sqlite")
     parser.add_argument("--output")
     parser.add_argument("--receipt")
+    parser.add_argument("--source-revision")
     parser.add_argument("--seed", type=int, default=202611190001)
     args = parser.parse_args()
     try:
@@ -548,10 +553,12 @@ def main() -> int:
             self_test()
             print("dataset_builder_selftest=pass")
             return 0
-        if not all((args.experiment_root, args.holdout_sqlite, args.output, args.receipt)):
+        if not all((args.experiment_root, args.holdout_sqlite, args.output, args.receipt, args.source_revision)):
             raise BuildError("remote rebuild arguments are incomplete")
         if not 0 <= args.seed <= MASK64:
             raise BuildError("seed must fit an unsigned 64-bit integer")
+        if not re.fullmatch(r"[0-9a-f]{40}", args.source_revision):
+            raise BuildError("holdout source revision must be a lowercase commit SHA")
         run(args)
         print("dataset_build=accepted")
         return 0
