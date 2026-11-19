@@ -254,7 +254,7 @@ def safe_site(area: str, line_number: int, hint: str | None) -> str:
     if hint in {"collect", "device_setup", "tensor_scalar_sub", "tensor_scalar_div",
                 "tensor_mask", "step_counter"}:
         return hint
-    if area == "src_nn_training__optimizer__device_update_flat":
+    if area == "src_nn_training__optimizer__device":
         if 232 <= line_number <= 235:
             return "bias_correction"
         if 236 <= line_number <= 238:
@@ -283,7 +283,7 @@ def safe_site(area: str, line_number: int, hint: str | None) -> str:
             if first <= line_number <= last:
                 return label
         return "run_manifest_other"
-    if area == "src_nn_training__optimizer__device_update_flat":
+    if area == "src_nn_training__optimizer__device":
         return "optimizer_flat_update"
     return "module"
 
