@@ -80,7 +80,23 @@ jobs:
             printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else
             printf 'cuda_feature_build=fail\n'
+            failure_class="other_build_failure"
+            if grep -Eiq 'nvcc fatal|unsupported gpu architecture|cuda compiler.*not found' "${log_file}"; then
+              failure_class="cuda_toolchain"
+            elif grep -Eiq 'error\[E[0-9]+\]|could not compile `?cnot103' "${log_file}"; then
+              failure_class="rust_compile"
+            elif grep -Eiq 'undefined reference|cannot find -l|ld returned|linker.*failed' "${log_file}"; then
+              failure_class="link"
+            elif grep -Eiq 'no space left|out of memory|killed signal' "${log_file}"; then
+              failure_class="runner_resource"
+            elif grep -Eiq 'timed out|failed to download|failed to get|could not resolve|connection reset' "${log_file}"; then
+              failure_class="network"
+            elif grep -Eiq 'could not find|not found|no such file|cmake error' "${log_file}"; then
+              failure_class="dependency_or_cmake"
+            fi
+            printf 'cuda_build_failure=%s\n' "${failure_class}"
             printf 'cuda_feature_build=fail\n' >> "${GITHUB_STEP_SUMMARY}"
+            printf 'cuda_build_failure=%s\n' "${failure_class}" >> "${GITHUB_STEP_SUMMARY}"
             exit 1
           fi
 
