@@ -129,7 +129,7 @@ fi
 exec 3>&1
 exec >>"$ROOT/remote-dataset.private.log" 2>&1
 if ! command -v cargo >/dev/null 2>&1; then
-  printf 'dataset_build=toolchain_unavailable\n'
+  printf 'dataset_build=toolchain_unavailable\\n'
   exit 12
 fi
 finish() {{
@@ -144,7 +144,7 @@ finish() {{
   printf 'dataset_build=%s\\n' "$status" >&3
 }}
 trap finish EXIT
-available_kb="$(df -Pk /workspace | awk 'NR==2 {print $4}')"
+available_kb="$(df -Pk /workspace | awk 'NR==2 {{print $4}}')"
 case "$available_kb" in
   *[!0-9]*|'') exit 22 ;;
 esac
