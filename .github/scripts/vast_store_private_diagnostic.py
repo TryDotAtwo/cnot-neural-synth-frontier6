@@ -332,7 +332,7 @@ def main() -> int:
                 pass
 
     print(f"checked_at={checked}")
-    if diagnostic not in {"no_compiler_diagnostics", "unavailable"} and not re.fullmatch(r"E[0-9]{4}_[a-z0-9_]+(?:\\+E[0-9]{4}_[a-z0-9_]+){0,5}", diagnostic):
+    if diagnostic not in {"no_compiler_diagnostics", "unavailable"} and not re.fullmatch(r"E[0-9]{4}_[a-z0-9_]+(?:\+E[0-9]{4}_[a-z0-9_]+){0,5}", diagnostic):
         diagnostic = "unavailable"
     print(f"private_build_diagnostic={result}")
     print(f"private_build_diagnostic_summary={diagnostic}")
