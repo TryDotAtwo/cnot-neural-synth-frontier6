@@ -22,7 +22,8 @@ IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
 DISK_GB = "64"
 BUDGET_CAP = 20.0
 RUN_HOURS = 55.0
-TRANSFER_RESERVE = 3.0
+TRANSFER_RESERVE = 2.0
+STOPPED_STORAGE_HOURS = 168.0
 MIN_RELIABILITY = 0.95
 MIN_GPU_MEMORY_MB = 12_000
 MIN_COMPUTE_CAPABILITY = 8.6
@@ -76,6 +77,14 @@ def budget_allows(spent: object, rate: object, run_hours: object = RUN_HOURS,
     return spent_value + rate_value * hours_value + reserve_value <= BUDGET_CAP + 1e-9
 
 
+def total_reserve(storage_cost: object) -> float | None:
+    monthly = finite_number(storage_cost)
+    if monthly is None or monthly < 0:
+        return None
+    stopped_storage = monthly * float(DISK_GB) * STOPPED_STORAGE_HOURS / 720.0
+    return TRANSFER_RESERVE + stopped_storage
+
+
 def eligible_offers(rows: object) -> list[dict]:
     if not isinstance(rows, list):
         raise GateError("offer inventory has an unknown shape")
@@ -89,12 +98,13 @@ def eligible_offers(rows: object) -> list[dict]:
         capability = finite_number(row.get("compute_cap"))
         reliability = finite_number(row.get("reliability"))
         rate = finite_number(row.get("dph_total"))
+        storage_cost = finite_number(row.get("storage_cost"))
         ports = finite_number(row.get("direct_port_count"))
         offer_id = row.get("ask_id") or row.get("id") or row.get("offer_id")
         offer_id_text = str(offer_id)
         verified = row.get("verified")
         checks = (
-            "rtx3060" in gpu_name,
+            "rtx3060" in gpu_name and "rtx3060ti" not in gpu_name,
             gpu_count == 2,
             memory is not None and memory >= MIN_GPU_MEMORY_MB,
             capability is not None and capability >= MIN_COMPUTE_CAPABILITY,
@@ -102,6 +112,7 @@ def eligible_offers(rows: object) -> list[dict]:
             truth(row.get("rentable")),
             ports is not None and ports >= 1,
             rate is not None and rate > 0,
+            storage_cost is not None and storage_cost >= 0,
             re.fullmatch(r"[0-9]{1,20}", offer_id_text) is not None,
             verified is None or truth(verified),
         )
@@ -109,6 +120,7 @@ def eligible_offers(rows: object) -> list[dict]:
             eligible.append(row)
     eligible.sort(
         key=lambda row: (
+            float(row["dph_total"]) * RUN_HOURS + float(total_reserve(row["storage_cost"])),
             float(row["dph_total"]),
             -float(row["reliability"]),
             int(row.get("ask_id") or row.get("id") or row.get("offer_id")),
@@ -211,14 +223,14 @@ def is_2x3060(row: dict) -> bool:
     name = str(row.get("gpu_name") or "").casefold()
     count = row.get("num_gpus", row.get("gpu_count"))
     return (
-        "rtx" in name and "3060" in name
+        "rtx3060" in name and "rtx3060ti" not in name
         and isinstance(count, int) and not isinstance(count, bool) and count == 2
     )
 
 
 def offer_inventory() -> list[dict]:
     rows = vast_cli([
-        "search", "offers", "gpu_name=RTX_3060 num_gpus=2 verified=true",
+        "search", "offers", "gpu_name=RTX_3060 num_gpus=2 verified=true allocated_storage=64",
         "--order=dph_total", "--limit=100", "--raw",
     ])
     if isinstance(rows, dict):
@@ -590,7 +602,9 @@ def run() -> int:
             outcome = "offer_gate"
             raise GateError("no verified 2x3060 offer is available")
         selected = next(
-            (row for row in offers if budget_allows(spent, row["dph_total"])),
+            (row for row in offers if budget_allows(
+                spent, row["dph_total"], reserve=total_reserve(row.get("storage_cost"))
+            )),
             None,
         )
         if selected is None:
@@ -601,7 +615,8 @@ def run() -> int:
         row = wait_until_running(label)
         rate = finite_number(row.get("dph_total"))
         spent_after_create = project_charges()
-        if rate is None or not budget_allows(spent_after_create, rate):
+        reserve = total_reserve(row.get("storage_cost"))
+        if rate is None or reserve is None or not budget_allows(spent_after_create, rate, reserve=reserve):
             outcome = "budget_gate"
             raise GateError("post-create budget recheck failed")
         if not is_2x3060(row):
