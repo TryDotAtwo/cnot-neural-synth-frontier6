@@ -138,32 +138,47 @@ jobs:
           # Rust diagnostic codes are bounded to the standard E#### namespace; source paths and messages stay private on the runner.
 
           def area(path):
-              p = "/" + path.replace("\\\\", "/").lstrip("/")
-              if "/nn_training/" in p or "/training_session/" in p or p.endswith("/training.rs"):
-                  return "training"
+              p = "/" + path.replace("\\", "/").lstrip("/")
+              if p.endswith("/lib.rs"):
+                  return "core_lib"
+              if p.endswith("/alphabet.rs"):
+                  return "core_alphabet"
+              if p.endswith("/state.rs"):
+                  return "core_state"
+              if "/run_config/manifest/" in p:
+                  return "run_manifest"
+              if "/run_config/execution/" in p:
+                  return "run_execution"
+              if "/run_config/" in p:
+                  return "run_config"
+              if "/nn_training/" in p:
+                  return "nn_training"
+              if "/training_session/" in p:
+                  return "training_session"
+              if "/checkpoint/" in p:
+                  return "checkpoint"
               if "/objective/" in p:
                   return "objective"
               if "/bellman/" in p:
                   return "bellman"
               if "/model/" in p or "/basis/" in p:
                   return "model"
-              if any(part in p for part in (
-                  "/features/", "/device_feature_plan", "/rank_features", "/basis_gradient",
-                  "/bound_features", "/guarded_features", "/paid_basis_features", "/positive_packet",
-                  "/frequency_context", "/template_response", "/block_parities", "/shared_relation",
-                  "/i09_quadratic", "/matrix_boundary", "/bilinear", "/diffusion", "/shear",
-                  "/stage26", "/stage35", "/stage37", "/stage38", "/structural", "/response",
-                  "/schema", "/general_compiler", "/paid_basis",
-              )):
-                  return "feature_families"
+              feature_modules = (
+                  "device_feature_plan", "features", "rank_features", "basis_gradient",
+                  "bound_features", "guarded_features", "paid_basis_features",
+                  "positive_packet", "frequency_context", "template_response",
+                  "block_parities", "shared_relation", "i09_quadratic",
+                  "matrix_boundary", "bilinear", "diffusion", "shear", "stage26",
+                  "stage35", "stage37", "stage38", "structural", "response", "schema",
+                  "general_compiler", "paid_basis",
+              )
+              for module in feature_modules:
+                  if f"/{module}/" in p or p.endswith(f"/{module}.rs"):
+                      return f"f_{module}"
+              if "/bin/" in p:
+                  return "train_cli"
               if "/cuda" in p or "/device_" in p or p.endswith("/torch_device.rs"):
                   return "device_runtime"
-              if "/run_config/" in p or "/bin/" in p or "/checkpoint/" in p:
-                  return "orchestration"
-              if "/frozen_data/" in p or "/training_data/" in p or "/packet/" in p:
-                  return "data_contracts"
-              if p.endswith("/lib.rs") or p.endswith("/alphabet.rs") or p.endswith("/state.rs"):
-                  return "core_contracts"
               return "other"
 
           pairs = set()

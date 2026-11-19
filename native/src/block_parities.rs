@@ -31,6 +31,18 @@ impl BlockContext {
             targets,
         })
     }
+
+    pub fn dimension(&self) -> u32 {
+        self.n
+    }
+
+    pub fn sources(&self) -> &[u32] {
+        &self.sources
+    }
+
+    pub fn targets(&self) -> &[u32] {
+        &self.targets
+    }
 }
 
 mod producer;
