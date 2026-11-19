@@ -202,7 +202,9 @@ elif [ -s "$BUILDER_LOG" ]; then
   detail=builder_exception_other
 elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ]; then
   DATA_SHA="$(tr -d '\\r\\n' < "$SHA")"
-  if ! printf '%s' "$DATA_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
+  if ! printf '%s' "$DATA_SHA" | grep -Eq '^[0-9a-f]+$'; then
+    detail=dataset_checksum_sidecar_invalid
+  elif [ "$(expr length "$DATA_SHA")" -ne 64 ]; then
     detail=dataset_checksum_sidecar_invalid
   elif [ ! -x "$VALIDATOR_BIN" ]; then
     CARGO_LOG="$ROOT/classifier-cargo.private.log"
@@ -224,7 +226,7 @@ elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ]; then
       fi
     elif grep -Eiq 'failed to download|failed to get|could not connect|connection reset|could not resolve|timed out|HTTP.*(502|503|504)' "$CARGO_LOG"; then
       detail=validator_build_network_error
-    elif grep -Eiq 'error\[E[0-9]{4}\]|could not compile|failed to compile' "$CARGO_LOG"; then
+    elif grep -Eiq 'error\[E[0-9]+\]|could not compile|failed to compile' "$CARGO_LOG"; then
       detail=validator_compile_error
     elif grep -Eiq 'no space left|disk quota exceeded' "$CARGO_LOG"; then
       detail=disk_full
