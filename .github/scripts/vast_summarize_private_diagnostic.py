@@ -21,9 +21,12 @@ from vast_probe_existing_2x3060 import (
 )
 
 MAX_REMOTE_SECONDS = 45
+REMOTE_STATUS = "not_started"
 
 
 def remote_summary(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path) -> str | None:
+    global REMOTE_STATUS
+    REMOTE_STATUS = "ssh_failed"
     code = r"""
 import json, pathlib, re, sys
 root = pathlib.Path("/workspace/tqp_private_build_diagnostics")
@@ -106,16 +109,24 @@ else:
             return None
         if attempt < 3:
             time.sleep(3)
-    if result is None or result.returncode != 0:
+    if result is None:
+        return None
+    if result.returncode != 0:
+        REMOTE_STATUS = "remote_failed"
         return None
     for line in result.stdout.splitlines():
         if not line.startswith("private_diagnostic_sites="):
             continue
         value = line.partition("=")[2]
         if value in {"missing", "none"}:
+            REMOTE_STATUS = "ok"
             return value
         if re.fullmatch(r"E[0-9]{4}@[a-z0-9_]+:[0-9]+(?:\+E[0-9]{4}@[a-z0-9_]+:[0-9]+){0,5}", value):
+            REMOTE_STATUS = "ok"
             return value
+        REMOTE_STATUS = "marker_invalid"
+        return None
+    REMOTE_STATUS = "marker_missing"
     return None
 
 
@@ -285,6 +296,7 @@ def main() -> int:
                        ):
         summary = "unavailable"
     print(f"checked_at={checked}")
+    print(f"private_diagnostic_remote_status={REMOTE_STATUS}")
     print(f"private_diagnostic_summary={summary}")
     print(f"temporary_ssh_key={cleanup}")
     return 0 if cleanup in {"detached", "not_needed"} and summary != "unavailable" else 1
