@@ -1,0 +1,27 @@
+name: Frozen dataset builder source check
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/scripts/rebuild_frozen_dataset.py
+      - .github/workflows/rebuild-frozen-dataset-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-builder-self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify deterministic record and matrix routines
+        run: python .github/scripts/rebuild_frozen_dataset.py --self-test
+
