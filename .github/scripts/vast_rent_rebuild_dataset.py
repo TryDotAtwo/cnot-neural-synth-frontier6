@@ -33,7 +33,7 @@ MAX_STOP_SECONDS = 300
 ALLOWED_OUTCOMES = {
     "accepted", "configuration_missing", "run_identity_invalid",
     "label_collision", "existing_2x3060_present", "offer_gate",
-    "budget_gate", "create_uncertain", "instance_start_failed",
+    "budget_gate", "budget_gate_prior_spend", "budget_gate_offer_cost", "create_uncertain", "instance_start_failed",
     "target_gpu_mismatch", "toolchain_failed", "dataset_failed",
     "api_failed", "controller_failed",
 }
@@ -217,6 +217,24 @@ def project_charges() -> float:
     if not math.isfinite(total) or total < 0:
         raise GateError("Vast project charges are invalid")
     return total
+
+
+def budget_gate_reason(spent: object, rows: object) -> str:
+    if not isinstance(rows, list):
+        return "offer_cost"
+    if any(
+        isinstance(row, dict)
+        and budget_allows(spent, row.get("dph_total"), reserve=total_reserve(row.get("storage_cost")))
+        for row in rows
+    ):
+        return "within_budget"
+    if any(
+        isinstance(row, dict)
+        and budget_allows(0.0, row.get("dph_total"), reserve=total_reserve(row.get("storage_cost")))
+        for row in rows
+    ):
+        return "prior_spend"
+    return "offer_cost"
 
 
 def is_2x3060(row: dict) -> bool:
@@ -608,7 +626,8 @@ def run() -> int:
             None,
         )
         if selected is None:
-            outcome = "budget_gate"
+            reason = budget_gate_reason(spent, offers)
+            outcome = "budget_gate_prior_spend" if reason == "prior_spend" else "budget_gate_offer_cost"
             raise GateError("the $20 budget gate is closed")
         offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id"))
         row = create_once(offer_id, label)
