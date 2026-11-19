@@ -135,7 +135,7 @@ jobs:
           import sys
 
           log_path, safe_path, summary_path = map(pathlib.Path, sys.argv[1:4])
-          allowed_codes = {"E0282", "E0283", "E0308", "E0369"}
+          # Rust diagnostic codes are bounded to the standard E#### namespace; source paths and messages stay private on the runner.
 
           def area(path):
               p = "/" + path.replace("\\\\", "/").lstrip("/")
@@ -179,7 +179,7 @@ jobs:
                   continue
               code = diagnostic.get("code")
               code = code.get("code") if isinstance(code, dict) else None
-              code = code if code in allowed_codes else "EOTHER"
+              code = code if isinstance(code, str) and len(code) == 5 and code.startswith("E") and code[1:].isdigit() else "EOTHER"
               spans = diagnostic.get("spans")
               if not isinstance(spans, list):
                   spans = []
