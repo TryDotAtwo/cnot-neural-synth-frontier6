@@ -25,9 +25,9 @@ remote_dataset.MAX_REMOTE_SECONDS = 30
 remote_dataset.REMOTE_COMMAND_SECONDS = 20
 
 
-RUN_ID = "44569035847"
-SOURCE_SHA8 = "01008f40"
-ATTEMPT = "2"
+RUN_ID = "44605523186"
+SOURCE_SHA8 = "c99333b8"
+ATTEMPT = "1"
 DETAIL_CLASSES = {
     "private_log_missing",
     "disk_full",
