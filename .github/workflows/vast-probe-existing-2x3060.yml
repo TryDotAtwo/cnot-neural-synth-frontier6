@@ -1,0 +1,33 @@
+name: Redacted preflight for existing 2x RTX 3060
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/scripts/vast_probe_existing_2x3060.py
+      - .github/workflows/vast-probe-existing-2x3060.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tqp-vast-running-3060-preflight
+  cancel-in-progress: false
+
+jobs:
+  existing-target-preflight:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out controller source
+        uses: actions/checkout@v4
+
+      - name: Check controller syntax
+        run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_probe_existing_2x3060.py').read_text(encoding='utf-8'))"
+
+      - name: Probe only the sole running 2x3060 target
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_probe_existing_2x3060.py
