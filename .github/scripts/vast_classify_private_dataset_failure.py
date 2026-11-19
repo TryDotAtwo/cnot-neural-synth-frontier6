@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from vast_probe_existing_2x3060 import (
     ApiFailure,
     api_json,
+    classify_ssh_failure,
     find_attached_key_id,
     safe_budget_projection,
     state,
@@ -57,6 +58,14 @@ DETAIL_CLASSES = {
     "target_not_running",
     "target_ambiguous",
     "budget_gate_closed",
+    "ssh_auth_failed",
+    "ssh_timeout",
+    "ssh_connection_refused",
+    "ssh_network_unreachable",
+    "ssh_dns_failure",
+    "ssh_host_key_failure",
+    "ssh_handshake_failed",
+    "ssh_rejected",
     "endpoint_unavailable",
     "key_generation_failed",
     "key_attach_failed",
@@ -226,7 +235,7 @@ def main() -> int:
         if proc is None:
             detail = "ssh_timeout_or_connection_failure"
         elif proc.returncode == 255:
-            detail = "connection_failed"
+            detail = classify_ssh_failure(proc.stderr or "")
         elif proc.returncode == 0:
             found = next(
                 (
