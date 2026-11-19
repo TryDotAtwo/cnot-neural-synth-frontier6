@@ -199,7 +199,21 @@ elif [ -s "$BUILDER_LOG" ]; then
   detail=builder_exception_other
 elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ] && [ -x "$VALIDATOR_BIN" ]; then
   DATA_SHA="$(tr -d '\\r\\n' < "$SHA")"
-  if ! printf '%s' "$DATA_SHA" | grep -Eq '^[0-9a-f]{64}
+  if ! printf '%s' "$DATA_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
+    detail=dataset_checksum_sidecar_invalid
+  elif "$VALIDATOR_BIN" "$DATA" "$DATA_SHA" >"$ROOT/classifier-validation.private.log" 2>&1; then
+    if grep -Fq 'frozen_data_validation=accepted' "$ROOT/classifier-validation.private.log"; then
+      detail=validator_recheck_passed
+    else
+      detail=validator_recheck_missing_marker
+    fi
+  elif grep -Fq 'frozen_data_validation=failed' "$ROOT/classifier-validation.private.log"; then
+    detail=validator_recheck_failed
+  elif grep -Eiq 'error while loading shared libraries|command not found|permission denied' "$ROOT/classifier-validation.private.log"; then
+    detail=validator_runtime_error
+  else
+    detail=validator_recheck_failed
+  fi
 elif [ -e "$DATA" ] || [ -e "$SHA" ] || [ -e "$RECEIPT" ]; then
   if [ ! -x "$VALIDATOR_BIN" ]; then
     detail=validator_binary_missing
