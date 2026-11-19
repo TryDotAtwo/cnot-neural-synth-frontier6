@@ -23,8 +23,8 @@ from vast_probe_existing_2x3060 import (
 import vast_rebuild_remote_dataset as remote_dataset
 
 # Bound this read-only classifier even if the remote shell stalls.
-remote_dataset.MAX_REMOTE_SECONDS = 30
-remote_dataset.REMOTE_COMMAND_SECONDS = 20
+remote_dataset.MAX_REMOTE_SECONDS = 90
+remote_dataset.REMOTE_COMMAND_SECONDS = 70
 
 
 RUN_ID = "44605523186"
@@ -59,6 +59,9 @@ DETAIL_CLASSES = {
     "train_root_generation_exhausted",
     "frozen_data_validation_failed",
     "validator_build_failed",
+    "validator_compile_error",
+    "validator_build_network_error",
+    "validator_build_failed_unclassified",
     "artifact_conflict",
     "other_generation_validation_failure",
     "builder_domain_error_unclassified",
@@ -197,10 +200,37 @@ elif [ -s "$BUILDER_LOG" ] && grep -Eq '^(OSError|PermissionError|FileNotFoundEr
   detail=builder_io_error
 elif [ -s "$BUILDER_LOG" ]; then
   detail=builder_exception_other
-elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ] && [ -x "$VALIDATOR_BIN" ]; then
+elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ]; then
   DATA_SHA="$(tr -d '\\r\\n' < "$SHA")"
   if ! printf '%s' "$DATA_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
     detail=dataset_checksum_sidecar_invalid
+  elif [ ! -x "$VALIDATOR_BIN" ]; then
+    CARGO_LOG="$ROOT/classifier-cargo.private.log"
+    if ! command -v cargo >/dev/null 2>&1; then
+      detail=toolchain_unavailable
+    elif CARGO_TARGET_DIR="$ROOT/cargo-target" cargo build --quiet --manifest-path "$ROOT/source/native/Cargo.toml" --no-default-features --bin cnot103-validate-data >"$CARGO_LOG" 2>&1; then
+      if [ ! -x "$VALIDATOR_BIN" ]; then
+        detail=validator_binary_missing
+      elif "$VALIDATOR_BIN" "$DATA" "$DATA_SHA" >"$ROOT/classifier-validation.private.log" 2>&1; then
+        if grep -Fq 'frozen_data_validation=accepted' "$ROOT/classifier-validation.private.log"; then
+          detail=validator_recheck_passed
+        else
+          detail=validator_recheck_missing_marker
+        fi
+      elif grep -Fq 'frozen_data_validation=failed' "$ROOT/classifier-validation.private.log"; then
+        detail=validator_recheck_failed
+      else
+        detail=validator_runtime_error
+      fi
+    elif grep -Eiq 'failed to download|failed to get|could not connect|connection reset|could not resolve|timed out|HTTP.*(502|503|504)' "$CARGO_LOG"; then
+      detail=validator_build_network_error
+    elif grep -Eiq 'error\[E[0-9]{4}\]|could not compile|failed to compile' "$CARGO_LOG"; then
+      detail=validator_compile_error
+    elif grep -Eiq 'no space left|disk quota exceeded' "$CARGO_LOG"; then
+      detail=disk_full
+    else
+      detail=validator_build_failed_unclassified
+    fi
   elif "$VALIDATOR_BIN" "$DATA" "$DATA_SHA" >"$ROOT/classifier-validation.private.log" 2>&1; then
     if grep -Fq 'frozen_data_validation=accepted' "$ROOT/classifier-validation.private.log"; then
       detail=validator_recheck_passed
