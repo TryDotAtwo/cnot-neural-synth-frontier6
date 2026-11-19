@@ -62,6 +62,8 @@ DETAIL_CLASSES = {
     "validator_compile_error",
     "validator_build_network_error",
     "validator_build_failed_unclassified",
+    "validator_toolchain_too_old",
+    "validator_manifest_or_target_error",
     "artifact_conflict",
     "other_generation_validation_failure",
     "builder_domain_error_unclassified",
@@ -227,6 +229,10 @@ elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ]; then
       fi
     elif grep -Eiq 'failed to download|failed to get|could not connect|connection reset|could not resolve|timed out|HTTP.*(502|503|504)' "$CARGO_LOG"; then
       detail=validator_build_network_error
+    elif grep -Eiq 'lock file version.?4|lockfile version.?4|does not understand this lock file|unsupported lock file version' "$CARGO_LOG"; then
+      detail=validator_toolchain_too_old
+    elif grep -Eiq 'could not find Cargo.toml|manifest path .*does not exist|failed to parse manifest|no bin target named' "$CARGO_LOG"; then
+      detail=validator_manifest_or_target_error
     elif grep -Eiq 'error\[E[0-9]+\]|could not compile|failed to compile' "$CARGO_LOG"; then
       detail=validator_compile_error
     elif grep -Eiq 'no space left|disk quota exceeded' "$CARGO_LOG"; then
