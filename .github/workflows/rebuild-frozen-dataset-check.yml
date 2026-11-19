@@ -118,13 +118,13 @@ jobs:
         shell: bash
         working-directory: native
         run: |
-          log_file="\${RUNNER_TEMP}/cuda-feature-build.jsonl"
-          safe_status="\${RUNNER_TEMP}/cuda-feature-build.status"
-          if cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark >"\${log_file}" 2>&1; then
+          log_file="${RUNNER_TEMP}/cuda-feature-build.jsonl"
+          safe_status="${RUNNER_TEMP}/cuda-feature-build.status"
+          if cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark >"${log_file}" 2>&1; then
             printf 'cuda_feature_build=pass\n'
-            printf 'cuda_feature_build=pass\n' >> "\${GITHUB_STEP_SUMMARY}"
+            printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else
-            if python3 - "\${log_file}" "\${safe_status}" "\${GITHUB_STEP_SUMMARY}" <<'PY' >/dev/null 2>&1
+            if python3 - "${log_file}" "${safe_status}" "${GITHUB_STEP_SUMMARY}" <<'PY' >/dev/null 2>&1
           import json
           import os
           import pathlib
@@ -191,11 +191,11 @@ jobs:
               summary.write("\n".join(lines) + "\n")
           PY
             then
-              cat "\${safe_status}"
+              cat "${safe_status}"
             else
               printf 'cuda_feature_build=fail\n'
               printf 'cuda_build_failure=rust_compile_unknown\n'
-              printf 'cuda_feature_build=fail\ncuda_build_failure=rust_compile_unknown\n' >> "\${GITHUB_STEP_SUMMARY}"
+              printf 'cuda_feature_build=fail\ncuda_build_failure=rust_compile_unknown\n' >> "${GITHUB_STEP_SUMMARY}"
             fi
             exit 1
           fi
