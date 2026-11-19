@@ -9,6 +9,8 @@ on:
       - .github/scripts/fetch_public_holdout.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
       - native/Cargo.toml
+      - native/build.rs
+      - 'native/cuda/**'
       - 'native/src/**'
       - native/src/bin/cnot103_validate_data.rs
 
@@ -38,3 +40,34 @@ jobs:
       - name: Check the validator without CUDA or project data
         working-directory: native
         run: cargo check --no-default-features --bin cnot103-validate-data
+
+  cuda-feature-build:
+    runs-on: ubuntu-latest
+    container:
+      image: pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel
+    timeout-minutes: 45
+    env:
+      CNOT103_CUDA_ARCHITECTURES: "86"
+      CUDA_HOME: /usr/local/cuda
+      LIBTORCH_USE_PYTORCH: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build full CUDA training and benchmark binaries
+        shell: bash
+        working-directory: native
+        run: |
+          log_file="${RUNNER_TEMP}/cuda-feature-build.log"
+          if cargo build --features cuda --bin cnot103-train --bin cnot103-benchmark >"${log_file}" 2>&1; then
+            printf 'cuda_feature_build=pass\n'
+            printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
+          else
+            printf 'cuda_feature_build=fail\n'
+            printf 'cuda_feature_build=fail\n' >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
