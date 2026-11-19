@@ -8,6 +8,7 @@ import os
 import pathlib
 import re
 import subprocess
+import shutil
 import tempfile
 from datetime import datetime, timezone
 
@@ -40,6 +41,29 @@ def ssh(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path,
         return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def ensure_ssh_tools() -> bool:
+    if all(shutil.which(name) for name in ("ssh", "ssh-keygen", "scp")):
+        return True
+    if not shutil.which("apt-get"):
+        return False
+    try:
+        updated = subprocess.run(
+            ["apt-get", "update", "-qq"],
+            capture_output=True, text=True, timeout=240, check=False,
+        )
+        if updated.returncode != 0:
+            return False
+        installed = subprocess.run(
+            ["apt-get", "install", "-y", "-qq", "openssh-client"],
+            capture_output=True, text=True, timeout=240, check=False,
+        )
+        return installed.returncode == 0 and all(
+            shutil.which(name) for name in ("ssh", "ssh-keygen", "scp")
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def main() -> int:
@@ -86,6 +110,9 @@ def main() -> int:
             result = "endpoint_unavailable"
             raise RuntimeError()
         instance_id = candidate
+        if not ensure_ssh_tools():
+            result = "ssh_tools_unavailable"
+            raise RuntimeError()
 
         remote_path = f"{REMOTE_DIR}/run-{run_id}-attempt-{attempt}.jsonl"
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix="vast-private-log-"))
