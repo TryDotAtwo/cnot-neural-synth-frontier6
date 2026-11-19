@@ -8,6 +8,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from vast_probe_existing_2x3060 import (
@@ -230,6 +231,7 @@ def main() -> int:
         if find_attached_key_id(api_key, instance_id, public_key) is None:
             detail = "key_attach_unconfirmed"
             raise RuntimeError()
+        time.sleep(12)
 
         proc = remote_dataset.remote_bash(host, port, key_path, known_hosts, REMOTE_CLASSIFIER)
         if proc is None:
