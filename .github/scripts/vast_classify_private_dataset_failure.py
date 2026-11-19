@@ -67,6 +67,12 @@ DETAIL_CLASSES = {
     "dataset_artifacts_incomplete",
     "dataset_outputs_missing",
     "validator_failure_unclassified",
+    "validator_recheck_passed",
+    "validator_recheck_failed",
+    "validator_recheck_missing_marker",
+    "validator_runtime_error",
+    "validator_binary_missing",
+    "dataset_checksum_sidecar_invalid",
     "target_not_running",
     "target_ambiguous",
     "budget_gate_closed",
@@ -98,6 +104,7 @@ DB="$ROOT/input/full_shared_native_holdout_20261001.sqlite"
 DATA="$ROOT/data/frozen_train_10k.json"
 SHA="$ROOT/data/frozen_train_10k.sha256"
 RECEIPT="$ROOT/data/build.receipt.json"
+VALIDATOR_BIN="$ROOT/cargo-target/debug/cnot103-validate-data"
 if [ ! -r "$LOG" ]; then
   detail=private_log_missing
 elif [ ! -e "$DB" ]; then
@@ -190,10 +197,32 @@ elif [ -s "$BUILDER_LOG" ] && grep -Eq '^(OSError|PermissionError|FileNotFoundEr
   detail=builder_io_error
 elif [ -s "$BUILDER_LOG" ]; then
   detail=builder_exception_other
-elif [ -e "$DATA" ] && [ -e "$SHA" ] && [ -e "$RECEIPT" ]; then
-  detail=validator_failure_unclassified
+elif [ -s "$DATA" ] && [ -s "$SHA" ] && [ -s "$RECEIPT" ] && [ -x "$VALIDATOR_BIN" ]; then
+  DATA_SHA="$(tr -d '\\r\\n' <"$SHA")"
+  case "$DATA_SHA" in *[!0-9a-f]*|'') detail=dataset_checksum_sidecar_invalid ;; esac
+  if [ "$detail" = unavailable ]; then
+    if [ "$(expr length "$DATA_SHA")" -ne 64 ]; then
+      detail=dataset_checksum_sidecar_invalid
+    elif "$VALIDATOR_BIN" "$DATA" "$DATA_SHA" >"$ROOT/classifier-validation.private.log" 2>&1; then
+      if grep -Fq 'frozen_data_validation=accepted' "$ROOT/classifier-validation.private.log"; then
+        detail=validator_recheck_passed
+      else
+        detail=validator_recheck_missing_marker
+      fi
+    elif grep -Fq 'frozen_data_validation=failed' "$ROOT/classifier-validation.private.log"; then
+      detail=validator_recheck_failed
+    elif grep -Eiq 'error while loading shared libraries|command not found|permission denied' "$ROOT/classifier-validation.private.log"; then
+      detail=validator_runtime_error
+    else
+      detail=validator_recheck_failed
+    fi
+  fi
 elif [ -e "$DATA" ] || [ -e "$SHA" ] || [ -e "$RECEIPT" ]; then
-  detail=dataset_artifacts_incomplete
+  if [ ! -x "$VALIDATOR_BIN" ]; then
+    detail=validator_binary_missing
+  else
+    detail=dataset_artifacts_incomplete
+  fi
 else
   detail=dataset_outputs_missing
 fi
