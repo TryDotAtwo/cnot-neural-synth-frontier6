@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from vast_probe_existing_2x3060 import (
     ApiFailure,
     api_json,
+    classify_ssh_failure,
     find_attached_key_id,
     safe_budget_projection,
     state,
@@ -195,7 +196,7 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
             failure_class = "connection_or_timeout"
         elif proc.returncode == 255:
             result = "connection_failed"
-            failure_class = "connection_failed"
+            failure_class = classify_ssh_failure(proc.stderr or "")
         else:
             allowed = {
                 "accepted", "failed", "workspace_exists",
@@ -264,7 +265,15 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
                 pass
 
     print(f"checked_at={checked}")
-    if failure_class not in {"none", "toolchain_unavailable", "workspace_probe_failed", "disk_full", "network_failure", "generator_or_validation_failed", "remote_step_failed", "connection_failed", "connection_or_timeout", "unavailable"}:
+    allowed_failure_classes = {
+        "none", "toolchain_unavailable", "workspace_probe_failed", "disk_full",
+        "network_failure", "generator_or_validation_failed", "remote_step_failed",
+        "connection_failed", "connection_or_timeout", "ssh_auth_failed",
+        "ssh_timeout", "ssh_connection_refused", "ssh_network_unreachable",
+        "ssh_dns_failure", "ssh_host_key_failure", "ssh_handshake_failed",
+        "ssh_rejected", "unavailable",
+    }
+    if failure_class not in allowed_failure_classes:
         failure_class = "unavailable"
     print(f"dataset_build={result}")
     print(f"dataset_failure_class={failure_class}")
