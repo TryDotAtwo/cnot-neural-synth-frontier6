@@ -64,6 +64,16 @@ jobs:
             printf 'rust_bootstrap_dependency=pass\n'
           else
             printf 'rust_bootstrap_dependency=fail\n'
+            failure_class="package_install"
+            if grep -Eiq 'temporary failure resolving|could not resolve|failed to fetch|connection timed out|network is unreachable' "${log_file}"; then
+              failure_class="network"
+            elif grep -Eiq 'unable to locate package|no installation candidate' "${log_file}"; then
+              failure_class="package_unavailable"
+            elif grep -Eiq 'apt-get: command not found|permission denied|operation not permitted' "${log_file}"; then
+              failure_class="runner_environment"
+            fi
+            printf 'rust_bootstrap_failure=%s\n' "${failure_class}"
+            printf 'rust_bootstrap_failure=%s\n' "${failure_class}" >> "${GITHUB_STEP_SUMMARY}"
             exit 1
           fi
 
