@@ -22,10 +22,11 @@ from vast_probe_existing_2x3060 import (
 
 MAX_REMOTE_SECONDS = 45
 REMOTE_STATUS = "not_started"
+REMOTE_BUILD_CLASS = "unavailable"
 
 
 def remote_summary(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path) -> str | None:
-    global REMOTE_STATUS
+    global REMOTE_STATUS, REMOTE_BUILD_CLASS
     REMOTE_STATUS = "ssh_failed"
     code = r"""
 import json, pathlib, re, sys
@@ -57,10 +58,16 @@ def area(path):
         if name in {"device","lifecycle","run","validation"}: return "training_session_" + name
     return "other"
 pairs = set()
+non_json_lines = 0
+cargo_missing = False
 for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines():
     try:
         item = json.loads(line)
     except json.JSONDecodeError:
+        non_json_lines += 1
+        lowered = line.casefold()
+        if "cargo: command not found" in lowered or "bash: cargo: not found" in lowered:
+            cargo_missing = True
         continue
     if item.get("reason") != "compiler-message":
         continue
@@ -81,6 +88,15 @@ if not pairs:
     print("private_diagnostic_sites=none")
 else:
     print("private_diagnostic_sites=" + "+".join(sorted(pairs)[:6]))
+if pairs:
+    failure_class = "compiler_errors"
+elif cargo_missing:
+    failure_class = "cargo_not_found"
+elif non_json_lines:
+    failure_class = "unclassified_text"
+else:
+    failure_class = "no_compiler_errors"
+print("private_build_failure_class=" + failure_class)
 """
     argv = [
         "ssh", "-i", str(key_path), "-p", str(port),
@@ -115,6 +131,13 @@ else:
         REMOTE_STATUS = "remote_failed"
         return None
     for line in result.stdout.splitlines():
+        if line.startswith("private_build_failure_class="):
+            value = line.partition("=")[2]
+            if value not in {"compiler_errors", "cargo_not_found", "unclassified_text", "no_compiler_errors"}:
+                REMOTE_STATUS = "marker_invalid"
+                return None
+            REMOTE_BUILD_CLASS = value
+            continue
         if not line.startswith("private_diagnostic_sites="):
             continue
         value = line.partition("=")[2]
@@ -297,6 +320,7 @@ def main() -> int:
         summary = "unavailable"
     print(f"checked_at={checked}")
     print(f"private_diagnostic_remote_status={REMOTE_STATUS}")
+    print(f"private_build_failure_class={REMOTE_BUILD_CLASS}")
     print(f"private_diagnostic_summary={summary}")
     print(f"temporary_ssh_key={cleanup}")
     return 0 if cleanup in {"detached", "not_needed"} and summary != "unavailable" else 1
