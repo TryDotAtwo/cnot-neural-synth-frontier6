@@ -1,0 +1,52 @@
+name: Destroy project-owned Vast instances
+run-name: Owner-requested Vast project cleanup
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vast-qhat4-destroy-owned.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cnot103-vast-owned-destroy
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout cleanup controller
+        uses: actions/checkout@v4
+
+      - name: Parse cleanup controller before contacting Vast
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          for name in (
+              ".github/scripts/vast_qhat4_driver.py",
+              ".github/scripts/vast_qhat4_destroy_owned.py",
+          ):
+              ast.parse(Path(name).read_text(encoding="utf-8"), filename=name)
+          print("cleanup_controller_parse=pass")
+          PY
+
+      - name: Install Vast CLI
+        run: |
+          set -euo pipefail
+          cli_venv="$RUNNER_TEMP/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Destroy project-owned instances and volumes
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 -u .github/scripts/vast_qhat4_destroy_owned.py
