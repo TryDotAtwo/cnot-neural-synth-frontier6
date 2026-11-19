@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
@@ -44,43 +45,50 @@ def inventory() -> tuple[str, str]:
         return "query_failed", "unknown"
 
     matches = []
+    project_matches = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         gpu = row.get("gpu_name")
         count = row.get("num_gpus", row.get("gpu_count"))
         if (
-            isinstance(gpu, str)
-            and "3060" in gpu.casefold()
-            and isinstance(count, int)
-            and not isinstance(count, bool)
-            and count == 2
+            not isinstance(gpu, str)
+            or "3060" not in gpu.casefold()
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count != 2
         ):
-            instance_id = row.get("id")
-            instance_state = state(row.get("actual_status") or row.get("cur_state") or row.get("next_state"))
-            matches.append((instance_id, instance_state))
+            continue
+        instance_id = row.get("id")
+        instance_state = state(row.get("actual_status") or row.get("cur_state") or row.get("next_state"))
+        matches.append((instance_id, instance_state))
+        label = row.get("label")
+        if isinstance(label, str) and re.fullmatch(r"(?i)cnot103[a-z0-9_.-]{1,120}", label):
+            project_matches.append((instance_id, instance_state))
 
-    states = [instance_state for _, instance_state in matches]
-    if len(states) > 1:
+    def state_summary(entries: list[tuple[object, str]], empty: str) -> str:
+        states = [instance_state for _, instance_state in entries]
+        if not states:
+            return empty
+        if len(states) == 1:
+            return f"existing_target_{states[0]}"
         counts = {}
         for value in states:
             counts[value] = counts.get(value, 0) + 1
-        state_summary = "_".join(f"{name}{counts[name]}" for name in sorted(counts))
-        inventory_status = f"multiple_targets_{state_summary}"
-    elif not states:
-        inventory_status = "no_existing_target"
-    else:
-        inventory_status = f"existing_target_{states[0]}"
+        return "multiple_targets_" + "_".join(f"{name}{counts[name]}" for name in sorted(counts))
+
+    inventory_status = state_summary(matches, "no_existing_target")
+    project_status = state_summary(project_matches, "no_project_target")
 
     try:
         volume_payload = fetch_json("https://console.vast.ai/api/v0/volumes")
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError, OSError):
-        return inventory_status, "query_failed"
+        return project_status, "query_failed"
     volume_rows = volume_payload.get("volumes") if isinstance(volume_payload, dict) else None
     if not isinstance(volume_rows, list):
-        return inventory_status, "invalid_response"
+        return project_status, "invalid_response"
     if not volume_rows:
-        return inventory_status, "no_volumes"
+        return project_status, "no_volumes"
 
     attached_ids = set()
     has_instance_lists = False
@@ -100,22 +108,22 @@ def inventory() -> tuple[str, str]:
     if not has_instance_lists:
         return inventory_status, "unknown"
 
-    target_ids = {instance_id for instance_id, _ in matches if isinstance(instance_id, int) and not isinstance(instance_id, bool)}
-    running_ids = {instance_id for instance_id, instance_state in matches if instance_state == "running" and isinstance(instance_id, int) and not isinstance(instance_id, bool)}
-    exited_ids = {instance_id for instance_id, instance_state in matches if instance_state == "exited" and isinstance(instance_id, int) and not isinstance(instance_id, bool)}
+    target_ids = {instance_id for instance_id, _ in project_matches if isinstance(instance_id, int) and not isinstance(instance_id, bool)}
+    running_ids = {instance_id for instance_id, instance_state in project_matches if instance_state == "running" and isinstance(instance_id, int) and not isinstance(instance_id, bool)}
+    exited_ids = {instance_id for instance_id, instance_state in project_matches if instance_state == "exited" and isinstance(instance_id, int) and not isinstance(instance_id, bool)}
     running_attached = bool(running_ids & attached_ids)
     exited_attached = bool(exited_ids & attached_ids)
     if running_attached and exited_attached:
-        return inventory_status, "running_and_exited_attached"
+        return project_status, "running_and_exited_attached"
     if running_attached:
-        return inventory_status, "running_attached"
+        return project_status, "running_attached"
     if exited_attached:
-        return inventory_status, "exited_attached"
+        return project_status, "exited_attached"
     if target_ids & attached_ids:
-        return inventory_status, "other_3060_state_attached"
+        return project_status, "other_3060_state_attached"
     if attached_ids:
-        return inventory_status, "other_instances_attached"
-    return inventory_status, "detached_volumes_present"
+        return project_status, "other_instances_attached"
+    return project_status, "detached_volumes_present"
 
 def main() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
