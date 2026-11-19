@@ -33,7 +33,7 @@ impl BoundField {
     pub(super) fn build(
         data: PinnedRunData,
         contexts: FeatureContextsSpec,
-        policy: FeaturePolicySpec,
+        policy_spec: FeaturePolicySpec,
         model: ModelSpec,
         objective: ObjectiveSpec,
         training: &TrainingSpec,
@@ -47,12 +47,12 @@ impl BoundField {
         } = data;
         let feature_runtime::FeatureRuntime {
             registry,
-            policy,
+            policy: master_policy,
             selected_count,
             plans,
         } = feature_runtime::build(
             contexts.clone(),
-            policy.clone(),
+            policy_spec.clone(),
             &alphabets,
             training.seed,
             widths.clone(),
@@ -62,7 +62,7 @@ impl BoundField {
             .map(|index| {
                 feature_runtime::build(
                     contexts,
-                    policy,
+                    policy_spec.clone(),
                     &alphabets,
                     training.seed,
                     widths,
@@ -74,7 +74,7 @@ impl BoundField {
             if replica.selected_count != selected_count
                 || replica.registry.contract_sha256() != registry.contract_sha256()
                 || replica.policy.id().map_err(|e| e.to_string())?
-                    != policy.id().map_err(|e| e.to_string())?
+                    != master_policy.id().map_err(|e| e.to_string())?
             {
                 return Err("replica feature runtime differs from the master contract".into());
             }
@@ -82,7 +82,7 @@ impl BoundField {
         let objective = FullGraphObjective::new(
             alphabets,
             &registry,
-            policy.clone(),
+            master_policy.clone(),
             catalogs.into_values().collect(),
             dataset.forbidden_keys.iter().cloned().collect(),
             objective.build(),
@@ -95,7 +95,7 @@ impl BoundField {
         let model = FusionDistanceField::new_for_policy(
             &variables.root(),
             &registry,
-            &policy,
+            &master_policy,
             device,
             model_config.clone(),
         )
