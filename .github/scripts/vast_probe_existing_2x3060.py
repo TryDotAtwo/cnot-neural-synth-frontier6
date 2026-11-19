@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 API = "https://console.vast.ai/api/v0"
-GPU_COMMAND = "nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader"
+GPU_COMMAND = "nvidia-smi"
 DISK_COMMAND = "df -Pk /workspace"
 ALLOWED_STATES = {"running", "stopped", "starting", "stopping", "scheduling", "loading", "created", "offline", "exited", "error"}
 MAX_JSON_BYTES = 4 * 1024 * 1024
@@ -96,9 +96,9 @@ def read_remote_output(result_url: str) -> str:
 
 
 def classify_gpu_output(raw: str) -> str:
-    rows = [line.strip() for line in raw.splitlines() if line.strip() and "," in line]
+    rows = [line.strip() for line in raw.splitlines() if line.strip()]
     gpu_rows = [line for line in rows if "3060" in line.casefold()]
-    return "verified_2x3060" if len(gpu_rows) == 2 and len(rows) == 2 else "gpu_inventory_mismatch"
+    return "verified_2x3060" if len(gpu_rows) == 2 else "gpu_inventory_mismatch"
 
 
 def classify_disk_output(raw: str) -> str:
@@ -159,13 +159,22 @@ def main() -> int:
                 try:
                     detail = json.loads(error.read(4096))
                     kind = detail.get("error") if isinstance(detail, dict) else None
+                    message = detail.get("msg", "").casefold() if isinstance(detail, dict) and isinstance(detail.get("msg"), str) else ""
                 except Exception:
                     kind = None
-                status = {
-                    "invalid_args": "execute_invalid_args",
-                    "invalid_container_id": "execute_no_container_id",
-                    "invalid_container": "execute_container_unavailable",
-                }.get(kind, "execute_bad_request")
+                    message = ""
+                if "command" in message and "invalid" in message:
+                    status = "execute_command_invalid"
+                elif "container" in message:
+                    status = "execute_container_unavailable"
+                elif "json" in message:
+                    status = "execute_body_invalid"
+                else:
+                    status = {
+                        "invalid_args": "execute_invalid_args",
+                        "invalid_container_id": "execute_no_container_id",
+                        "invalid_container": "execute_container_unavailable",
+                    }.get(kind, "execute_bad_request")
             else:
                 status = {
                     401: "execute_auth_rejected",
