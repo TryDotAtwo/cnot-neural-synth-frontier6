@@ -1,11 +1,6 @@
 name: Destroy project-owned Vast instances
 run-name: Owner-requested Vast project cleanup
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/vast-qhat4-destroy-owned.yml
   workflow_dispatch: {}
 
 permissions:
