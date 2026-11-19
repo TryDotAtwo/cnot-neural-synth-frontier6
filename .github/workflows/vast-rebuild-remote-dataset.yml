@@ -6,7 +6,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/vast_rebuild_remote_dataset.py
-      - .github/workflows/rebuild-remote-dataset.yml
+      - .github/workflows/vast-rebuild-remote-dataset.yml
 
 permissions:
   contents: read
