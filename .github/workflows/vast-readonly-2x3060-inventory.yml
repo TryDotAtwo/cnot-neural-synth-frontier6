@@ -1,6 +1,7 @@
 name: Read-only Vast 2x3060 inventory
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - codex/2x3060-full-feature-training
