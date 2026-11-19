@@ -69,6 +69,8 @@ for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines()
         if "cargo: command not found" in lowered or "bash: cargo: not found" in lowered:
             cargo_missing = True
         continue
+    if not isinstance(item, dict):
+        continue
     if item.get("reason") != "compiler-message":
         continue
     message = item.get("message")
