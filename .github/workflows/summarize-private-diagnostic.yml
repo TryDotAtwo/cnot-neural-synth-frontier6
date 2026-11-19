@@ -1,0 +1,33 @@
+name: Summarize private CUDA build diagnostics
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/scripts/vast_summarize_private_diagnostic.py
+      - .github/workflows/summarize-private-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tqp-private-diagnostic-summary
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out controller source
+        uses: actions/checkout@v4
+
+      - name: Check controller syntax
+        run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_summarize_private_diagnostic.py').read_text(encoding='utf-8'))"
+
+      - name: Summarize only allowlisted diagnostic categories from Vast
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_summarize_private_diagnostic.py
