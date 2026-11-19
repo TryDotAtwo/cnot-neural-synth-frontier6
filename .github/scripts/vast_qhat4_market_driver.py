@@ -11,7 +11,7 @@ import urllib.request
 sys.path.insert(0, ".github/scripts")
 import vast_qhat4_driver as driver  # noqa: E402
 
-LABEL = "cnot103-qhat4-training-v1"
+LABEL = "cnot103-qhat4-training-v2"
 IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
 DISK_GB = "64"
 OFFER_QUERY = (
@@ -274,7 +274,17 @@ def select_target():
     if len(matches) > 1:
         raise driver.GateError("stable marketplace label is ambiguous")
     if not matches:
-        raise driver.GateError("stable-label RTX 3060 is missing; refusing to create a replacement")
+        rate, _negative_reliability, offer_id = eligible_offers()[0]
+        if driver.project_charges() + 3.5 * rate + 5.0 >= 20.0:
+            raise driver.GateError("the $20 budget gate did not pass before instance creation")
+        print("creation_budget_gate=pass")
+        row = create_once(offer_id)
+        stop_new_instance_before_copy(row)
+        row = api_instance()
+        if not status_stopped(row):
+            raise driver.GateError("new instance was not verified stopped before input copy")
+        print("marketplace_target=created_stopped")
+        return row
 
     row = matches[0]
     if not is_3060(row):
