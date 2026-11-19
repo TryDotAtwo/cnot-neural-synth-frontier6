@@ -56,7 +56,21 @@ def area(path):
     if "/training_session/" in p:
         name = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         if name in {"device","lifecycle","run","validation"}: return "training_session_" + name
-    return "other"
+    marker = "/native/src/"
+    if marker in p:
+        suffix = p.split(marker, 1)[1]
+    else:
+        marker = "/src/"
+        if marker not in p:
+            return "other"
+        suffix = p.rsplit(marker, 1)[1]
+    parts = suffix.split("/")
+    if not parts or not parts[-1].endswith(".rs"):
+        return "other"
+    parts[-1] = parts[-1][:-3]
+    if any(not re.fullmatch(r"[A-Za-z0-9_]+", part) for part in parts):
+        return "other"
+    return "src_" + "__".join(parts).lower()
 pairs = set()
 non_json_lines = 0
 cargo_missing = False
@@ -201,6 +215,18 @@ SAFE_FUNCTIONS = {
 }
 
 
+def source_relative(area: str) -> str | None:
+    relative = AREA_FILES.get(area)
+    if relative is not None:
+        return relative
+    if not area.startswith("src_"):
+        return None
+    parts = area[4:].split("__")
+    if not parts or any(not re.fullmatch(r"[a-z0-9_]+", part) for part in parts):
+        return None
+    return "native/src/" + "/".join(parts[:-1] + [parts[-1] + ".rs"])
+
+
 def summarize_sites(value: str, workspace: pathlib.Path) -> str:
     if value in {"missing", "none"}:
         return value
@@ -210,7 +236,7 @@ def summarize_sites(value: str, workspace: pathlib.Path) -> str:
         if not match:
             return "unavailable"
         code, area, line_text = match.groups()
-        relative = AREA_FILES.get(area)
+        relative = source_relative(area)
         function = "module"
         if relative:
             source = workspace / relative
@@ -226,7 +252,9 @@ def summarize_sites(value: str, workspace: pathlib.Path) -> str:
                         function = found.group(1)
             except (OSError, ValueError):
                 function = "source_unavailable"
-        if function not in SAFE_FUNCTIONS and function not in {"module", "source_unavailable"}:
+        if area.startswith("src_") and function not in {"module", "source_unavailable"} and re.fullmatch(r"[A-Za-z0-9_]+", function):
+            function = function.lower()
+        elif function not in SAFE_FUNCTIONS and function not in {"module", "source_unavailable"}:
             function = "function_other"
         results.append(code + "_" + area + "_" + function)
     return "+".join(results)
