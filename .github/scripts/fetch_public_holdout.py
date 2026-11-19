@@ -11,14 +11,14 @@ import pathlib
 import re
 import sqlite3
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
 REPOSITORY = "TryDotAtwo/quantum-generator"
 FILENAME = "full_shared_native_holdout_20261001.sqlite"
 API_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/revision/main"
-TREE_API_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/tree"
+PATHS_INFO_API_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/paths-info"
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 MAX_BYTES = 1 << 30
 USER_AGENT = "TheQuantumProject-Remote-Data-Preparation/1.0"
@@ -49,10 +49,42 @@ def get_revision() -> str:
     return revision
 
 
+def parse_file_metadata(entries: object) -> tuple[int, str]:
+    if not isinstance(entries, list):
+        raise FetchError("pinned holdout file metadata is missing")
+    matches = [item for item in entries if isinstance(item, dict) and item.get("path") == FILENAME]
+    if len(matches) != 1:
+        raise FetchError("pinned holdout file metadata is missing or ambiguous")
+    item = matches[0]
+    file_size = item.get("size")
+    lfs = item.get("lfs")
+    lfs_size = lfs.get("size") if isinstance(lfs, dict) else None
+    expected_sha = lfs.get("sha256") if isinstance(lfs, dict) else None
+    if (
+        item.get("type") != "file"
+        or isinstance(file_size, bool)
+        or not isinstance(file_size, int)
+        or file_size <= 0
+        or file_size > MAX_BYTES
+        or lfs_size != file_size
+        or not isinstance(expected_sha, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
+    ):
+        raise FetchError("pinned holdout LFS identity is invalid")
+    return file_size, expected_sha
+
+
 def get_file_metadata(revision: str) -> tuple[int, str]:
+    url = f"{PATHS_INFO_API_URL}/{quote(revision, safe='')}"
+    body = urlencode({"paths": FILENAME, "expand": "true"}).encode("ascii")
     request = Request(
-        f"{TREE_API_URL}/{revision}?expand=true",
-        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        url,
+        data=body,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
     )
     try:
         with urlopen(request, timeout=30) as response:
@@ -65,28 +97,7 @@ def get_file_metadata(revision: str) -> tuple[int, str]:
         entries = json.loads(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise FetchError("pinned holdout metadata response is invalid") from None
-    if not isinstance(entries, list):
-        raise FetchError("pinned holdout file metadata is missing")
-    matches = [item for item in entries if isinstance(item, dict) and item.get("path") == FILENAME]
-    if len(matches) != 1:
-        raise FetchError("pinned holdout file metadata is missing or ambiguous")
-    item = matches[0]
-    file_size = item.get("size")
-    lfs = item.get("lfs")
-    lfs_size = lfs.get("size") if isinstance(lfs, dict) else None
-    expected_sha = lfs.get("sha256") if isinstance(lfs, dict) else None
-    if (
-        isinstance(file_size, bool)
-        or not isinstance(file_size, int)
-        or file_size <= 0
-        or file_size > MAX_BYTES
-        or lfs_size != file_size
-        or not isinstance(expected_sha, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
-    ):
-        raise FetchError("pinned holdout LFS identity is invalid")
-    return file_size, expected_sha
-
+    return parse_file_metadata(entries)
 
 def validate_sqlite_file(path: pathlib.Path) -> None:
     uri = f"file:{path.resolve().as_posix()}?mode=ro"
@@ -216,14 +227,20 @@ def main() -> int:
         print("holdout_download=available")
         return 0
     except Exception as error:
-        try:
-            root = pathlib.Path(args.experiment_root).resolve()
-            root.mkdir(parents=True, exist_ok=True)
-            with (root / "holdout-fetch.private.log").open("a", encoding="utf-8") as stream:
-                stream.write(f"{type(error).__name__}: {error}\n")
-        except OSError:
-            pass
-        print("holdout_download=failed")
+        if args.experiment_root:
+            try:
+                root = pathlib.Path(args.experiment_root).resolve()
+                root.mkdir(parents=True, exist_ok=True)
+                with (root / "holdout-fetch.private.log").open("a", encoding="utf-8") as stream:
+                    stream.write(f"{type(error).__name__}: {error}\n")
+            except OSError:
+                pass
+        if args.metadata_check:
+            print("holdout_metadata=failed")
+            failure = "metadata_unavailable" if isinstance(error, FetchError) else "metadata_internal_error"
+            print(f"holdout_metadata_failure={failure}")
+        else:
+            print("holdout_download=failed")
         return 1
 
 
