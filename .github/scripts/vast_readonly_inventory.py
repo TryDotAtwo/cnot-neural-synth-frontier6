@@ -57,7 +57,10 @@ def inventory() -> str:
             matches.append(state(row.get("actual_status") or row.get("cur_state") or row.get("next_state")))
 
     if len(matches) > 1:
-        states = "_".join(sorted(set(matches)))
+        counts = {}
+        for value in matches:
+            counts[value] = counts.get(value, 0) + 1
+        states = "_".join(f"{name}{counts[name]}" for name in sorted(counts))
         return f"multiple_targets_{states}"
     if not matches:
         return "no_existing_target"
