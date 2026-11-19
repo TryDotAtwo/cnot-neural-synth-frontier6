@@ -59,11 +59,14 @@ def parse_file_metadata(entries: object) -> tuple[int, str]:
     file_size = item.get("size")
     lfs = item.get("lfs")
     lfs_size = lfs.get("size") if isinstance(lfs, dict) else None
-    expected_sha = lfs.get("sha256") if isinstance(lfs, dict) else None
-    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
-        oid = lfs.get("oid") if isinstance(lfs, dict) else None
-        match = re.fullmatch(r"sha256:([0-9a-f]{64})", oid) if isinstance(oid, str) else None
-        expected_sha = match.group(1) if match else expected_sha
+    def sha256_value(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        match = re.fullmatch(r"(?:sha256:)?([0-9a-f]{64})", value.casefold())
+        return match.group(1) if match else None
+
+    lfs_info = lfs if isinstance(lfs, dict) else {}
+    expected_sha = sha256_value(lfs_info.get("sha256")) or sha256_value(lfs_info.get("oid"))
     if item.get("type") != "file":
         raise FetchError("pinned holdout file type is invalid")
     if isinstance(file_size, bool) or not isinstance(file_size, int) or file_size <= 0:
@@ -72,8 +75,10 @@ def parse_file_metadata(entries: object) -> tuple[int, str]:
         raise FetchError("pinned holdout file exceeds the configured size limit")
     if isinstance(lfs_size, bool) or not isinstance(lfs_size, int) or lfs_size != file_size:
         raise FetchError("pinned holdout LFS size differs from file size")
-    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
-        raise FetchError("pinned holdout LFS checksum is invalid")
+    if expected_sha is None:
+        if not lfs_info:
+            raise FetchError("pinned holdout LFS metadata is missing")
+        raise FetchError("pinned holdout LFS digest format is unsupported")
     return file_size, expected_sha
 
 
@@ -252,7 +257,8 @@ def main() -> int:
                 "pinned holdout file size is invalid": "file_size_invalid",
                 "pinned holdout file exceeds the configured size limit": "file_too_large",
                 "pinned holdout LFS size differs from file size": "lfs_size_mismatch",
-                "pinned holdout LFS checksum is invalid": "lfs_checksum_invalid",
+                "pinned holdout LFS metadata is missing": "lfs_metadata_missing",
+                "pinned holdout LFS digest format is unsupported": "lfs_digest_format_unsupported",
             }
             failure = (
                 failure_codes.get(str(error), "metadata_validation_failed")
