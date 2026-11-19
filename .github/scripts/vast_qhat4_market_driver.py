@@ -110,6 +110,12 @@ def eligible_offers():
     if not isinstance(rows, list):
         raise driver.GateError("offer search response has an unknown shape")
 
+    source = driver.get_instance(
+        driver.SOURCE_INSTANCE_ID, driver.SOURCE_INSTANCE_LABELS
+    )
+    if source.get("actual_status") not in ("stopped", "exited") or source.get("intended_status") != "stopped":
+        raise driver.GateError("pinned source RTX 3060 is not stopped")
+
     eligible = []
     rejected = {}
     for row in rows:
@@ -147,13 +153,34 @@ def eligible_offers():
         ):
             rejected["verified"] = rejected.get("verified", 0) + 1
             continue
-        eligible.append((rate, -reliability, int(offer_id)))
+        same_machine = (
+            source.get("machine_id") is not None
+            and row.get("machine_id") is not None
+            and str(source.get("machine_id")) == str(row.get("machine_id"))
+        )
+        source_host, offer_host = source.get("host_id"), row.get("host_id")
+        source_location = source.get("geolocation")
+        offer_location = row.get("geolocation")
+        same_local_network = (
+            source_host is not None and offer_host is not None
+            and str(source_host) == str(offer_host)
+            and isinstance(source_location, str) and isinstance(offer_location, str)
+            and source_location.strip().casefold() == offer_location.strip().casefold()
+        )
+        local_copy = same_machine or same_local_network
+        eligible.append((rate, -reliability, int(offer_id), local_copy))
 
     if not eligible:
         summary = ",".join(f"{key}:{rejected[key]}" for key in sorted(rejected)) or "none"
         print(f"offer_filter_summary=rows:{len(rows)} eligible:0 rejected:{summary}")
         raise driver.GateError("no verified RTX 3060 offer meets the hardware gates")
-    eligible.sort()
+    eligible.sort(
+        key=lambda item: (
+            3.5 * item[0] + (1.5 if item[3] else 5.0),
+            item[1],
+            item[2],
+        )
+    )
     return eligible
 
 
@@ -274,9 +301,19 @@ def select_target():
     if len(matches) > 1:
         raise driver.GateError("stable marketplace label is ambiguous")
     if not matches:
-        rate, _negative_reliability, offer_id = eligible_offers()[0]
-        if driver.project_charges() + 3.5 * rate + 5.0 >= 20.0:
+        offers = eligible_offers()
+        spent = driver.project_charges()
+        selected = next(
+            (
+                offer for offer in offers
+                if spent + 3.5 * offer[0] + (1.5 if offer[3] else 5.0) < 20.0
+            ),
+            None,
+        )
+        if selected is None:
+            print("creation_budget_gate=fail")
             raise driver.GateError("the $20 budget gate did not pass before instance creation")
+        rate, _negative_reliability, offer_id, _local_copy = selected
         print("creation_budget_gate=pass")
         row = create_once(offer_id)
         stop_new_instance_before_copy(row)
