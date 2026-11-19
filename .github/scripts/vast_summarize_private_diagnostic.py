@@ -99,7 +99,30 @@ for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines()
     filename = primary.get("file_name", "") if primary else ""
     line_number = primary.get("line_start", 0) if primary else 0
     line_number = line_number if isinstance(line_number, int) and line_number > 0 else 0
-    pairs.add(code + "@" + area(filename) + ":" + str(line_number))
+    span_text = primary.get("text") if isinstance(primary, dict) else []
+    snippet = " ".join(
+        part.get("text", "")
+        for part in span_text
+        if isinstance(part, dict) and isinstance(part.get("text"), str)
+    ).casefold()
+    hint = "unknown"
+    if code in {"E0282", "E0283"}:
+        if "collect" in snippet:
+            hint = "collect"
+        elif "require_cuda_device" in snippet or "cuda_init" in snippet:
+            hint = "device_setup"
+    elif code == "E0369":
+        if "pow_scalar" in snippet and "-" in snippet:
+            hint = "tensor_scalar_sub"
+        elif "learning_rate" in snippet and "/" in snippet:
+            hint = "tensor_scalar_div"
+        elif "logical_" in snippet:
+            hint = "tensor_mask"
+        elif "bitwise_" in snippet:
+            hint = "step_counter"
+        else:
+            hint = "optimizer_other"
+    pairs.add(code + "@" + area(filename) + ":" + str(line_number) + ":" + hint)
 if pairs:
     failure_class = "compiler_errors"
 elif cargo_missing:
@@ -173,7 +196,7 @@ else:
         if value in {"missing", "none"}:
             REMOTE_STATUS = "ok"
             return value
-        if re.fullmatch(r"E[0-9]{4}@[a-z0-9_]+:[0-9]+(?:\+E[0-9]{4}@[a-z0-9_]+:[0-9]+){0,5}", value):
+        if re.fullmatch(r"E[0-9]{4}@[a-z0-9_]+:[0-9]+(?::[a-z0-9_]+)?(?:\+E[0-9]{4}@[a-z0-9_]+:[0-9]+(?::[a-z0-9_]+)?){0,5}", value):
             REMOTE_STATUS = "ok"
             return value
         REMOTE_STATUS = "marker_invalid"
@@ -227,7 +250,10 @@ def source_relative(area: str) -> str | None:
     return "native/src/" + "/".join(parts[:-1] + [parts[-1] + ".rs"])
 
 
-def safe_site(area: str, line_number: int) -> str:
+def safe_site(area: str, line_number: int, hint: str | None) -> str:
+    if hint in {"collect", "device_setup", "tensor_scalar_sub", "tensor_scalar_div",
+                "tensor_mask", "step_counter", "optimizer_other"}:
+        return hint
     if area == "run_exec_root":
         groups = (
             (175, 181, "device_setup"),
@@ -253,10 +279,10 @@ def summarize_sites(value: str, workspace: pathlib.Path) -> str:
         return value
     results = []
     for item in value.split("+")[:6]:
-        match = re.fullmatch(r"(E[0-9]{4})@([a-z0-9_]+):([0-9]+)", item)
+        match = re.fullmatch(r"(E[0-9]{4})@([a-z0-9_]+):([0-9]+)(?::([a-z0-9_]+))?", item)
         if not match:
             return "unavailable"
-        code, area, line_text = match.groups()
+        code, area, line_text, hint = match.groups()
         relative = source_relative(area)
         function = "module"
         if relative:
@@ -277,7 +303,7 @@ def summarize_sites(value: str, workspace: pathlib.Path) -> str:
             function = function.lower()
         elif function not in SAFE_FUNCTIONS and function not in {"module", "source_unavailable"}:
             function = "function_other"
-        results.append(code + "_" + area + "_" + function + "_" + safe_site(area, int(line_text)))
+        results.append(code + "_" + area + "_" + function + "_" + safe_site(area, int(line_text), hint))
     return "+".join(results)
 
 
