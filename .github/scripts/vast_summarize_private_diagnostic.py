@@ -129,6 +129,19 @@ print("private_build_failure_class=" + failure_class)
         return None
     if result.returncode != 0:
         REMOTE_STATUS = "remote_failed"
+        error_text = (result.stderr or "").casefold()
+        if "syntaxerror" in error_text or "invalid syntax" in error_text:
+            REMOTE_BUILD_CLASS = "summarizer_syntax_error"
+        elif "filenotfounderror" in error_text or "no such file" in error_text:
+            REMOTE_BUILD_CLASS = "remote_file_issue"
+        elif "permission denied" in error_text:
+            REMOTE_BUILD_CLASS = "remote_permission_denied"
+        elif "python3: not found" in error_text or "command not found" in error_text:
+            REMOTE_BUILD_CLASS = "remote_tool_missing"
+        elif "attributeerror" in error_text or "typeerror" in error_text:
+            REMOTE_BUILD_CLASS = "remote_parse_error"
+        else:
+            REMOTE_BUILD_CLASS = "remote_execution_error"
         return None
     for line in result.stdout.splitlines():
         if line.startswith("private_build_failure_class="):
