@@ -57,6 +57,7 @@ def remote_bash(host: str, port: int, key_path: pathlib.Path, known_hosts: pathl
 def main() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     result = "not_started"
+    failure_class = "unavailable"
     cleanup = "not_needed"
     temp_dir: pathlib.Path | None = None
     attach_attempted = False
@@ -136,22 +137,30 @@ if ! mkdir -m 700 "$ROOT"; then
 fi
 exec 3>&1
 exec >>"$ROOT/remote-dataset.private.log" 2>&1
-if ! command -v cargo >/dev/null 2>&1; then
-  printf 'dataset_build=toolchain_unavailable\\n'
-  exit 12
-fi
 finish() {{
   code=$?
   trap - EXIT
   if [ "$code" -eq 0 ]; then
     status=accepted
+    failure_class=none
   else
     status=failed
+    failure_class=remote_step_failed
+    if [ "$code" -eq 12 ]; then failure_class=toolchain_unavailable
+    elif [ "$code" -eq 22 ]; then failure_class=workspace_probe_failed
+    elif [ "$code" -eq 23 ]; then failure_class=disk_full
+    elif [ -s "$ROOT/remote-dataset.private.log" ] && grep -Eiq 'no space left|disk quota exceeded' "$ROOT/remote-dataset.private.log"; then failure_class=disk_full
+    elif [ -s "$ROOT/remote-dataset.private.log" ] && grep -Eiq 'command not found|cargo: not found' "$ROOT/remote-dataset.private.log"; then failure_class=toolchain_unavailable
+    elif [ -s "$ROOT/remote-dataset.private.log" ] && grep -Eiq 'HTTPError|urlopen error|connection reset|could not resolve|timed out' "$ROOT/remote-dataset.private.log"; then failure_class=network_failure
+    elif [ -s "$ROOT/remote-dataset.private.log" ] && grep -Eiq 'BuildError|leakage|holdout|validation|frozen' "$ROOT/remote-dataset.private.log"; then failure_class=generator_or_validation_failed
+    fi
   fi
   printf 'dataset_build=%s\\n' "$status" >"$ROOT/dataset-status.private" || true
   printf 'dataset_build=%s\\n' "$status" >&3
+  printf 'dataset_failure_class=%s\\n' "$failure_class" >&3
 }}
 trap finish EXIT
+if ! command -v cargo >/dev/null 2>&1; then exit 12; fi
 available_kb="$(df -Pk /workspace | awk 'NR==2 {{print $4}}')"
 case "$available_kb" in
   *[!0-9]*|'') exit 22 ;;
@@ -183,12 +192,14 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
         proc = remote_bash(host, port, key_path, known_hosts, remote)
         if proc is None:
             result = "remote_timeout_or_connection_failure"
+            failure_class = "connection_or_timeout"
         elif proc.returncode == 255:
             result = "connection_failed"
+            failure_class = "connection_failed"
         else:
             allowed = {
                 "accepted", "failed", "workspace_exists",
-                "workspace_creation_failed", "toolchain_unavailable",
+                "workspace_creation_failed",
             }
             status = next(
                 (
@@ -199,14 +210,26 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
                 ),
                 None,
             )
+            failure_values = {
+                "none", "toolchain_unavailable", "workspace_probe_failed",
+                "disk_full", "network_failure", "generator_or_validation_failed",
+                "remote_step_failed",
+            }
+            failure_class = next(
+                (
+                    line.partition("=")[2]
+                    for line in proc.stdout.splitlines()
+                    if line.startswith("dataset_failure_class=")
+                    and line.partition("=")[2] in failure_values
+                ),
+                "unavailable",
+            )
             if proc.returncode == 0 and status == "accepted":
                 result = "accepted"
             elif status == "workspace_exists":
                 result = "workspace_exists"
             elif status == "workspace_creation_failed":
                 result = "workspace_creation_failed"
-            elif status == "toolchain_unavailable":
-                result = "toolchain_unavailable"
             else:
                 result = "remote_failed"
 
@@ -241,7 +264,10 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
                 pass
 
     print(f"checked_at={checked}")
+    if failure_class not in {"none", "toolchain_unavailable", "workspace_probe_failed", "disk_full", "network_failure", "generator_or_validation_failed", "remote_step_failed", "connection_failed", "connection_or_timeout", "unavailable"}:
+        failure_class = "unavailable"
     print(f"dataset_build={result}")
+    print(f"dataset_failure_class={failure_class}")
     print(f"temporary_ssh_key={cleanup}")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
