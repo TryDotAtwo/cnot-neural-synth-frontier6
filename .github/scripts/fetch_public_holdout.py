@@ -60,17 +60,16 @@ def parse_file_metadata(entries: object) -> tuple[int, str]:
     lfs = item.get("lfs")
     lfs_size = lfs.get("size") if isinstance(lfs, dict) else None
     expected_sha = lfs.get("sha256") if isinstance(lfs, dict) else None
-    if (
-        item.get("type") != "file"
-        or isinstance(file_size, bool)
-        or not isinstance(file_size, int)
-        or file_size <= 0
-        or file_size > MAX_BYTES
-        or lfs_size != file_size
-        or not isinstance(expected_sha, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
-    ):
-        raise FetchError("pinned holdout LFS identity is invalid")
+    if item.get("type") != "file":
+        raise FetchError("pinned holdout file type is invalid")
+    if isinstance(file_size, bool) or not isinstance(file_size, int) or file_size <= 0:
+        raise FetchError("pinned holdout file size is invalid")
+    if file_size > MAX_BYTES:
+        raise FetchError("pinned holdout file exceeds the configured size limit")
+    if isinstance(lfs_size, bool) or not isinstance(lfs_size, int) or lfs_size != file_size:
+        raise FetchError("pinned holdout LFS size differs from file size")
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise FetchError("pinned holdout LFS checksum is invalid")
     return file_size, expected_sha
 
 
@@ -245,7 +244,11 @@ def main() -> int:
                 "pinned holdout metadata response is invalid": "file_metadata_invalid",
                 "pinned holdout file metadata is missing": "file_metadata_missing",
                 "pinned holdout file metadata is missing or ambiguous": "file_metadata_ambiguous",
-                "pinned holdout LFS identity is invalid": "file_identity_invalid",
+                "pinned holdout file type is invalid": "file_type_invalid",
+                "pinned holdout file size is invalid": "file_size_invalid",
+                "pinned holdout file exceeds the configured size limit": "file_too_large",
+                "pinned holdout LFS size differs from file size": "lfs_size_mismatch",
+                "pinned holdout LFS checksum is invalid": "lfs_checksum_invalid",
             }
             failure = (
                 failure_codes.get(str(error), "metadata_validation_failed")
