@@ -117,12 +117,13 @@ jobs:
             --workdir /workspace/project/native \
             --env CARGO_HOME=/root/.cargo \
             --env RUSTUP_HOME=/root/.rustup \
+            --env PATH=/root/.cargo/bin:/usr/local/cuda/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --env CARGO_TARGET_DIR=/runner_temp/cargo-target \
             --env CNOT103_CUDA_ARCHITECTURES=86 \
             --env CUDA_HOME=/usr/local/cuda \
             --env LIBTORCH_USE_PYTORCH=1 \
             pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc 'cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark > /runner_temp/cuda-feature-build.jsonl 2>&1'; then
+            bash -euc '/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark > /runner_temp/cuda-feature-build.jsonl 2>&1'; then
             printf 'cuda_feature_build=pass\n'
             printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else
