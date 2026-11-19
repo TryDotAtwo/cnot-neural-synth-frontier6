@@ -74,6 +74,14 @@ class OfferAndBudgetTests(unittest.TestCase):
 
         self.assertEqual(create_call.call_count, 1)
 
+    def test_target_scope_ignores_other_2x3060_rows(self):
+        wanted = offer(20, label="cnot103-2x3060-rebuild-v1", actual_status="running")
+        unrelated = offer(21, label="other-project", actual_status="running")
+
+        selected = controller.target_rows_for_label([wanted, unrelated], wanted["label"])
+
+        self.assertEqual(selected, [wanted])
+
 
 if __name__ == "__main__":
     unittest.main()
