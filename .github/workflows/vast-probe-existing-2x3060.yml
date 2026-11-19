@@ -6,6 +6,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/vast_probe_existing_2x3060.py
+      - .github/scripts/vast_rebuild_remote_dataset.py
       - .github/workflows/vast-probe-existing-2x3060.yml
 
 permissions:
