@@ -331,24 +331,6 @@ def wait_until_running(label: str) -> dict:
     raise GateError("new target did not reach running state")
 
 
-def generated_public_key(key_path: pathlib.Path) -> str:
-    try:
-        result = subprocess.run(
-            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unused", "-f", str(key_path)],
-            capture_output=True, text=True, timeout=15, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        raise GateError("temporary SSH key could not be generated") from None
-    if result.returncode != 0:
-        raise GateError("temporary SSH key could not be generated")
-    key_path.with_suffix(".pub").write_text(
-        key_path.with_suffix(".pub").read_text(encoding="utf-8").replace(
-            " unused", ""
-        ).replace("\n", ""), encoding="utf-8"
-    )
-    return key_path.with_suffix(".pub").read_text(encoding="utf-8").strip()
-
-
 def attach_key(instance: int, public_key: str) -> None:
     if probe.find_attached_key_id(api_key(), instance, public_key) is not None:
         raise GateError("temporary SSH key already exists")
@@ -579,10 +561,10 @@ def summarize(checked: str, outcome: str, status: str) -> None:
         try:
             with open(summary_path, "a", encoding="utf-8") as summary:
                 summary.write(
-                    "## Remote 10k dataset rebuild\\n"
-                    f"- checked_at: {checked}\\n"
-                    f"- query_outcome: {outcome}\\n"
-                    f"- status: {status}\\n"
+                    "## Remote 10k dataset rebuild\n"
+                    f"- checked_at: {checked}\n"
+                    f"- query_outcome: {outcome}\n"
+                    f"- status: {status}\n"
                 )
         except OSError:
             pass
