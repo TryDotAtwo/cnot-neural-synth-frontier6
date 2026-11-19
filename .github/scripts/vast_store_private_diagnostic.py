@@ -10,6 +10,7 @@ import re
 import subprocess
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from vast_probe_existing_2x3060 import (
@@ -37,10 +38,17 @@ def ssh(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path,
         "-o", "ConnectionAttempts=1",
         f"root@{host}", command,
     ]
-    try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    last: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(4):
+        try:
+            last = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            last = None
+        if last is not None and last.returncode != 255:
+            return last
+        if attempt < 3:
+            time.sleep(3)
+    return last
 
 
 def ensure_ssh_tools() -> bool:
