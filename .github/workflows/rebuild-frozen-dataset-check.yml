@@ -6,6 +6,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/rebuild_frozen_dataset.py
+      - .github/scripts/vast_store_private_diagnostic.py
       - .github/scripts/fetch_public_holdout.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
       - native/Cargo.toml
@@ -37,6 +38,9 @@ jobs:
 
       - name: Parse the remote holdout fetcher without network access
         run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/fetch_public_holdout.py').read_text(encoding='utf-8'))"
+
+      - name: Parse the private diagnostic transporter without network access
+        run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_store_private_diagnostic.py').read_text(encoding='utf-8'))"
 
       - name: Compile the canonical frozen-data validator
         uses: dtolnay/rust-toolchain@stable
@@ -128,93 +132,14 @@ jobs:
             printf 'cuda_feature_build=pass\n'
             printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else
-            if python3 - "${log_file}" "${safe_status}" "${GITHUB_STEP_SUMMARY}" <<'PY' >/dev/null 2>&1
-          import json
-          import os
-          import pathlib
-          import sys
-
-          log_path, safe_path, summary_path = map(pathlib.Path, sys.argv[1:4])
-          # Rust diagnostic codes are bounded to the standard E#### namespace; source paths and messages stay private on the runner.
-
-          def area(path):
-              p = "/" + path.replace("\\", "/").lstrip("/")
-              if p.endswith("/lib.rs"):
-                  return "core_lib"
-              if p.endswith("/alphabet.rs"):
-                  return "core_alphabet"
-              if p.endswith("/state.rs"):
-                  return "core_state"
-              if "/run_config/manifest/" in p:
-                  return "run_manifest"
-              if "/run_config/execution/" in p:
-                  return "run_execution"
-              if "/run_config/" in p:
-                  return "run_config"
-              if "/nn_training/" in p:
-                  return "nn_training"
-              if "/training_session/" in p:
-                  return "training_session"
-              if "/checkpoint/" in p:
-                  return "checkpoint"
-              if "/objective/" in p:
-                  return "objective"
-              if "/bellman/" in p:
-                  return "bellman"
-              if "/model/" in p or "/basis/" in p:
-                  return "model"
-              feature_modules = (
-                  "device_feature_plan", "features", "rank_features", "basis_gradient",
-                  "bound_features", "guarded_features", "paid_basis_features",
-                  "positive_packet", "frequency_context", "template_response",
-                  "block_parities", "shared_relation", "i09_quadratic",
-                  "matrix_boundary", "bilinear", "diffusion", "shear", "stage26",
-                  "stage35", "stage37", "stage38", "structural", "response", "schema",
-                  "general_compiler", "paid_basis",
-              )
-              for module in feature_modules:
-                  if f"/{module}/" in p or p.endswith(f"/{module}.rs"):
-                      return f"f_{module}"
-              if "/bin/" in p:
-                  return "train_cli"
-              if "/cuda" in p or "/device_" in p or p.endswith("/torch_device.rs"):
-                  return "device_runtime"
-              return "other"
-
-          pairs = set()
-          for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-              try:
-                  message = json.loads(line)
-              except json.JSONDecodeError:
-                  continue
-              if message.get("reason") != "compiler-message":
-                  continue
-              diagnostic = message.get("message")
-              if not isinstance(diagnostic, dict) or diagnostic.get("level") != "error":
-                  continue
-              code = diagnostic.get("code")
-              code = code.get("code") if isinstance(code, dict) else None
-              code = code if isinstance(code, str) and len(code) == 5 and code.startswith("E") and code[1:].isdigit() else "EOTHER"
-              spans = diagnostic.get("spans")
-              if not isinstance(spans, list):
-                  spans = []
-              primary = next((span for span in spans if isinstance(span, dict) and span.get("is_primary")), None)
-              filename = primary.get("file_name", "") if primary else ""
-              pairs.add(f"{code}_{area(filename)}")
-
-          values = sorted(pairs)[:6]
-          detail = "_".join(values) if values else "unknown"
-          lines = ["cuda_feature_build=fail", f"cuda_build_failure=rust_compile_{detail}"]
-          safe_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-          with summary_path.open("a", encoding="utf-8") as summary:
-              summary.write("\n".join(lines) + "\n")
-          PY
-            then
-              cat "${safe_status}"
-            else
-              printf 'cuda_feature_build=fail\n'
-              printf 'cuda_build_failure=rust_compile_unknown\n'
-              printf 'cuda_feature_build=fail\ncuda_build_failure=rust_compile_unknown\n' >> "${GITHUB_STEP_SUMMARY}"
-            fi
+            printf 'cuda_feature_build=fail\n'
+            printf 'cuda_feature_build=fail\n' >> "${GITHUB_STEP_SUMMARY}"
             exit 1
           fi
+      - name: Store private compiler diagnostics on the existing Vast disk
+        if: failure()
+        continue-on-error: true
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          PRIVATE_DIAGNOSTIC_PATH: ${{ runner.temp }}/cuda-feature-build.jsonl
+        run: python3 .github/scripts/vast_store_private_diagnostic.py
