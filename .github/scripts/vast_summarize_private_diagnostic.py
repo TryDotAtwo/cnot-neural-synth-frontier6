@@ -227,6 +227,27 @@ def source_relative(area: str) -> str | None:
     return "native/src/" + "/".join(parts[:-1] + [parts[-1] + ".rs"])
 
 
+def safe_site(area: str, line_number: int) -> str:
+    if area == "run_exec_root":
+        groups = (
+            (175, 181, "device_setup"),
+            (182, 184, "pinned_artifacts"),
+            (185, 191, "width_collect"),
+            (192, 212, "field_build"),
+            (213, 216, "trainer_setup"),
+            (217, 231, "session_resources"),
+            (232, 239, "session_init"),
+            (240, 254, "training_run"),
+        )
+        for first, last, label in groups:
+            if first <= line_number <= last:
+                return label
+        return "run_manifest_other"
+    if area == "src_nn_training__optimizer__device_update_flat":
+        return "optimizer_flat_update"
+    return "module"
+
+
 def summarize_sites(value: str, workspace: pathlib.Path) -> str:
     if value in {"missing", "none"}:
         return value
@@ -256,7 +277,7 @@ def summarize_sites(value: str, workspace: pathlib.Path) -> str:
             function = function.lower()
         elif function not in SAFE_FUNCTIONS and function not in {"module", "source_unavailable"}:
             function = "function_other"
-        results.append(code + "_" + area + "_" + function)
+        results.append(code + "_" + area + "_" + function + "_" + safe_site(area, int(line_text)))
     return "+".join(results)
 
 
