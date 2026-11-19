@@ -252,8 +252,22 @@ def source_relative(area: str) -> str | None:
 
 def safe_site(area: str, line_number: int, hint: str | None) -> str:
     if hint in {"collect", "device_setup", "tensor_scalar_sub", "tensor_scalar_div",
-                "tensor_mask", "step_counter", "optimizer_other"}:
+                "tensor_mask", "step_counter"}:
         return hint
+    if area == "src_nn_training__optimizer__device_update_flat":
+        if 232 <= line_number <= 235:
+            return "bias_correction"
+        if 236 <= line_number <= 238:
+            return "learning_rate_scale"
+        if line_number == 239:
+            return "variance_divisor"
+        if line_number == 240:
+            return "adam_update"
+        if line_number == 241:
+            return "weight_decay"
+        if 242 <= line_number <= 246:
+            return "finite_guard"
+        return "optimizer_flat_update"
     if area == "run_exec_root":
         groups = (
             (175, 181, "device_setup"),
