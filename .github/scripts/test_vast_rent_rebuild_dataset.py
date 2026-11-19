@@ -34,6 +34,7 @@ class OfferAndBudgetTests(unittest.TestCase):
             offer(16, rentable=False),
             offer(17, gpu_ram=8192),
             offer(18, compute_cap=8.0),
+            offer(19, gpu_name="RTX 3060 Ti"),
         ]
 
         selected = controller.eligible_offers(rows)
