@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  read-only-inventory:
+  inventory:
     if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
     outputs:
       inventory: ${{ steps.query.outputs.inventory }}
