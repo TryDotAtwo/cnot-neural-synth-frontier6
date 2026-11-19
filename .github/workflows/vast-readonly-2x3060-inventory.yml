@@ -20,6 +20,10 @@ concurrency:
 jobs:
   read-only-inventory:
     if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    outputs:
+      inventory: ${{ steps.query.outputs.inventory }}
+      volume: ${{ steps.query.outputs.volume }}
+      checked: ${{ steps.query.outputs.checked }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -30,6 +34,54 @@ jobs:
         run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_readonly_inventory.py').read_text(encoding='utf-8'))"
 
       - name: Query Vast with GET only
+        id: query
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-        run: python3 .github/scripts/vast_readonly_inventory.py
+        run: |
+            set +e
+            output="$(python3 .github/scripts/vast_readonly_inventory.py)"
+            status=$?
+            set -e
+            printf '%s\n' "$output"
+            raw_inventory="$(printf '%s\n' "$output" | sed -n 's/^vast_inventory=//p' | tail -n 1)"
+            raw_volume="$(printf '%s\n' "$output" | sed -n 's/^vast_volume_attachment=//p' | tail -n 1)"
+            checked="$(printf '%s\n' "$output" | sed -n 's/^checked_at_utc=//p' | tail -n 1)"
+            case "$raw_inventory" in
+              no_existing_target|no_project_target) inventory=none ;;
+              existing_target_running) inventory=one_running ;;
+              existing_target_stopped|existing_target_starting|existing_target_stopping|existing_target_scheduling|existing_target_loading|existing_target_created|existing_target_offline|existing_target_exited|existing_target_error) inventory=one_nonrunning ;;
+              multiple_targets_*) inventory=multiple ;;
+              *) inventory=unavailable ;;
+            esac
+            case "$raw_volume" in
+              running_attached|running_and_exited_attached) volume=running_attached ;;
+              exited_attached) volume=exited_attached ;;
+              other_3060_state_attached) volume=other_3060_state_attached ;;
+              other_instances_attached) volume=other_instances_attached ;;
+              detached_volumes_present) volume=detached_volumes_present ;;
+              no_volumes) volume=no_volumes ;;
+              *) volume=unavailable ;;
+            esac
+            if [[ ! "$checked" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$ ]]; then checked=unavailable; fi
+            printf 'inventory=%s\nvolume=%s\nchecked=%s\n' "$inventory" "$volume" "$checked" >> "$GITHUB_OUTPUT"
+            exit "$status"
+  report:
+    if: always()
+    needs: inventory
+    name: "Vast inventory (${{ needs.inventory.outputs.inventory || 'unavailable' }}; disk ${{ needs.inventory.outputs.volume || 'unavailable' }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the redacted inventory result
+        env:
+          INVENTORY: ${{ needs.inventory.outputs.inventory }}
+          VOLUME: ${{ needs.inventory.outputs.volume }}
+          CHECKED: ${{ needs.inventory.outputs.checked }}
+        run: |
+          case "$INVENTORY" in none|one_running|one_nonrunning|multiple) ;; *) INVENTORY=unavailable ;; esac
+          case "$VOLUME" in running_attached|exited_attached|other_3060_state_attached|other_instances_attached|detached_volumes_present|no_volumes) ;; *) VOLUME=unavailable ;; esac
+          if [[ ! "$CHECKED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$ ]]; then CHECKED=unavailable; fi
+          {
+            printf 'checked_at_utc=%s\n' "$CHECKED"
+            printf 'vast_inventory=%s\n' "$INVENTORY"
+            printf 'vast_volume_attachment=%s\n' "$VOLUME"
+          } >> "$GITHUB_STEP_SUMMARY"
