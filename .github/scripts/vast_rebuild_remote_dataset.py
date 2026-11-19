@@ -8,6 +8,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from vast_probe_existing_2x3060 import (
@@ -37,13 +38,20 @@ def remote_bash(host: str, port: int, key_path: pathlib.Path, known_hosts: pathl
         "-o", "ServerAliveCountMax=3",
         f"root@{host}", f"timeout --signal=TERM --kill-after=30 {REMOTE_COMMAND_SECONDS}s bash -s",
     ]
-    try:
-        return subprocess.run(
-            argv, input=script, capture_output=True, text=True,
-            timeout=MAX_REMOTE_SECONDS, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    last: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(4):
+        try:
+            last = subprocess.run(
+                argv, input=script, capture_output=True, text=True,
+                timeout=MAX_REMOTE_SECONDS, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            last = None
+        if last is not None and last.returncode != 255:
+            return last
+        if attempt < 3:
+            time.sleep(3)
+    return last
 
 
 def main() -> int:
@@ -175,6 +183,8 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
         proc = remote_bash(host, port, key_path, known_hosts, remote)
         if proc is None:
             result = "remote_timeout_or_connection_failure"
+        elif proc.returncode == 255:
+            result = "connection_failed"
         else:
             allowed = {
                 "accepted", "failed", "workspace_exists",
