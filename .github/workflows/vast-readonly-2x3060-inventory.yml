@@ -62,7 +62,7 @@ jobs:
               no_volumes) volume=no_volumes ;;
               *) volume=unavailable ;;
             esac
-            if [[ ! "$checked" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$ ]]; then checked=unavailable; fi
+            if [[ ! "$checked" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$ ]]; then checked=unavailable; fi
             printf 'inventory=%s\nvolume=%s\nchecked=%s\n' "$inventory" "$volume" "$checked" >> "$GITHUB_OUTPUT"
             exit "$status"
   report:
@@ -79,7 +79,7 @@ jobs:
         run: |
           case "$INVENTORY" in none|one_running|one_nonrunning|multiple) ;; *) INVENTORY=unavailable ;; esac
           case "$VOLUME" in running_attached|exited_attached|other_3060_state_attached|other_instances_attached|detached_volumes_present|no_volumes) ;; *) VOLUME=unavailable ;; esac
-          if [[ ! "$CHECKED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$ ]]; then CHECKED=unavailable; fi
+          if [[ ! "$CHECKED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$ ]]; then CHECKED=unavailable; fi
           {
             printf 'checked_at_utc=%s\n' "$CHECKED"
             printf 'vast_inventory=%s\n' "$INVENTORY"
