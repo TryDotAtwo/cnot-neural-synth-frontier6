@@ -101,7 +101,26 @@ def find_attached_key_id(api_key: str, instance_id: int, public_key: str) -> int
     return None
 
 
-def run_ssh(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path, command: str) -> subprocess.CompletedProcess[str] | None:
+def classify_ssh_failure(stderr: str) -> str:
+    message = stderr.casefold()
+    if "permission denied" in message:
+        return "ssh_auth_failed"
+    if "connection timed out" in message or "operation timed out" in message:
+        return "ssh_timeout"
+    if "connection refused" in message:
+        return "ssh_connection_refused"
+    if "no route to host" in message or "network is unreachable" in message:
+        return "ssh_network_unreachable"
+    if "could not resolve hostname" in message or "temporary failure in name resolution" in message:
+        return "ssh_dns_failure"
+    if "host key verification failed" in message or "remote host identification has changed" in message:
+        return "ssh_host_key_failure"
+    if "kex_exchange_identification" in message or "connection reset by peer" in message:
+        return "ssh_handshake_failed"
+    return "ssh_rejected"
+
+
+def run_ssh(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path, command: str) -> tuple[subprocess.CompletedProcess[str] | None, str]:
     argv = [
         "ssh", "-i", str(key_path), "-p", str(port),
         "-o", "BatchMode=yes",
@@ -113,16 +132,26 @@ def run_ssh(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.P
         "-o", "ConnectionAttempts=1",
         f"root@{host}", command,
     ]
+    failure_class = "ssh_failed"
     for attempt in range(4):
         try:
             result = subprocess.run(argv, capture_output=True, text=True, timeout=18, check=False)
-        except (OSError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
             result = None
+            failure_class = "ssh_timeout"
+        except FileNotFoundError:
+            result = None
+            failure_class = "ssh_client_unavailable"
+        except OSError:
+            result = None
+            failure_class = "ssh_local_error"
         if result is not None and result.returncode == 0:
-            return result
+            return result, "connected"
+        if result is not None:
+            failure_class = classify_ssh_failure(result.stderr or "")
         if attempt < 3:
             time.sleep(3)
-    return None
+    return None, failure_class
 
 
 def classify_gpu_output(raw: str) -> str:
@@ -211,15 +240,13 @@ def main() -> int:
                                     if find_attached_key_id(api_key, instance_id, public_key) is None:
                                         ssh_status = "key_attach_unconfirmed"
                                     else:
-                                        gpu_result = run_ssh(host, port, key_path, known_hosts, GPU_COMMAND)
-                                        if gpu_result is None:
-                                            ssh_status = "connection_failed"
-                                        else:
-                                            ssh_status = "connected"
+                                        gpu_result, ssh_status = run_ssh(host, port, key_path, known_hosts, GPU_COMMAND)
+                                        if gpu_result is not None:
                                             gpu = classify_gpu_output(gpu_result.stdout)
-                                            disk_result = run_ssh(host, port, key_path, known_hosts, DISK_COMMAND)
+                                            disk_result, disk_ssh_status = run_ssh(host, port, key_path, known_hosts, DISK_COMMAND)
                                             if disk_result is None:
                                                 disk = "unknown"
+                                                ssh_status = disk_ssh_status
                                             else:
                                                 disk = classify_disk_output(disk_result.stdout)
     except ApiFailure as error:
