@@ -237,7 +237,21 @@ def main() -> int:
                 pass
         if args.metadata_check:
             print("holdout_metadata=failed")
-            failure = "metadata_unavailable" if isinstance(error, FetchError) else "metadata_internal_error"
+            failure_codes = {
+                "could not query the public holdout revision": "revision_query_failed",
+                "public holdout revision response is invalid": "revision_response_invalid",
+                "could not query pinned holdout file metadata": "file_metadata_query_failed",
+                "pinned holdout metadata exceeds the configured size limit": "file_metadata_too_large",
+                "pinned holdout metadata response is invalid": "file_metadata_invalid",
+                "pinned holdout file metadata is missing": "file_metadata_missing",
+                "pinned holdout file metadata is missing or ambiguous": "file_metadata_ambiguous",
+                "pinned holdout LFS identity is invalid": "file_identity_invalid",
+            }
+            failure = (
+                failure_codes.get(str(error), "metadata_validation_failed")
+                if isinstance(error, FetchError)
+                else "metadata_internal_error"
+            )
             print(f"holdout_metadata_failure={failure}")
         else:
             print("holdout_download=failed")
