@@ -18,6 +18,10 @@ concurrency:
 jobs:
   classify:
     if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    outputs:
+      detail: ${{ steps.classify.outputs.detail }}
+      checked: ${{ steps.classify.outputs.checked }}
+      cleanup: ${{ steps.classify.outputs.cleanup }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -41,6 +45,40 @@ jobs:
           print('classifier_syntax=pass')
           PY
       - name: Read only an allowlisted failure category from the existing Vast disk
+        id: classify
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-        run: python .github/scripts/vast_classify_private_dataset_failure.py
+        run: |
+            set +e
+            output="$(python .github/scripts/vast_classify_private_dataset_failure.py)"
+            status=$?
+            set -e
+            printf '%s\n' "$output"
+            detail="$(printf '%s\n' "$output" | sed -n 's/^dataset_failure_detail=//p' | tail -n 1)"
+            checked="$(printf '%s\n' "$output" | sed -n 's/^checked_at_utc=//p' | tail -n 1)"
+            cleanup="$(printf '%s\n' "$output" | sed -n 's/^temporary_ssh_key=//p' | tail -n 1)"
+            if [[ ! "$detail" =~ ^[a-z_]{1,64}$ ]]; then detail=unavailable; fi
+            if [[ ! "$checked" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then checked=unavailable; fi
+            case "$cleanup" in detached|not_needed|not_found|failed) ;; *) cleanup=failed ;; esac
+            printf 'detail=%s\nchecked=%s\ncleanup=%s\n' "$detail" "$checked" "$cleanup" >> "$GITHUB_OUTPUT"
+            exit "$status"
+  report:
+    if: always()
+    needs: classify
+    name: "Dataset classifier status (${{ needs.classify.outputs.detail || 'unavailable' }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the redacted operational result
+        env:
+          DETAIL: ${{ needs.classify.outputs.detail }}
+          CHECKED: ${{ needs.classify.outputs.checked }}
+          CLEANUP: ${{ needs.classify.outputs.cleanup }}
+        run: |
+          case "$DETAIL" in ''|*[!a-z_]* ) DETAIL=unavailable ;; esac
+          if [[ ! "$CHECKED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then CHECKED=unavailable; fi
+          case "$CLEANUP" in detached|not_needed|not_found|failed) ;; *) CLEANUP=failed ;; esac
+          {
+            printf 'checked_at_utc=%s\n' "$CHECKED"
+            printf 'dataset_failure_detail=%s\n' "$DETAIL"
+            printf 'temporary_ssh_key=%s\n' "$CLEANUP"
+          } >> "$GITHUB_STEP_SUMMARY"
