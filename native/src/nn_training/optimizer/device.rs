@@ -218,8 +218,14 @@ impl FlatAdamW {
             .logical_and(&finite_gradient);
 
         let cfg = optimizer.config;
-        let first = &self.first * cfg.beta1 + &gradient * (1.0 - cfg.beta1);
-        let second = &self.second * cfg.beta2 + gradient.pow_tensor_scalar(2.0) * (1.0 - cfg.beta2);
+        let first_decay = self.first.f_mul_scalar(cfg.beta1)?;
+        let first_gradient = gradient.f_mul_scalar(1.0 - cfg.beta1)?;
+        let first = first_decay.f_add(&first_gradient)?;
+        let second_decay = self.second.f_mul_scalar(cfg.beta2)?;
+        let squared_gradient = gradient
+            .pow_tensor_scalar(2.0)
+            .f_mul_scalar(1.0 - cfg.beta2)?;
+        let second = second_decay.f_add(&squared_gradient)?;
         // Checkpoint counters are unsigned. Convert their two 32-bit limbs to
         // FP64 only after adding the exact device-local update count.
         let next = &self.base_steps + &self.increments + 1;
