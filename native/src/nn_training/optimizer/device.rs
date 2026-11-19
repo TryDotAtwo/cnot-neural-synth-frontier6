@@ -229,9 +229,11 @@ impl FlatAdamW {
             .to_kind(Kind::Double)
             * 4294967296.0
             + next.bitwise_and(0xffff_ffffi64).to_kind(Kind::Double);
-        let c1 = 1.0f64 - Tensor::pow_scalar(cfg.beta1, &step);
-        let c2 = 1.0f64 - Tensor::pow_scalar(cfg.beta2, &step);
-        let scale = (cfg.learning_rate / c1)
+        let beta1_power = Tensor::pow_scalar(cfg.beta1, &step);
+        let beta2_power = Tensor::pow_scalar(cfg.beta2, &step);
+        let c1 = Tensor::ones_like(&beta1_power) - beta1_power;
+        let c2 = Tensor::ones_like(&beta2_power) - beta2_power;
+        let scale = (Tensor::ones_like(&c1) / &c1 * cfg.learning_rate)
             .to_kind(Kind::Float)
             .index_select(0, &self.owners);
         let divisor = c2.sqrt().to_kind(Kind::Float).index_select(0, &self.owners);
