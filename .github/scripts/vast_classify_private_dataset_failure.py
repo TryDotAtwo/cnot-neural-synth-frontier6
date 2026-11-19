@@ -40,6 +40,11 @@ DETAIL_CLASSES = {
     "holdout_database_no_roots_table",
     "holdout_roots_schema_unsupported",
     "holdout_database_read_error",
+    "holdout_database_readable",
+    "holdout_sqlite_corruption",
+    "holdout_sqlite_io_error",
+    "holdout_sqlite_busy",
+    "holdout_sqlite_query_error",
     "holdout_record_invalid",
     "holdout_certificate_invalid",
     "holdout_identity_or_symmetry_overlap",
@@ -88,7 +93,47 @@ elif grep -Fq 'holdout database has no roots table' "$LOG" "$BUILDER_LOG" 2>/dev
 elif grep -Fq 'holdout roots table has an unsupported schema' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_roots_schema_unsupported
 elif grep -Fq 'holdout database could not be read' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
-  detail=holdout_database_read_error
+  detail="$(python3 - "$DB" <<'PY'
+import pathlib
+import sqlite3
+import sys
+
+path = pathlib.Path(sys.argv[1])
+connection = None
+if not path.is_file():
+    detail = "holdout_database_missing"
+elif path.stat().st_size == 0:
+    detail = "holdout_database_empty"
+else:
+    try:
+        connection = sqlite3.connect("file:" + path.as_posix() + "?mode=ro", uri=True)
+        tables = tuple(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+        if "roots" not in tables:
+            detail = "holdout_database_no_roots_table"
+        else:
+            columns = tuple(row[1] for row in connection.execute("PRAGMA table_info(roots)"))
+            required = ("split", "epoch", "position", "record_json")
+            if any(name not in columns for name in required):
+                detail = "holdout_roots_schema_unsupported"
+            else:
+                connection.execute("SELECT split, record_json FROM roots WHERE split IN ('dev','test') ORDER BY split, epoch, position").fetchall()
+                detail = "holdout_database_readable"
+    except sqlite3.Error as error:
+        code = getattr(error, "sqlite_errorname", "")
+        if code in ("SQLITE_CORRUPT", "SQLITE_NOTADB"):
+            detail = "holdout_sqlite_corruption"
+        elif code == "SQLITE_IOERR":
+            detail = "holdout_sqlite_io_error"
+        elif code in ("SQLITE_BUSY", "SQLITE_LOCKED"):
+            detail = "holdout_sqlite_busy"
+        else:
+            detail = "holdout_sqlite_query_error"
+    finally:
+        if connection is not None:
+            connection.close()
+print(detail)
+PY
+)"
 elif grep -Eiq 'holdout reduction word does not replay|holdout certificate|holdout word certificate|holdout certificate endpoints' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_certificate_invalid
 elif grep -Eiq 'holdout record|holdout state|holdout gate' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
