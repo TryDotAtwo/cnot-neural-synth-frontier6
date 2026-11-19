@@ -1,0 +1,7 @@
+{
+  "action": "one-shot 2x RTX 3060 frozen 10k rebuild",
+  "max_total_usd": 20,
+  "projected_active_hours": 55,
+  "stopped_storage_reserve_hours": 168,
+  "preserve_remote_disk": true
+}
