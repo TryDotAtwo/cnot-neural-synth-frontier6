@@ -155,14 +155,25 @@ def main() -> int:
                         disk = classify_disk_output(disk_output)
     except HTTPError as error:
         if phase.startswith("execute_"):
-            status = {
-                400: "execute_bad_request",
-                401: "execute_auth_rejected",
-                403: "execute_permission_denied",
-                404: "execute_endpoint_unavailable",
-                413: "execute_payload_rejected",
-                429: "execute_rate_limited",
-            }.get(error.code, "execute_http_error")
+            if error.code == 400:
+                try:
+                    detail = json.loads(error.read(4096))
+                    kind = detail.get("error") if isinstance(detail, dict) else None
+                except Exception:
+                    kind = None
+                status = {
+                    "invalid_args": "execute_invalid_args",
+                    "invalid_container_id": "execute_no_container_id",
+                    "invalid_container": "execute_container_unavailable",
+                }.get(kind, "execute_bad_request")
+            else:
+                status = {
+                    401: "execute_auth_rejected",
+                    403: "execute_permission_denied",
+                    404: "execute_endpoint_unavailable",
+                    413: "execute_payload_rejected",
+                    429: "execute_rate_limited",
+                }.get(error.code, "execute_http_error")
         elif phase == "inventory":
             status = {
                 401: "inventory_auth_rejected",
