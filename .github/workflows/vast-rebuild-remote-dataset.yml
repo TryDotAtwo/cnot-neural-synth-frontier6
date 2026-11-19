@@ -6,6 +6,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/vast_rebuild_remote_dataset.py
+      - .github/scripts/fetch_public_holdout.py
       - .github/workflows/vast-rebuild-remote-dataset.yml
 
 permissions:
