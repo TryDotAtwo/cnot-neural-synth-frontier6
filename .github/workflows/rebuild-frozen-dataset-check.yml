@@ -186,9 +186,9 @@ jobs:
           values = sorted(pairs)[:6]
           detail = "_".join(values) if values else "unknown"
           lines = ["cuda_feature_build=fail", f"cuda_build_failure=rust_compile_{detail}"]
-          safe_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+          safe_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           with summary_path.open("a", encoding="utf-8") as summary:
-              summary.write("\\n".join(lines) + "\\n")
+              summary.write("\n".join(lines) + "\n")
           PY
             then
               cat "\${safe_status}"
