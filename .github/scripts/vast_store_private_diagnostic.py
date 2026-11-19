@@ -136,9 +136,33 @@ def diagnostic_area(path: str) -> str:
         name = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         if name in {"device", "lifecycle", "run", "validation"}:
             return "training_session_" + name
+    for module in {
+        "alphabet", "device_feature_plan", "device_search", "features", "frozen_data",
+        "model", "objective", "packet", "stage_profile", "torch_device", "training",
+        "training_data",
+    }:
+        if f"/native/src/{module}/" in p or p.endswith(f"/native/src/{module}.rs"):
+            return module
     return "other"
 
 
+def diagnostic_source_path(path: str, workspace: pathlib.Path, area: str) -> pathlib.Path | None:
+    relative = AREA_FILES.get(area)
+    if relative:
+        return workspace / relative
+    p = "/" + path.replace("\\", "/").lstrip("/")
+    marker = "/native/src/"
+    if marker in p:
+        suffix = p.split(marker, 1)[1]
+    else:
+        marker = "/src/"
+        if marker not in p:
+            return None
+        suffix = p.rsplit(marker, 1)[1]
+    candidate = pathlib.PurePosixPath(suffix)
+    if candidate.suffix != ".rs" or ".." in candidate.parts:
+        return None
+    return workspace / "native" / "src" / pathlib.Path(*candidate.parts)
 def diagnostic_summary(source: pathlib.Path, workspace: pathlib.Path) -> str:
     pairs: set[str] = set()
     saw_error = False
@@ -165,10 +189,10 @@ def diagnostic_summary(source: pathlib.Path, workspace: pathlib.Path) -> str:
             line_number = line_number if isinstance(line_number, int) and line_number > 0 else 0
             area = diagnostic_area(filename)
             function = "module"
-            relative = AREA_FILES.get(area)
-            if relative:
+            source_path = diagnostic_source_path(filename, workspace, area)
+            if source_path is not None:
                 try:
-                    lines = (workspace / relative).read_text(encoding="utf-8").splitlines()
+                    lines = source_path.read_text(encoding="utf-8").splitlines()
                     pattern = re.compile(r"\s*(?:(?:pub(?:\([^)]*\))?)\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)")
                     for source_line in lines[:max(0, min(line_number, len(lines)))]:
                         found = pattern.match(source_line)
