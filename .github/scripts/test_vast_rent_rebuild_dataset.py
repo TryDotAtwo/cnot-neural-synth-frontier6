@@ -13,6 +13,7 @@ def offer(offer_id, **updates):
         "compute_cap": 8.6,
         "reliability": 0.99,
         "dph_total": 0.2,
+        "storage_cost": 0.15,
         "direct_port_count": 1,
         "rentable": True,
         "verified": True,
@@ -42,6 +43,12 @@ class OfferAndBudgetTests(unittest.TestCase):
     def test_budget_gate_includes_50h_and_transfer_reserve(self):
         self.assertTrue(controller.budget_allows(5.0, 0.24, run_hours=50, reserve=3.0))
         self.assertFalse(controller.budget_allows(5.0, 0.241, run_hours=50, reserve=3.0))
+
+    def test_stopped_storage_is_in_budget_reserve(self):
+        reserve = controller.total_reserve(0.15)
+        self.assertAlmostEqual(reserve, 4.24)
+        self.assertTrue(controller.budget_allows(0.0, 0.28, run_hours=55, reserve=reserve))
+        self.assertFalse(controller.budget_allows(0.0, 0.29, run_hours=55, reserve=reserve))
 
     def test_invalid_costs_fail_closed(self):
         for spent, rate, reserve in [
