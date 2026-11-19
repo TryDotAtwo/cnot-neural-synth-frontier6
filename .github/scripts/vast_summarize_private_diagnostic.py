@@ -84,10 +84,6 @@ for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines()
     line_number = primary.get("line_start", 0) if primary else 0
     line_number = line_number if isinstance(line_number, int) and line_number > 0 else 0
     pairs.add(code + "@" + area(filename) + ":" + str(line_number))
-if not pairs:
-    print("private_diagnostic_sites=none")
-else:
-    print("private_diagnostic_sites=" + "+".join(sorted(pairs)[:6]))
 if pairs:
     failure_class = "compiler_errors"
 elif cargo_missing:
@@ -97,6 +93,10 @@ elif non_json_lines:
 else:
     failure_class = "no_compiler_errors"
 print("private_build_failure_class=" + failure_class)
+if not pairs:
+    print("private_diagnostic_sites=none")
+else:
+    print("private_diagnostic_sites=" + "+".join(sorted(pairs)[:6]))
 """
     argv = [
         "ssh", "-i", str(key_path), "-p", str(port),
