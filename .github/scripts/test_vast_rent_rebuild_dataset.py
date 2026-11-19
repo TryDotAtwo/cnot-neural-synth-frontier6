@@ -10,6 +10,7 @@ def offer(offer_id, **updates):
         "gpu_name": "RTX 3060",
         "num_gpus": 2,
         "gpu_ram": 12288,
+        "compute_cap": 8.6,
         "reliability": 0.99,
         "dph_total": 0.2,
         "direct_port_count": 1,
@@ -31,6 +32,7 @@ class OfferAndBudgetTests(unittest.TestCase):
             offer(15, direct_port_count=0),
             offer(16, rentable=False),
             offer(17, gpu_ram=8192),
+            offer(18, compute_cap=8.0),
         ]
 
         selected = controller.eligible_offers(rows)
