@@ -1,3 +1,4 @@
+# Red phase: these contract tests intentionally precede the controller implementation.
 import unittest
 
 import vast_rent_rebuild_dataset as controller
