@@ -255,6 +255,12 @@ def safe_site(area: str, line_number: int, hint: str | None) -> str:
                 "tensor_mask", "step_counter"}:
         return hint
     if area == "src_nn_training__optimizer__device":
+        if line_number == 220:
+            return "optimizer_config"
+        if 221 <= line_number <= 222:
+            return "moment_update"
+        if 225 <= line_number <= 231:
+            return "step_counter"
         if 232 <= line_number <= 235:
             return "bias_correction"
         if 236 <= line_number <= 238:
@@ -265,9 +271,13 @@ def safe_site(area: str, line_number: int, hint: str | None) -> str:
             return "adam_update"
         if line_number == 241:
             return "weight_decay"
-        if 242 <= line_number <= 246:
+        if 242 <= line_number <= 248:
             return "finite_guard"
-        return "optimizer_flat_update"
+        if 249 <= line_number <= 252:
+            return "acceptance_guard"
+        if 253 <= line_number <= 261:
+            return "state_commit"
+        return "optimizer_other"
     if area == "run_exec_root":
         groups = (
             (175, 181, "device_setup"),
