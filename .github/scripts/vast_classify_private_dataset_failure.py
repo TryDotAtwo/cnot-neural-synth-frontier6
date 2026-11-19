@@ -58,38 +58,39 @@ DETAIL_CLASSES = {
 REMOTE_CLASSIFIER = f"""set -euo pipefail
 ROOT='/workspace/tqp_remote_dataset_{RUN_ID}_{SOURCE_SHA8}_a{ATTEMPT}'
 LOG="$ROOT/remote-dataset.private.log"
+BUILDER_LOG="$ROOT/dataset-builder.private.log"
 if [ ! -r "$LOG" ]; then
   detail=private_log_missing
-elif grep -Eiq 'no space left|disk quota exceeded' "$LOG"; then
+elif grep -Eiq 'no space left|disk quota exceeded' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=disk_full
-elif grep -Eiq 'command not found|cargo: not found' "$LOG"; then
+elif grep -Eiq 'command not found|cargo: not found' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=toolchain_unavailable
-elif grep -Eiq 'HTTPError|urlopen error|connection reset|could not resolve|timed out' "$LOG"; then
+elif grep -Eiq 'HTTPError|urlopen error|connection reset|could not resolve|timed out' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=network_failure
-elif grep -Fq 'holdout does not contain the pinned 1792+1792 panels' "$LOG"; then
+elif grep -Fq 'holdout does not contain the pinned 1792+1792 panels' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_panels_incomplete
-elif grep -Eiq 'holdout database has no roots table|holdout roots table has an unsupported schema|holdout database could not be read' "$LOG"; then
+elif grep -Eiq 'holdout database has no roots table|holdout roots table has an unsupported schema|holdout database could not be read' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_database_invalid
-elif grep -Eiq 'holdout reduction word does not replay|holdout certificate|holdout word certificate|holdout certificate endpoints' "$LOG"; then
+elif grep -Eiq 'holdout reduction word does not replay|holdout certificate|holdout word certificate|holdout certificate endpoints' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_certificate_invalid
-elif grep -Eiq 'holdout record|holdout state|holdout gate' "$LOG"; then
+elif grep -Eiq 'holdout record|holdout state|holdout gate' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_record_invalid
-elif grep -Eiq 'dev/test .*repeats|finite-symmetry views overlap|finite-symmetry view set is incomplete' "$LOG"; then
+elif grep -Eiq 'dev/test .*repeats|finite-symmetry views overlap|finite-symmetry view set is incomplete' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_identity_or_symmetry_overlap
-elif grep -Fq 'generated reduction certificate failed replay' "$LOG"; then
+elif grep -Fq 'generated reduction certificate failed replay' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=generated_certificate_replay_failed
-elif grep -Fq 'could not generate a unique train root within the retry bound' "$LOG"; then
+elif grep -Fq 'could not generate a unique train root within the retry bound' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=train_root_generation_exhausted
-elif grep -Fq 'frozen_data_validation=failed' "$LOG"; then
+elif grep -Fq 'frozen_data_validation=failed' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=frozen_data_validation_failed
-elif grep -Eiq 'could not compile|failed to compile' "$LOG"; then
+elif grep -Eiq 'could not compile|failed to compile' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=validator_build_failed
-elif grep -Eiq 'output path is outside|refusing to overwrite|destination appeared during the write|preserving an existing' "$LOG"; then
+elif grep -Eiq 'output path is outside|refusing to overwrite|destination appeared during the write|preserving an existing' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=artifact_conflict
 else
   detail=other_generation_validation_failure
 fi
-printf 'dataset_failure_detail=%s\\\\n' "$detail"
+printf 'dataset_failure_detail=%s\\n' "$detail"
 """
 
 
