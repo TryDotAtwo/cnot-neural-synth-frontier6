@@ -62,6 +62,18 @@ class OfferAndBudgetTests(unittest.TestCase):
         with self.assertRaises(controller.GateError):
             controller.resolve_label([expected, {"id": 8, "label": expected["label"]}], expected["label"])
 
+    def test_create_timeout_resolves_by_label_without_duplicate_create(self):
+        import subprocess
+        from unittest.mock import patch
+
+        with patch.object(
+            controller, "vast_cli", side_effect=subprocess.TimeoutExpired("vastai", 120)
+        ) as create_call, patch.object(controller, "wait_for_label", return_value=None):
+            with self.assertRaises(controller.GateError):
+                controller.create_once("12345", "cnot103-2x3060-rebuild-v1")
+
+        self.assertEqual(create_call.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
