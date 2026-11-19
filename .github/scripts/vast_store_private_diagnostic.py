@@ -140,7 +140,10 @@ def main() -> int:
             raise RuntimeError()
 
         prepare = ssh(host, port, key_path, known_hosts, f"umask 077 && mkdir -p {REMOTE_DIR} && test ! -e {remote_path}")
-        if prepare is None or prepare.returncode != 0:
+        if prepare is None or prepare.returncode == 255:
+            result = "connection_failed"
+            raise RuntimeError()
+        if prepare.returncode != 0:
             result = "remote_path_unavailable"
             raise RuntimeError()
 
