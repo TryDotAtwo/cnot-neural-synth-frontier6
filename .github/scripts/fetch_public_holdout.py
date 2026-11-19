@@ -60,6 +60,10 @@ def parse_file_metadata(entries: object) -> tuple[int, str]:
     lfs = item.get("lfs")
     lfs_size = lfs.get("size") if isinstance(lfs, dict) else None
     expected_sha = lfs.get("sha256") if isinstance(lfs, dict) else None
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        oid = lfs.get("oid") if isinstance(lfs, dict) else None
+        match = re.fullmatch(r"sha256:([0-9a-f]{64})", oid) if isinstance(oid, str) else None
+        expected_sha = match.group(1) if match else expected_sha
     if item.get("type") != "file":
         raise FetchError("pinned holdout file type is invalid")
     if isinstance(file_size, bool) or not isinstance(file_size, int) or file_size <= 0:
