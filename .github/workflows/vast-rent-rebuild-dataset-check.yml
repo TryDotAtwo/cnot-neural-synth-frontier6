@@ -30,8 +30,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Parse controller and tests
-        run: python3 -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8')) for p in ('.github/scripts/vast_rent_rebuild_dataset.py', '.github/scripts/test_vast_rent_rebuild_dataset.py')]"
-
       - name: Run controller unit tests
         run: python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
+
+      - name: Parse controller and tests
+        run: python3 -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8')) for p in ('.github/scripts/vast_rent_rebuild_dataset.py', '.github/scripts/test_vast_rent_rebuild_dataset.py')]"
