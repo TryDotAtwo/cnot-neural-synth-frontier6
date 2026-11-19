@@ -18,7 +18,11 @@ from vast_probe_existing_2x3060 import (
     state,
     target_rows,
 )
-from vast_rebuild_remote_dataset import remote_bash
+import vast_rebuild_remote_dataset as remote_dataset
+
+# Bound this read-only classifier even if the remote shell stalls.
+remote_dataset.MAX_REMOTE_SECONDS = 30
+remote_dataset.REMOTE_COMMAND_SECONDS = 20
 
 
 RUN_ID = "44569035847"
@@ -159,7 +163,7 @@ def main() -> int:
             detail = "key_attach_unconfirmed"
             raise RuntimeError()
 
-        proc = remote_bash(host, port, key_path, known_hosts, REMOTE_CLASSIFIER)
+        proc = remote_dataset.remote_bash(host, port, key_path, known_hosts, REMOTE_CLASSIFIER)
         if proc is None:
             detail = "ssh_timeout_or_connection_failure"
         elif proc.returncode == 255:
