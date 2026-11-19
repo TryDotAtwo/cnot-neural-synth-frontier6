@@ -6,6 +6,10 @@ use tch::nn::VarStore;
 use tch::Tensor;
 
 mod checkpoint;
+#[cfg(feature = "cuda")]
+mod device;
+#[cfg(feature = "cuda")]
+pub use device::DeviceUpdateLoss;
 mod step;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

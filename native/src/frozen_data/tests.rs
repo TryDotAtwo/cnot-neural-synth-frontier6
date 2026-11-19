@@ -1,6 +1,6 @@
 use super::loader::{SCHEMA, SYMMETRIES};
 use super::symmetry::views;
-use super::wire::{decode_state, State};
+use super::wire::{decode_state, Body, State};
 use super::FrozenDataset;
 use crate::alphabet::CnotAlphabet;
 use crate::state::MatrixState;
@@ -199,4 +199,25 @@ fn rejects_nonzero_padding_bits() {
         .unwrap_err()
         .0
         .contains("outside matrix width"));
+}
+
+#[test]
+fn panel_deserialization_rejects_invalid_matrix_before_retaining_it() {
+    let (mut train, _) = one_gate_record(130, "train");
+    // A set bit beyond the width was formerly retained in an unvalidated,
+    // allocation-heavy JSON Number until the complete file had been read.
+    train["state"]["packed_rows"][0] =
+        Value::Number(Number::from_str(&(BigUint::from(1u8) << 130usize).to_str_radix(10)).unwrap());
+    let body = json!({
+        "schema": SCHEMA,
+        "provenance": {"fixture": "invalid-matrix"},
+        "symmetries": SYMMETRIES,
+        "forbidden_keys": [], "historical_keys": [], "rejected_train_lineages": [],
+        "panels": {"train": [train], "dev": [], "test": []}
+    });
+    let error = match serde_json::from_value::<Body>(body) {
+        Ok(_) => panic!("invalid matrix was retained during deserialization"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("outside matrix width"));
 }

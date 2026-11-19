@@ -8,7 +8,8 @@ mod one_excess;
 mod pair;
 mod zero_excess;
 
-pub use one_excess::register_guarded_one_excess;
+pub use one_excess::{register_guarded_one_excess, register_guarded_one_excess_with_changed_limit};
+pub(crate) use one_excess::register_guarded_one_excess_with_limits;
 pub use pair::{register_guarded_pair, register_guarded_pair_f02_view};
 pub use zero_excess::{register_guarded_zero_excess, register_guarded_zero_excess_with_budget};
 

@@ -18,9 +18,8 @@ mod predict;
 /// its registered provider. The packet still carries all 103 manifest rows.
 /// The model rejects packets whose selected IDs, producer metadata, or policy
 /// differ from the schema selected at construction. Row availability is an
-/// input mask: unavailable rows stay zero-masked and do not block other states
-/// in a batch. This v24 contract is distinct from the legacy fixed-shape v22
-/// packet adapter.
+/// input mask. In v25 a pooled context token also identifies the missing
+/// features and their individual reasons for each sample.
 #[derive(Debug)]
 pub struct FusionDistanceField {
     specs: Vec<FeatureSpec>,

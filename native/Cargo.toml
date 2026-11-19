@@ -9,13 +9,144 @@ name = "cnot103_native"
 crate-type = ["rlib"]
 
 [[bin]]
+name = "cnot103-validate-data"
+path = "src/bin/cnot103_validate_data.rs"
+
+[[test]]
+name = "cuda_quadratic"
+path = "tests/cuda_quadratic.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_endpoint_response"
+path = "tests/cuda_endpoint_response.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_paid_basis_atlas"
+path = "tests/cuda_paid_basis_atlas.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_paid_shear"
+path = "tests/cuda_paid_shear.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_paid_basis"
+path = "tests/cuda_paid_basis.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_template_response"
+path = "tests/cuda_template_response.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_guarded_pair"
+path = "tests/cuda_guarded_pair.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_zero_excess"
+path = "tests/cuda_zero_excess.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_one_excess"
+path = "tests/cuda_one_excess.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_model_packet"
+path = "tests/cuda_model_packet.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_missing_all"
+path = "tests/cuda_missing_all.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_column_diffusion"
+path = "tests/cuda_column_diffusion.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_feature_plan_contexts"
+path = "tests/cuda_feature_plan_contexts.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_boundary_packet"
+path = "tests/cuda_boundary_packet.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_block_histogram"
+path = "tests/cuda_block_histogram.rs"
+required-features = ["cuda"]
+
+[[bin]]
+name = "cnot103-coverage"
+path = "src/bin/cnot103_coverage.rs"
+required-features = ["cuda"]
+
+[[bin]]
 name = "cnot103-train"
 path = "src/bin/cnot103_train.rs"
 required-features = ["cuda"]
 
+
 [[bin]]
-name = "cnot103-validate-data"
-path = "src/bin/cnot103_validate_data.rs"
+name = "cnot103-benchmark"
+path = "src/bin/cnot103_benchmark.rs"
+required-features = ["cuda"]
+
+[[bin]]
+name = "cnot103-search"
+path = "src/bin/cnot103_search.rs"
+required-features = ["cuda"]
+
+[[bin]]
+name = "cnot103-h07"
+path = "src/bin/cnot103_h07.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_basis_gradient"
+path = "tests/cuda_basis_gradient.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_general_compiler"
+path = "tests/cuda_general_compiler.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_stage26"
+path = "tests/cuda_stage26.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_frequency"
+path = "tests/cuda_frequency.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_shared_relation"
+path = "tests/cuda_shared_relation.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_bilinear"
+path = "tests/cuda_bilinear.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_positive_packet"
+path = "tests/cuda_positive_packet.rs"
+required-features = ["cuda"]
 
 [[test]]
 name = "run_manifest"
@@ -36,6 +167,10 @@ tch = { version = "=0.22.0", optional = true }
 
 [build-dependencies]
 cmake = "0.1"
+
+# Large, verified checkpoints hash gigabytes even in development runs.
+[profile.dev.package.sha2]
+opt-level = 3
 
 [[test]]
 name = "tch_training_resume"
@@ -65,3 +200,73 @@ required-features = ["cuda"]
 [[test]]
 name = "training_data"
 path = "tests/training_data.rs"
+
+[[test]]
+name = "cuda_family_a"
+path = "tests/cuda_family_a.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_family_b"
+path = "tests/cuda_family_b.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_c01_rank"
+path = "tests/cuda_c01_rank.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_block_parity"
+path = "tests/cuda_block_parity.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_labeled_cuts"
+path = "tests/cuda_labeled_cuts.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_partial_shear"
+path = "tests/cuda_partial_shear.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_selected_residual"
+path = "tests/cuda_selected_residual.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_device_optimizer"
+path = "tests/cuda_device_optimizer.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_primitive_bellman"
+path = "tests/cuda_primitive_bellman.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_neural_beam"
+path = "tests/cuda_neural_beam.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_feature_slice"
+path = "tests/cuda_feature_slice.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_matrix_boundary"
+path = "tests/cuda_matrix_boundary.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_rank_increment"
+path = "tests/cuda_rank_increment.rs"
+required-features = ["cuda"]
+
+[[test]]
+name = "cuda_restricted_intersections"
+path = "tests/cuda_restricted_intersections.rs"
+required-features = ["cuda"]

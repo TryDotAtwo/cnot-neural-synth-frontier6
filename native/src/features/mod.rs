@@ -7,6 +7,8 @@
 mod contexts;
 mod error;
 mod packet_builder;
+#[cfg(feature = "cuda")]
+pub(crate) use packet_builder::workspace_bytes_per_state;
 mod policy;
 mod provider;
 mod registry;

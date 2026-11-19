@@ -10,10 +10,42 @@ pub(in crate::stage38) struct CountAudit {
     pub(in crate::stage38) max_bag: usize,
 }
 
+/// One deterministic allowance shared by enumeration, recount and recovery.
+pub(in crate::stage38) struct HistoryCountBudget {
+    max: Option<u32>,
+    used: u32,
+}
+impl HistoryCountBudget {
+    pub(in crate::stage38) fn new(max: Option<u32>) -> Self { Self { max, used: 0 } }
+}
+
+pub(in crate::stage38) fn count_histories_with_budget(
+    histories: &Histories,
+    max_entries: usize,
+    protected_rows: &HashSet<usize>,
+    max_component_events: Option<usize>,
+    budget: &mut HistoryCountBudget,
+) -> Result<CountAudit, Stage38Error> {
+    if budget.max.is_some_and(|limit| budget.used >= limit) {
+        return Err(Stage38Error::ContractionBudgetExceeded("history count limit exceeded".into()));
+    }
+    budget.used = budget.used.saturating_add(1);
+    count_histories_with_component_limit(histories, max_entries, protected_rows, max_component_events)
+}
+
 pub(in crate::stage38) fn count_histories(
     histories: &Histories,
     max_entries: usize,
     protected_rows: &HashSet<usize>,
+) -> Result<CountAudit, Stage38Error> {
+    count_histories_with_component_limit(histories, max_entries, protected_rows, None)
+}
+
+pub(in crate::stage38) fn count_histories_with_component_limit(
+    histories: &Histories,
+    max_entries: usize,
+    protected_rows: &HashSet<usize>,
+    max_component_events: Option<usize>,
 ) -> Result<CountAudit, Stage38Error> {
     if max_entries == 0 {
         return Err(Stage38Error::InvalidBudget);
@@ -69,6 +101,11 @@ pub(in crate::stage38) fn count_histories(
     let mut max_bag = 0usize;
 
     for component in &components {
+        if max_component_events.is_some_and(|limit| component.len() > limit) {
+            return Err(Stage38Error::ContractionBudgetExceeded(
+                "component event limit exceeded".into(),
+            ));
+        }
         let component_set: HashSet<usize> = component.iter().copied().collect();
         let component_factors: Vec<Factor> = active
             .iter()

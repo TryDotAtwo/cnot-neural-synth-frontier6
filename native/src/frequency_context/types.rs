@@ -26,6 +26,22 @@ pub struct FrequencyContext {
 }
 
 impl FrequencyContext {
+    pub fn dimension(&self) -> u32 {
+        self.n
+    }
+    pub fn sources(&self) -> &[u32] {
+        &self.sources
+    }
+    pub fn internal(&self) -> &[u32] {
+        &self.internal
+    }
+    pub fn targets(&self) -> &[u32] {
+        &self.targets
+    }
+    pub fn central_rows(&self) -> &[Vec<u64>] {
+        &self.central_rows
+    }
+
     pub fn new(
         n: u32,
         sources: Vec<u32>,

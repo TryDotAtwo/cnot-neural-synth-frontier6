@@ -66,4 +66,6 @@ mod optimizer;
 mod trainer;
 
 pub use optimizer::AdamWConfig;
+#[cfg(feature = "cuda")]
+pub use trainer::DeviceUpdateLoss;
 pub use trainer::{DifferentiableObjective, NeuralTrainer, PreparedTrainingLoss, StepOutcome};

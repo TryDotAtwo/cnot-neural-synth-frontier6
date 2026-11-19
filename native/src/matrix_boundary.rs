@@ -134,6 +134,34 @@ impl MatrixBoundarySpec {
         Ok(self)
     }
 
+    /// Physical matrix width bound to this explicit boundary.
+    pub fn dimension(&self) -> u32 {
+        self.n
+    }
+
+    /// Ordered physical input wires; the list is canonicalized at construction.
+    pub fn inputs(&self) -> &[u32] {
+        &self.inputs
+    }
+
+    /// Ordered physical output wires; the list is canonicalized at construction.
+    pub fn outputs(&self) -> &[u32] {
+        &self.outputs
+    }
+
+    /// Physical output wires constrained to zero in the selected relation.
+    pub fn zero_outputs(&self) -> &[u32] {
+        &self.zero_outputs
+    }
+
+    pub fn protected_inputs(&self) -> &[u32] {
+        &self.protected_inputs
+    }
+
+    pub fn has_weights(&self) -> bool {
+        self.weights.is_some()
+    }
+
     fn validate(&self) -> Result<(), MatrixBoundaryError> {
         if self.n == 0 {
             return Err(MatrixBoundaryError(

@@ -10,8 +10,8 @@ use std::fmt;
 pub const STAGE55_SOURCE_SHA256: &str =
     "30c90c396e8f5f1d43921f09a0d07ca723afa6e38a9c0ebed4f68b5b2aab5353";
 
-const DEFAULT_MAX_DIMENSION: usize = 144;
-const DEFAULT_MAX_MATRIX_BITS: usize = 100_000;
+pub(crate) const DEFAULT_MAX_DIMENSION: usize = 144;
+pub(crate) const DEFAULT_MAX_MATRIX_BITS: usize = 100_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BilinearContextError(pub String);

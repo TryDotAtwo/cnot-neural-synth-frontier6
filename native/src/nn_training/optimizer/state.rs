@@ -70,6 +70,13 @@ impl AdamW {
             .collect()
     }
 
+    pub(in crate::nn_training) fn parameter_names(&self) -> Vec<String> {
+        self.parameters
+            .iter()
+            .map(|state| state.name.clone())
+            .collect()
+    }
+
     pub(in crate::nn_training) fn encode(&self) -> Result<Vec<u8>, TchTrainingError> {
         codec::encode(self)
     }

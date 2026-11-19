@@ -146,6 +146,36 @@ impl MatrixState {
         Some(&self.rows[start..start + self.words_per_row])
     }
 
+    /// If the target differs by one row addition, recover its physical CNOT.
+    /// Invertibility makes its nonzero source row unique.
+    pub(crate) fn gate_to_rows(&self, other: &[u64]) -> Option<CnotGate> {
+        if other.len() != self.rows.len() {
+            return None;
+        }
+        let rows = || self.rows.chunks_exact(self.words_per_row);
+        let mut changes = rows()
+            .zip(other.chunks_exact(self.words_per_row))
+            .enumerate()
+            .filter(|(_, (a, b))| a != b);
+        let (target, (before, after)) = changes.next()?;
+        if changes.next().is_some() {
+            return None;
+        }
+        let control = rows().enumerate().find_map(|(control, row)| {
+            (control != target
+                && row
+                    .iter()
+                    .zip(before)
+                    .zip(after)
+                    .all(|((&s, &a), &b)| s ^ a == b))
+            .then_some(control)
+        })?;
+        Some(CnotGate {
+            control: control as u32,
+            target: target as u32,
+        })
+    }
+
     pub fn is_identity(&self) -> bool {
         for row in 0..self.n as usize {
             for word in 0..self.words_per_row {

@@ -98,9 +98,7 @@ impl AdamW {
                     || update.isfinite().all().int64_value(&[]) == 0
                     || parameter.isfinite().all().int64_value(&[]) == 0
                 {
-                    return Err(TchTrainingError::Invalid(
-                        "AdamW candidate state contains non-finite values",
-                    ));
+                    return Err(TchTrainingError::Invalid(super::NONFINITE_CANDIDATE));
                 }
                 updates.push(Some(AdamWUpdate {
                     parameter,

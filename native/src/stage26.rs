@@ -15,8 +15,8 @@ pub const STAGE26_CHECKER_SOURCE_SHA256: &str =
     "4dfda79863fe7a7b57785e023471cc5d0e8dac21cc3313271cacf4bf97db08ce";
 pub const STAGE26_PROOF_NOTES_SHA256: &str =
     "0daadfb3738478b6ee95c11aad4d67177a1c17613eba5e3c91dc041151676fea";
-const DEFAULT_MAX_N: u32 = 144;
-const DEFAULT_MAX_CHECKER_PAIRS: usize = 100_000;
+pub(crate) const DEFAULT_MAX_N: u32 = 144;
+pub(crate) const DEFAULT_MAX_CHECKER_PAIRS: usize = 100_000;
 const CACHE_CAPACITY: usize = 32;
 const STAGE26_IDS: [(u8, u8, usize); 3] = [(b'F', 3, 5), (b'F', 4, 3), (b'F', 5, 2)];
 

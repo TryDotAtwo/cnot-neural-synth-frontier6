@@ -4,10 +4,27 @@ use super::NeuralTrainer;
 use crate::checkpoint::{Checkpoint, CheckpointError, CheckpointManifest, CheckpointStore};
 use crate::training::Sampler;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use tch::nn::VarStore;
 
 impl NeuralTrainer {
+    /// Fingerprints for a discard-only parity experiment; no checkpoint is written.
+    pub(crate) fn benchmark_state_digests(
+        &self,
+        variables: &VarStore,
+    ) -> Result<(String, String, String), TchTrainingError> {
+        if self.poisoned || self.optimizer.steps() != self.progress.accepted {
+            return Err(TchTrainingError::Invalid("invalid trainer state for benchmark digest"));
+        }
+        let model = encode_model_state(variables)?;
+        let optimizer = self.optimizer.encode()?;
+        let sampler = serde_json::to_vec(&self.sampler.snapshot())?;
+        Ok((format!("{:x}", Sha256::digest(&model)),
+            format!("{:x}", Sha256::digest(&optimizer)),
+            format!("{:x}", Sha256::digest(&sampler))))
+    }
+
     pub fn save_checkpoint(
         &self,
         variables: &VarStore,
@@ -25,17 +42,24 @@ impl NeuralTrainer {
                 "AdamW step count differs from accepted update count",
             ));
         }
-        let model_state = encode_model_state(variables)?;
+        let model_state = crate::stage_profile::measure("checkpoint_model_export", || {
+            encode_model_state(variables)
+        })?;
+        let optimizer_state = crate::stage_profile::measure("checkpoint_optimizer_export", || {
+            self.optimizer.encode()
+        })?;
         let checkpoint = Checkpoint {
             contract,
             progress: self.progress,
             sampler: self.sampler.snapshot(),
             model_state,
-            optimizer_state: self.optimizer.encode()?,
+            optimizer_state,
             objective_state: self.objective_state.clone(),
             rng_state: self.rng_state.clone(),
         };
-        Ok(store.save(&checkpoint, update_best)?)
+        Ok(crate::stage_profile::measure("checkpoint_archive", || {
+            store.save(&checkpoint, update_best)
+        })?)
     }
 
     pub fn restore_checkpoint(

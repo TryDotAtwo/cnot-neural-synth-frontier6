@@ -2,6 +2,14 @@
 
 use std::fmt;
 
+/// An explicit physical alphabet and its ordered C10 probes for one width.
+/// Registration validates the alphabet, the probes and uniqueness of widths.
+#[derive(Clone, Debug)]
+pub struct SelectedResidualContext {
+    pub alphabet: crate::alphabet::CnotAlphabet,
+    pub gates: Vec<crate::state::CnotGate>,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct LabeledCut {
     pub(super) n: u32,
@@ -108,6 +116,22 @@ impl LabeledCut {
 }
 
 impl RestrictedIntersection {
+    pub fn dimension(&self) -> u32 {
+        self.n
+    }
+
+    pub fn left(&self) -> &[u32] {
+        &self.left
+    }
+
+    pub fn right(&self) -> &[u32] {
+        &self.right
+    }
+
+    pub fn coordinates(&self) -> &[u32] {
+        &self.coordinates
+    }
+
     pub fn new(
         n: u32,
         left: Vec<u32>,
@@ -133,6 +157,22 @@ impl RestrictedIntersection {
 }
 
 impl RankIncrementProbe {
+    pub fn dimension(&self) -> u32 {
+        self.n
+    }
+
+    pub fn span_rows(&self) -> &[u32] {
+        &self.span_rows
+    }
+
+    pub fn coordinates(&self) -> &[u32] {
+        &self.coordinates
+    }
+
+    pub fn candidate_support(&self) -> &[u32] {
+        &self.candidate_support
+    }
+
     pub fn new(
         n: u32,
         span_rows: Vec<u32>,

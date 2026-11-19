@@ -28,12 +28,16 @@ pub(super) fn assemble_group_values(
         .try_reserve_exact(incidence_count)
         .map_err(|_| resource("paid_basis_incidence_allocation_failed"))?;
     for context in contexts {
-        for role in [&context.source_wires, &context.target_wires] {
-            let mut membership = vec![0.0f32; n];
-            for wire in role {
-                membership[*wire] = 1.0;
+        // FeatureValue, packet padding and the model all use [group,node,role].
+        let base = incidence.len();
+        incidence.resize(base + n * WIRE_ROLES.len(), 0.0);
+        for (role, wires) in [&context.source_wires, &context.target_wires]
+            .into_iter()
+            .enumerate()
+        {
+            for &wire in wires {
+                incidence[base + wire * WIRE_ROLES.len() + role] = 1.0;
             }
-            incidence.extend(membership);
         }
     }
     let token_valid = vec![1u8; group_count];

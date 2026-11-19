@@ -31,6 +31,15 @@ impl TrainingRecord {
                 "training record must belong to the train split".into(),
             ));
         }
+        self.validate_evidence(alphabet, exact_catalog)
+    }
+
+    /// Sealed dev and test records need the same proof, independently of their split.
+    pub(crate) fn validate_evidence(
+        &self,
+        alphabet: &CnotAlphabet,
+        exact_catalog: Option<&ExactCatalog>,
+    ) -> Result<u64, TrainingDataError> {
         if self.lineage_id.trim().is_empty() {
             return Err(TrainingDataError(
                 "training record lineage identity is required".into(),
@@ -76,13 +85,7 @@ impl TrainingRecord {
                     "exact label lies outside its verified lower/upper bounds".into(),
                 ));
             }
-            let proved_by_bounds = lower_bound == exact_distance && upper_bound == exact_distance;
-            if !proved_by_bounds {
-                let catalog = exact_catalog.ok_or_else(|| {
-                    TrainingDataError(
-                        "exact label needs a bound-equality proof or verified exact catalog".into(),
-                    )
-                })?;
+            if let Some(catalog) = exact_catalog {
                 if catalog.alphabet_id() != alphabet.id()
                     || catalog.exact_distance(&self.state) != Some(exact_distance)
                 {
@@ -90,12 +93,12 @@ impl TrainingRecord {
                         "exact label differs from the verified exact catalog".into(),
                     ));
                 }
-            } else if exact_catalog.is_some_and(|catalog| {
-                catalog.alphabet_id() != alphabet.id()
-                    || catalog.exact_distance(&self.state) != Some(exact_distance)
-            }) {
+            } else if exact_distance != upper_bound
+                || (exact_distance != lower_bound
+                    && !super::matrix_proof::proves(&self.state, alphabet, exact_distance)?)
+            {
                 return Err(TrainingDataError(
-                    "exact label differs from the verified exact catalog".into(),
+                    "exact label lacks a verified lower bound and matching word or a verified exact catalog".into(),
                 ));
             }
         }

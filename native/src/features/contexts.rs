@@ -3,6 +3,7 @@
 /// No contexts are synthesized from matrix width. Each collection must contain
 /// enough validated, source-bound records for its provider; registration fails
 /// closed when a required collection or resource bound is absent.
+#[derive(Clone)]
 pub struct FeatureProviderContexts {
     pub max_n: u32,
     pub labeled_cuts: Vec<crate::rank_features::LabeledCut>,
@@ -10,6 +11,8 @@ pub struct FeatureProviderContexts {
     pub rank_increment_probes: Vec<crate::rank_features::RankIncrementProbe>,
     pub alphabet: crate::alphabet::CnotAlphabet,
     pub selected_residual_gates: Vec<crate::state::CnotGate>,
+    /// Additional C10 profiles; empty preserves the original single-width contract.
+    pub selected_residual_additional_contexts: Vec<crate::rank_features::SelectedResidualContext>,
     pub block_parity_contexts: Vec<crate::block_parities::BlockContext>,
     pub max_parity_patterns: usize,
     pub max_parity_pairs: usize,

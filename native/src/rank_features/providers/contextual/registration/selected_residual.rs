@@ -4,6 +4,7 @@ use crate::features::{FeatureBuildError, FeatureRegistry};
 use crate::rank_features::providers::helpers::ensure_unconfigured;
 use crate::schema::FeatureId;
 use crate::state::CnotGate;
+use crate::rank_features::SelectedResidualContext;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
@@ -71,5 +72,51 @@ pub fn register_selected_residual_ranks(
             alphabet: alphabet.clone(),
             gates,
         },
+    }))
+}
+
+/// Register one C10 producer whose physical probes are selected by width.
+/// Each width has exactly one alphabet, since GPU feature plans are keyed by
+/// width. The fingerprint includes every complete legacy alphabet/probe
+/// fingerprint in canonical width order; a different context changes the
+/// checkpoint contract without changing legacy single-width contracts.
+pub fn register_selected_residual_ranks_multi(
+    registry: &mut FeatureRegistry,
+    mut contexts: Vec<SelectedResidualContext>,
+) -> Result<(), FeatureBuildError> {
+    if contexts.len() < 2 {
+        return Err(FeatureBuildError("multi-width C10 requires at least two contexts".into()));
+    }
+    contexts.sort_by(|a, b| a.alphabet.dimension().cmp(&b.alphabet.dimension())
+        .then_with(|| a.alphabet.id().cmp(b.alphabet.id())));
+    let mut widths = HashSet::new();
+    let mut ids = HashSet::new();
+    let id = FeatureId::new(b'C', 10).unwrap();
+    ensure_unconfigured(registry, &[id])?;
+    let mut digest = Sha256::new();
+    digest.update(b"cnot103/selected-residual-ranks/multi-width/v1\0");
+    digest.update((contexts.len() as u64).to_le_bytes());
+    for context in &contexts {
+        if !widths.insert(context.alphabet.dimension()) || !ids.insert(context.alphabet.id()) {
+            return Err(FeatureBuildError("multi-width C10 alphabets must have unique widths and IDs".into()));
+        }
+        // Reuse the exact legacy validation and digest, including ordered gate
+        // costs, so the composite identity covers the complete physical input.
+        let mut single = FeatureRegistry::new();
+        register_selected_residual_ranks(&mut single, &context.alphabet, context.gates.clone())?;
+        let spec = single.specs().into_iter().find(|spec| spec.id == id).unwrap();
+        digest.update((spec.producer_version.len() as u64).to_le_bytes());
+        digest.update(spec.producer_version.as_bytes());
+    }
+    let spec = contextual_spec(
+        id,
+        format!("selected_residual_rank_multi_v1:{}", finish_digest(digest)),
+        "explicit_selected_physical_CNOT;rank_residual_not_distance",
+        vec!["M".into(), "alphabet".into(), "selected_actions".into()],
+        vec!["control".into(), "target".into()],
+    );
+    registry.register(Box::new(ContextualRankProducer {
+        spec,
+        context: ContextualRankContext::SelectedResidualMulti(contexts),
     }))
 }

@@ -5,7 +5,7 @@ use super::storage::words_for;
 use crate::positive_packet::LocalBooleanFactor;
 use std::mem::size_of;
 
-pub(in crate::positive_packet) fn working_bytes_upper_bound(
+pub(crate) fn working_bytes_upper_bound(
     n: usize,
     slots: usize,
     max_monomials: usize,
@@ -36,9 +36,7 @@ pub(in crate::positive_packet) fn working_bytes_upper_bound(
     polynomial.checked_add(rank_workspace)?.checked_add(output)
 }
 
-pub(in crate::positive_packet) fn factor_entry_count(
-    factors: &[LocalBooleanFactor],
-) -> Option<usize> {
+pub(crate) fn factor_entry_count(factors: &[LocalBooleanFactor]) -> Option<usize> {
     factors.iter().try_fold(0usize, |total, factor| {
         total
             .checked_add(factor.scope.len())?

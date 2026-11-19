@@ -2,59 +2,22 @@ use crate::state::MatrixState;
 
 use super::TrainingDataError;
 
-/// Port of the source `cheap_bounds` function: nonzero rows/columns and GF(2)
-/// rank of `M xor I`, combined by their maximum.
+/// max(changed rows, changed columns, rank(M-I)). Over GF(2) the rank is
+/// bounded by both support counts, so their maximum is already the exact result.
 pub fn elementary_lower_bound(state: &MatrixState) -> Result<u64, TrainingDataError> {
-    let n = usize::try_from(state.dimension())
-        .map_err(|_| TrainingDataError("matrix dimension exceeds host index range".into()))?;
-    let words_per_row = state.words_per_row();
-    let mut residual = Vec::new();
-    residual
-        .try_reserve_exact(n)
-        .map_err(|_| TrainingDataError("could not allocate lower-bound rows".into()))?;
-
-    let mut changed_rows = 0usize;
-    let mut changed_columns = vec![false; n];
-    for row_index in 0..n {
-        let start = row_index
-            .checked_mul(words_per_row)
-            .ok_or_else(|| TrainingDataError("matrix row offset overflow".into()))?;
-        let mut row = state.packed_rows()[start..start + words_per_row].to_vec();
-        row[row_index / 64] ^= 1u64 << (row_index % 64);
-        changed_rows += usize::from(row.iter().any(|word| *word != 0));
-        for (column, changed) in changed_columns.iter_mut().enumerate() {
-            if ((row[column / 64] >> (column % 64)) & 1) != 0 {
-                *changed = true;
-            }
+    let width = state.words_per_row();
+    let mut columns = vec![0u64; width];
+    let mut changed_rows = 0u64;
+    for (i, row) in state.packed_rows().chunks_exact(width).enumerate() {
+        let mut nonzero = false;
+        for (j, (&packed, column)) in row.iter().zip(&mut columns).enumerate() {
+            let identity = if j == i / 64 { 1u64 << (i % 64) } else { 0 };
+            let residual = packed ^ identity;
+            nonzero |= residual != 0;
+            *column |= residual;
         }
-        residual.push(row);
+        changed_rows += u64::from(nonzero);
     }
-    let rank = gf2_rank_packed(&mut residual, n);
-    let changed_columns = changed_columns
-        .into_iter()
-        .filter(|changed| *changed)
-        .count();
-    Ok(changed_rows.max(changed_columns).max(rank) as u64)
-}
-
-fn gf2_rank_packed(rows: &mut [Vec<u64>], n: usize) -> usize {
-    let mut pivots: Vec<Option<Vec<u64>>> = vec![None; n];
-    let mut rank = 0usize;
-    for row in rows {
-        for column in (0..n).rev() {
-            if ((row[column / 64] >> (column % 64)) & 1) == 0 {
-                continue;
-            }
-            if let Some(pivot) = &pivots[column] {
-                for (word, pivot_word) in row.iter_mut().zip(pivot) {
-                    *word ^= pivot_word;
-                }
-            } else {
-                pivots[column] = Some(row.clone());
-                rank += 1;
-                break;
-            }
-        }
-    }
-    rank
+    let changed_columns = columns.iter().map(|w| u64::from(w.count_ones())).sum();
+    Ok(changed_rows.max(changed_columns))
 }

@@ -14,12 +14,14 @@ mod producer;
 mod registration;
 
 pub use context::{SharedRelationContext, SharedRelationContextError};
+#[cfg(feature = "cuda")]
+pub(crate) use producer::working_bytes_upper_bound;
 pub use registration::{
     register_default_shared_relation_contexts, register_shared_relation_contexts,
 };
 
-const DEFAULT_MAX_VECTORS: usize = 32;
-const DEFAULT_MAX_COORDINATES: usize = 144;
-const DEFAULT_MAX_PORTS: usize = 32;
-const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_VECTORS: usize = 32;
+pub(crate) const DEFAULT_MAX_COORDINATES: usize = 144;
+pub(crate) const DEFAULT_MAX_PORTS: usize = 32;
+pub(crate) const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
 const EXACT_F32_INTEGER_LIMIT: usize = 1 << 24;

@@ -89,13 +89,9 @@ impl H07InputCoverage {
             && self.entries.len() == MODEL_INPUT_COUNT
             && expected.iter().zip(&self.entries).all(|(spec, entry)| {
                 spec.id == entry.id
-                    && match entry.status {
-                        FeatureStatus::Computed => entry.available == 1,
-                        FeatureStatus::Inapplicable => entry.available == 0,
-                        FeatureStatus::Unsupported
-                        | FeatureStatus::ResourceLimit
-                        | FeatureStatus::NotRequested => false,
-                    }
+                    && entry
+                        .status
+                        .admitted(entry.id, entry.available, &self.schema_id)
             })
     }
 }

@@ -94,7 +94,7 @@ pub(super) fn objective_config_digest(input: ObjectiveFingerprintInput<'_>) -> S
         .map(|(id, catalog)| (id, catalog.sha256()))
         .collect();
     catalog_rows.sort_by_key(|(id, _)| (*id).clone());
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "id": "full_graph_reference_v3",
         "policy": policy_id,
         "feature_registry_sha256": feature_contract_sha256,
@@ -115,6 +115,39 @@ pub(super) fn objective_config_digest(input: ObjectiveFingerprintInput<'_>) -> S
         "compact_exposures": config.compact_exposures,
         "gradient_observation": "neural_trainer_autograd_boundary_v1"
     });
+    // Existing checkpoints pin the original FP32 summation order.
+    if config.share_candidate_wire_projections {
+        body["candidate_pair_projection"] = "shared_wires_v1".into();
+    }
+    if let Some(width) = config.share_training_wire_projections_min_width {
+        body["training_pair_projection"] = serde_json::json!({
+            "mode": "shared_wires_v1", "min_width": width
+        });
+    }
+    if config.cache_root_f08 {
+        body["root_f08_cache"] = "cuda_immutable_training_roots_v1".into();
+    }
+    if config.sequential_batch_gradients {
+        body["batch_gradient_accumulation"] = "sequential_per_example_v1".into();
+    }
+    // The teacher distribution is normalized over every legal action.  Bind
+    // this semantic change only when the teacher loss participates, so a
+    // checkpoint produced by the former selected-actions-only loss cannot be
+    // silently resumed under different gradients.
+    if config.teacher_weight > 0.0 {
+        body["teacher_normalization"] = "all_legal_actions_v1".into();
+    }
+    if config.prevalidated_device_closure {
+        body["exposure_proof"] = "prevalidated_device_one_step_closure_v1".into();
+    }
+    if config.adaptive_neighbor_chunk {
+        body["candidate_chunk_schedule"] = "feature_workspace_v1".into();
+    }
+    if let Some(count) = config.sampled_neighbor_count {
+        body["id"] = "qhat_sampled_primitive_v1".into();
+        body["sampled_neighbor_count"] = count.into();
+        body["candidate_sampling"] = "qhat_half_rotating_half_v1".into();
+    }
     let bytes = serde_json::to_vec(&body).unwrap_or_default();
     hex_digest(Sha256::digest(bytes).into())
 }
@@ -172,4 +205,71 @@ pub(super) fn is_sha256_hex(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod adaptive_chunk_contract_tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_chunk_has_distinct_contract_and_legacy_digest_is_unchanged() {
+        let alphabets = HashMap::new();
+        let catalogs = HashMap::new();
+        let forbidden = HashSet::new();
+        let digest = |config| {
+            objective_config_digest(ObjectiveFingerprintInput {
+                alphabets: &alphabets,
+                catalogs: &catalogs,
+                policy_id: "test-policy",
+                feature_contract_sha256: &"a".repeat(64),
+                forbidden: &forbidden,
+                config,
+                training_records_sha256: None,
+                frozen_dataset_sha256: None,
+            })
+        };
+        let config = FullGraphObjectiveConfig::default();
+        let legacy = digest(&config);
+        assert_eq!(
+            legacy,
+            "194f48c155f40fa49eb122a8cc5f343f3deffbf8d4d987a28bf4328a61cc5f59"
+        );
+        let adaptive = FullGraphObjectiveConfig {
+            adaptive_neighbor_chunk: true,
+            ..config.clone()
+        };
+        assert_ne!(digest(&adaptive), legacy);
+        let sampled = FullGraphObjectiveConfig {
+            sampled_neighbor_count: Some(8),
+            ..config.clone()
+        };
+        assert_ne!(digest(&sampled), legacy);
+        assert_ne!(digest(&sampled), digest(&adaptive));
+        let factored = FullGraphObjectiveConfig {
+            share_training_wire_projections_min_width: Some(32),
+            ..config.clone()
+        };
+        let different_threshold = FullGraphObjectiveConfig {
+            share_training_wire_projections_min_width: Some(64),
+            ..config.clone()
+        };
+        assert_ne!(digest(&factored), legacy);
+        assert_ne!(digest(&factored), digest(&different_threshold));
+        let closure = FullGraphObjectiveConfig {
+            compact_exposures: true,
+            prevalidated_device_closure: true,
+            ..config.clone()
+        };
+        assert_ne!(digest(&closure), legacy);
+        let cached = FullGraphObjectiveConfig {
+            cache_root_f08: true,
+            ..config.clone()
+        };
+        assert_ne!(digest(&cached), legacy);
+        let sequential = FullGraphObjectiveConfig {
+            sequential_batch_gradients: true,
+            ..config.clone()
+        };
+        assert_ne!(digest(&sequential), legacy);
+    }
 }

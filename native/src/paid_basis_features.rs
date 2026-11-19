@@ -18,6 +18,8 @@ mod helpers;
 mod registration;
 mod values;
 
+#[cfg(feature = "cuda")]
+pub(crate) use helpers::workspace_estimate;
 pub use registration::register_paid_basis_features;
 
 /// A named physical shear block drawn from the source matrix. Indices must be
@@ -30,6 +32,16 @@ pub struct PaidBasisBlockContext {
 }
 
 impl PaidBasisBlockContext {
+    pub fn dimension(&self) -> u32 {
+        self.dimension
+    }
+    pub fn source_wires(&self) -> &[usize] {
+        &self.source_wires
+    }
+    pub fn target_wires(&self) -> &[usize] {
+        &self.target_wires
+    }
+
     pub fn new(
         dimension: u32,
         source_wires: Vec<usize>,

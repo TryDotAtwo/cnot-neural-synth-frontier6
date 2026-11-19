@@ -4,7 +4,7 @@ use crate::state::MatrixState;
 use num_bigint::BigInt;
 use std::collections::HashSet;
 
-use super::super::contraction::count_histories;
+use super::super::contraction::{count_histories_with_budget, HistoryCountBudget};
 use super::super::support::{numeric_row_cmp, zero_row};
 use super::super::types::Stage38Error;
 use super::super::{xor_rows, Histories};
@@ -19,6 +19,8 @@ pub(super) struct Enumeration {
 pub(super) fn enumerate(
     state: &MatrixState,
     max_entries: usize,
+    max_component_events: Option<usize>,
+    budget: &mut HistoryCountBudget,
     initial: &[Vec<u64>],
     final_rows: &[Vec<u64>],
     changed: &[usize],
@@ -72,7 +74,7 @@ pub(super) fn enumerate(
                 })
                 .collect();
             templates = templates.checked_add(1).ok_or(Stage38Error::SizeOverflow)?;
-            let audit = count_histories(&histories, max_entries, &HashSet::new())?;
+            let audit = count_histories_with_budget(&histories, max_entries, &HashSet::new(), max_component_events, budget)?;
             max_bag = max_bag.max(audit.max_bag);
             total += &audit.count;
             if audit.count.sign() == num_bigint::Sign::Plus && chosen.is_none() {

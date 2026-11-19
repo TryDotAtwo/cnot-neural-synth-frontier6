@@ -1,6 +1,6 @@
 //! Checked workspace and evaluation budgets for exact template response.
 
-pub(super) fn source_evaluation_estimate(
+pub(crate) fn source_evaluation_estimate(
     choice_count: usize,
     point_count: usize,
     assignment_count: usize,
@@ -19,7 +19,7 @@ pub(super) fn source_evaluation_estimate(
 
 const RATIONAL_ITEM_BYTES: usize = 128;
 
-pub(super) fn template_response_workspace_bytes(
+pub(crate) fn template_response_workspace_bytes(
     dimension: u32,
     choice_count: usize,
 ) -> Option<usize> {

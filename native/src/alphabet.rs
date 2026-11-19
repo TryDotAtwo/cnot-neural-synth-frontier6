@@ -69,6 +69,10 @@ impl CnotAlphabet {
         })
     }
 
+    pub(crate) fn all_to_all_unit_id(dimension: u32) -> String {
+        format!("all_to_all_unit_cnot:{dimension}")
+    }
+
     pub fn all_to_all_unit(dimension: u32) -> Result<Self, AlphabetError> {
         if dimension == 0 {
             return Err(AlphabetError("alphabet dimension must be positive".into()));
@@ -87,7 +91,7 @@ impl CnotAlphabet {
         }
         Self::new(
             dimension,
-            format!("all_to_all_unit_cnot:{dimension}"),
+            Self::all_to_all_unit_id(dimension),
             gates,
             vec![1; action_count],
         )

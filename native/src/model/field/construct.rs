@@ -107,12 +107,13 @@ impl FusionDistanceField {
         families.sort_unstable();
         families.dedup();
 
+        let missing_tokens = schema_id == crate::schema::MISSING_TOKEN_LAYOUT_ID;
         Ok(Self {
             specs: specs.to_vec(),
             expected_schema_id: schema_id,
             expected_policy_id: policy_id,
             device,
-            stem: StructuralStem::new(&(path / "stem"), specs, &config),
+            stem: StructuralStem::new(&(path / "stem"), specs, &config, missing_tokens),
             family_heads: FamilyHeads::new(&(path / "family_heads"), &families, &config),
             fusion: FusionTransformer::new(&(path / "fusion"), &config, families.len()),
             auxiliary: AuxiliaryHeads::new(&(path / "auxiliary"), &config),

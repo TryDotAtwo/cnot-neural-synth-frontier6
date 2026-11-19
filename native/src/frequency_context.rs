@@ -6,8 +6,8 @@
 
 const STAGE52_PRIMARY_SHA256: &str =
     "44fa3c82aa7b5c59542cb4101c40b8f437fca1e7baf47f66a3c395627c49c465";
-const DEFAULT_MAX_WIDTH: u32 = 144;
-const DEFAULT_MAX_FREQUENCY_BITS: usize = 20_736;
+pub(crate) const DEFAULT_MAX_WIDTH: u32 = 144;
+pub(crate) const DEFAULT_MAX_FREQUENCY_BITS: usize = 20_736;
 const MAX_EXACT_F32_INTEGER: usize = 1 << 24;
 
 mod fingerprint;

@@ -9,6 +9,8 @@ mod math;
 mod recognition;
 mod types;
 
+pub(crate) use math::{bit, is_full_unit_alphabet, is_identity_row, support_components};
+
 pub use recognition::{recognize_stage35, verify_stage35_result};
 pub use types::{
     Stage35Branch, Stage35Error, Stage35Exact, Stage35LowerBoundKind, Stage35Result,

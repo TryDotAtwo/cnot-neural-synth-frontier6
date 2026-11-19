@@ -1,8 +1,9 @@
 //! Finite symmetry orbit construction and split-overlap validation.
 use super::alphabet::alphabet;
 use super::types::{FrozenDataError, FrozenPanel};
+use crate::alphabet::CnotAlphabet;
 use crate::state::MatrixState;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub(super) fn panel_views(panel: &FrozenPanel) -> Result<HashSet<MatrixState>, FrozenDataError> {
     let mut out = HashSet::new();
@@ -96,6 +97,7 @@ fn putbit(a: &mut [u64], w: usize, i: usize, j: usize) {
 pub(super) fn validate_train(
     train: &FrozenPanel,
     forbidden: &HashSet<MatrixState>,
+    alphabets: &mut HashMap<u32, CnotAlphabet>,
 ) -> Result<(), FrozenDataError> {
     for (i, r) in train.records().iter().enumerate() {
         if views(&r.state)?.iter().any(|s| forbidden.contains(s)) {
@@ -103,7 +105,18 @@ pub(super) fn validate_train(
                 "train[{i}] overlaps held-out views"
             )));
         }
-        for gate in alphabet(&r.state)?.gates() {
+        let alpha = alphabet(alphabets, r.state.dimension())?;
+        // With fewer holdout states than gates, compare directly. A single
+        // primitive changes exactly one row by XOR with a different source row.
+        if forbidden.len() < alpha.gates().len() {
+            if forbidden.iter().any(|s| single_gate_neighbor(&r.state, s)) {
+                return Err(FrozenDataError(format!(
+                    "train[{i}] one-hop overlaps holdout"
+                )));
+            }
+            continue;
+        }
+        for gate in alpha.gates() {
             let mut next = r.state.clone();
             next.apply_cnot(*gate)
                 .map_err(|e| FrozenDataError(e.to_string()))?;
@@ -116,6 +129,58 @@ pub(super) fn validate_train(
     }
     Ok(())
 }
+#[cfg(test)]
+mod neighbor_tests {
+    use super::*;
+    #[test]
+    fn direct_check_matches_every_gate_on_gl3_and_across_word_boundaries() {
+        for n in [3, 65] {
+            let a = CnotAlphabet::all_to_all_unit(n).unwrap();
+            let id = MatrixState::identity(n, a.id()).unwrap();
+            let mut states = vec![id];
+            let mut cursor = 0;
+            while cursor < states.len() {
+                let root = states[cursor].clone();
+                let mut neighbors = HashSet::new();
+                for gate in a.gates() {
+                    let mut next = root.clone();
+                    next.apply_cnot(*gate).unwrap();
+                    assert!(single_gate_neighbor(&root, &next));
+                    if n == 3 && !states.contains(&next) {
+                        states.push(next.clone());
+                    }
+                    neighbors.insert(next);
+                }
+                for s in &states {
+                    assert_eq!(single_gate_neighbor(&root, s), neighbors.contains(s));
+                }
+                if n == 65 {
+                    let mut two = root.clone();
+                    two.apply_cnot(crate::CnotGate {
+                        control: 64,
+                        target: 0,
+                    })
+                    .unwrap();
+                    two.apply_cnot(crate::CnotGate {
+                        control: 0,
+                        target: 64,
+                    })
+                    .unwrap();
+                    assert!(!single_gate_neighbor(&root, &two));
+                }
+                cursor += 1;
+            }
+        }
+    }
+}
+
+fn single_gate_neighbor(root: &MatrixState, other: &MatrixState) -> bool {
+    if root.dimension() != other.dimension() || root.alphabet_id() != other.alphabet_id() {
+        return false;
+    }
+    root.gate_to_rows(other.packed_rows()).is_some()
+}
+
 pub(super) fn disjoint(
     a: &HashSet<MatrixState>,
     b: &HashSet<MatrixState>,

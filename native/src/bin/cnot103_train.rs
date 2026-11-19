@@ -4,8 +4,12 @@ fn main() {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.len() == 1 && args[0] == "--help" {
         println!("Usage: cnot103-train <run-manifest.json>");
-        println!("The manifest pins frozen data and exact catalogs and requires an explicit complete 102-input physical feature profile.");
+        println!("The manifest pins the dataset and physical 102-input profile. A pinned exact catalog is optional for interval labels and equality-certified labels.");
+        println!(
+            "CNOT103_STAGE_PROFILE=1 emits synchronized, exclusive wall times as JSON on stderr."
+        );
         println!("Each invocation runs bounded updates and writes a verified checkpoint; use resume=true to continue from last.json.");
+        println!("With stage profiling, CNOT103_PROFILE_CHUNKS=N stops after N detached candidate chunks. The CLI exits with an error and does not commit the partial update.");
         return;
     }
     if args.len() != 1 {

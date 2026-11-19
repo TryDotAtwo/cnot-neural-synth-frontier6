@@ -169,3 +169,31 @@ fn source_elementary_lower_bound_never_exceeds_exact_gl3_distance() {
         );
     }
 }
+
+#[test]
+fn matrix_proofs_never_accept_a_longer_replayed_word_in_gl3() {
+    let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
+    let catalog = exact_gl(&alphabet);
+    let redundant = alphabet.gates()[0];
+    let mut saw_non_elementary = false;
+    for (state, entry) in catalog.entries() {
+        let mut record = TrainingRecord {
+            state: state.clone(),
+            split: TrainingSplit::Train,
+            verified_words: vec![entry.certificate.clone()],
+            exact_distance: Some(entry.distance),
+            lineage_id: "exact-proof-test".into(),
+        };
+        if entry.distance > cnot103_native::training_data::elementary_lower_bound(state).unwrap()
+            && record.validate_for_training(&alphabet, None).is_ok()
+        {
+            saw_non_elementary = true;
+        }
+        let certificate = &mut record.verified_words[0];
+        certificate.gates.extend([redundant, redundant]);
+        certificate.physical_cost += 2;
+        record.exact_distance = Some(certificate.physical_cost);
+        assert!(record.validate_for_training(&alphabet, None).is_err());
+    }
+    assert!(saw_non_elementary);
+}

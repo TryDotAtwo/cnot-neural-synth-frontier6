@@ -22,6 +22,8 @@ const TEMPLATE_RESPONSE_WIRE_ROLES: [&str; 4] = [
     "second_target",
 ];
 
+#[cfg(feature = "cuda")]
+pub(crate) use budget::{source_evaluation_estimate, template_response_workspace_bytes};
 pub use config::{
     TemplateChoice, TemplateChoiceKind, TemplateResponseBudgets, TemplateResponseConfig,
 };

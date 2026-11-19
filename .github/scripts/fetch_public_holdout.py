@@ -62,11 +62,14 @@ def download(path: pathlib.Path, revision: str) -> None:
             if length and (not length.isdigit() or int(length) > MAX_BYTES):
                 raise FetchError("holdout download exceeds the configured size limit")
             total = 0
+            prefix = bytearray()
             with temporary.open("xb") as stream:
                 while True:
                     block = response.read(1024 * 1024)
                     if not block:
                         break
+                    if len(prefix) < 16:
+                        prefix.extend(block[: 16 - len(prefix)])
                     total += len(block)
                     if total > MAX_BYTES:
                         raise FetchError("holdout download exceeds the configured size limit")
@@ -77,8 +80,8 @@ def download(path: pathlib.Path, revision: str) -> None:
         raise
     except (HTTPError, URLError, TimeoutError, OSError):
         raise FetchError("holdout download failed") from None
-    if total == 0:
-        raise FetchError("holdout download is empty")
+    if total == 0 or bytes(prefix) != b"SQLite format 3\x00":
+        raise FetchError("holdout download is empty or not a SQLite database")
     os.rename(temporary, path)
 
 
@@ -146,4 +149,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

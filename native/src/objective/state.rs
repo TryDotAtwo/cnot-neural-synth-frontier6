@@ -31,6 +31,9 @@ impl FullGraphObjective {
     pub fn load_state_dict(&mut self, state: &serde_json::Value) -> Result<(), String> {
         let proposed = self.decode_state_dict(state)?;
         self.exposures = proposed;
+        if self.config.prevalidated_device_closure {
+            self.closure_verified = false;
+        }
         Ok(())
     }
 

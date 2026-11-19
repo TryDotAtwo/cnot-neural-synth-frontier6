@@ -9,7 +9,7 @@ use crate::state::CnotGate;
 
 pub use registration::{
     register_rank_increment_probes, register_restricted_intersections,
-    register_selected_residual_ranks,
+    register_selected_residual_ranks, register_selected_residual_ranks_multi,
 };
 
 #[derive(Clone)]
@@ -23,6 +23,7 @@ pub(super) enum ContextualRankContext {
         alphabet: CnotAlphabet,
         gates: Vec<CnotGate>,
     },
+    SelectedResidualMulti(Vec<crate::rank_features::SelectedResidualContext>),
 }
 
 pub(super) struct ContextualRankProducer {

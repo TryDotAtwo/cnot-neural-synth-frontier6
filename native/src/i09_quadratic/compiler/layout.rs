@@ -1,7 +1,7 @@
 use crate::i09_quadratic::I09Monomial;
 use std::mem::size_of;
 
-pub(in crate::i09_quadratic) fn variable_count(n: usize, horizon: usize) -> Option<usize> {
+pub(crate) fn variable_count(n: usize, horizon: usize) -> Option<usize> {
     let per_slot = n
         .checked_mul(n)?
         .checked_add(n.checked_mul(3)?)?
@@ -9,7 +9,7 @@ pub(in crate::i09_quadratic) fn variable_count(n: usize, horizon: usize) -> Opti
     horizon.checked_mul(per_slot)
 }
 
-pub(in crate::i09_quadratic) fn equation_bound(n: usize, horizon: usize) -> Option<usize> {
+pub(crate) fn equation_bound(n: usize, horizon: usize) -> Option<usize> {
     let n_squared = n.checked_mul(n)?;
     let per_slot = 3usize
         .checked_add(n.checked_mul(n.checked_sub(1)?)?)?
@@ -18,7 +18,7 @@ pub(in crate::i09_quadratic) fn equation_bound(n: usize, horizon: usize) -> Opti
     horizon.checked_mul(per_slot)?.checked_add(n_squared)
 }
 
-pub(in crate::i09_quadratic) fn working_bytes_upper_bound(
+pub(crate) fn working_bytes_upper_bound(
     n: usize,
     horizon: usize,
     variables: usize,

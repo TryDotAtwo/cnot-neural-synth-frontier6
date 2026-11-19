@@ -7,8 +7,12 @@ mod contexts;
 mod providers;
 mod rank_math;
 
-pub use contexts::{LabeledCut, LabeledCutError, RankIncrementProbe, RestrictedIntersection};
+pub use contexts::{
+    LabeledCut, LabeledCutError, RankIncrementProbe, RestrictedIntersection,
+    SelectedResidualContext,
+};
 pub use providers::{
     register_labeled_cuts, register_partial_shear_rank, register_rank_increment_probes,
     register_restricted_intersections, register_selected_residual_ranks,
+    register_selected_residual_ranks_multi,
 };

@@ -8,7 +8,7 @@ mod polynomial;
 mod rank;
 mod storage;
 
-pub(super) use budget::{factor_entry_count, working_bytes_upper_bound};
+pub(crate) use budget::{factor_entry_count, working_bytes_upper_bound};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ComputeFailure {

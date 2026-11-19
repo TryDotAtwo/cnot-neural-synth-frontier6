@@ -1,0 +1,33 @@
+name: Read-only Vast 2x3060 inventory
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/scripts/vast_readonly_inventory.py
+      - .github/workflows/vast-readonly-2x3060-inventory.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tqp-vast-readonly-inventory
+  cancel-in-progress: false
+
+jobs:
+  read-only-inventory:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out controller source
+        uses: actions/checkout@v4
+
+      - name: Check controller syntax
+        run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_readonly_inventory.py').read_text(encoding='utf-8'))"
+
+      - name: Query Vast with GET only
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_readonly_inventory.py

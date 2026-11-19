@@ -138,13 +138,11 @@ impl FeaturePacket {
             }
 
             for row in 0..self.batch {
-                let valid = match entry.status[row] {
-                    FeatureStatus::Computed => entry.available[row] == 1,
-                    FeatureStatus::Inapplicable => entry.available[row] == 0,
-                    FeatureStatus::Unsupported
-                    | FeatureStatus::ResourceLimit
-                    | FeatureStatus::NotRequested => false,
-                };
+                let valid = entry.status[row].admitted(
+                    entry.spec.id,
+                    entry.available[row],
+                    &self.schema_id,
+                );
                 if !valid {
                     failures.push(format!(
                         "{}: row {row}: {} ({})",

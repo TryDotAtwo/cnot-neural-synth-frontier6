@@ -28,6 +28,8 @@ pub mod stage26;
 pub mod stage35;
 pub mod stage37;
 pub mod stage38;
+#[cfg(feature = "torch")]
+mod stage_profile;
 pub mod state;
 pub mod structural;
 pub mod symmetry_alignment;
@@ -65,6 +67,39 @@ pub use training_session::{
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
+
+#[cfg(feature = "cuda")]
+pub mod device_context;
+
+#[cfg(feature = "cuda")]
+pub mod device_feature_plan;
+
+#[cfg(feature = "cuda")]
+pub mod device_search;
+
+#[cfg(feature = "cuda")]
+pub mod device_state;
+
+#[cfg(feature = "cuda")]
+pub mod device_compiler;
+#[cfg(feature = "cuda")]
+pub mod device_endpoint_response;
+#[cfg(feature = "cuda")]
+pub mod device_guarded_pair;
+#[cfg(feature = "cuda")]
+pub mod device_one_excess;
+#[cfg(feature = "cuda")]
+pub mod device_paid_basis;
+#[cfg(feature = "cuda")]
+pub mod device_paid_basis_atlas;
+#[cfg(feature = "cuda")]
+pub mod device_paid_shear;
+#[cfg(feature = "cuda")]
+pub mod device_quadratic;
+#[cfg(feature = "cuda")]
+pub mod device_template_response;
+#[cfg(feature = "cuda")]
+pub mod device_zero_excess;
 
 #[cfg(feature = "cuda")]
 pub mod run_config;
@@ -115,7 +150,8 @@ pub use positive_packet::{
 };
 pub use rank_features::{
     register_labeled_cuts, register_partial_shear_rank, register_rank_increment_probes,
-    register_restricted_intersections, register_selected_residual_ranks, LabeledCut,
+    register_restricted_intersections, register_selected_residual_ranks,
+    register_selected_residual_ranks_multi, LabeledCut, SelectedResidualContext,
     LabeledCutError, RankIncrementProbe, RestrictedIntersection,
 };
 pub use response::{evaluate_i10, register_tiny_i10, I10Config, I10OracleResult, I10OracleStatus};

@@ -1,7 +1,7 @@
 use super::{EncodedState, StructuralStem};
-use crate::model::{matrix_batch_values, ModelError};
-use crate::packet::FeaturePacket;
-use tch::{Device, Kind, Tensor};
+use crate::model::tensor_packet::TensorPacket;
+use crate::model::ModelError;
+use tch::{Kind, Tensor};
 
 mod features;
 use features::FeatureAccumulation;
@@ -9,19 +9,14 @@ use features::FeatureAccumulation;
 impl StructuralStem {
     pub(in crate::model) fn forward(
         &self,
-        packet: &FeaturePacket,
-        device: Device,
+        packet: &TensorPacket,
+        share_wire_projections: bool,
     ) -> Result<EncodedState, ModelError> {
-        let batch = packet.batch as i64;
-        let nodes = packet.nodes as i64;
-        let matrix_data = matrix_batch_values(packet)?;
-        let matrix = Tensor::from_slice(&matrix_data)
-            .view([batch, nodes, nodes])
-            .to_device(device);
-        let valid = Tensor::from_slice(&packet.valid_nodes)
-            .view([batch, nodes])
-            .to_kind(Kind::Bool)
-            .to_device(device);
+        let batch = packet.matrix.size()[0];
+        let nodes = packet.matrix.size()[1];
+        let device = packet.matrix.device();
+        let matrix = packet.matrix.shallow_clone();
+        let valid = packet.valid_nodes.shallow_clone();
         let eye = Tensor::eye(nodes, (Kind::Float, device))
             .unsqueeze(0)
             .expand([batch, nodes, nodes], true);
@@ -45,14 +40,13 @@ impl StructuralStem {
             mut pair,
             mut context_tokens,
             mut context_masks,
+            statuses,
             family_available,
         } = features::accumulate(
             self,
             packet,
             features::FeatureAccumulationContext {
-                device,
                 batch,
-                nodes,
                 valid: &valid,
                 pair_mask: &pair_mask,
             },
@@ -70,6 +64,27 @@ impl StructuralStem {
         ) / count;
         wire += pair_to_wire.apply(&self.pair_to_wire) * valid.to_kind(Kind::Float).unsqueeze(-1);
 
+        // One context token sums independent learned vectors keyed by feature and
+        // reason. It needs no fictitious wire, pair, or group (even for empty groups).
+        if let Some(projection) = &self.missing_projection {
+            use crate::model::DeviceFeatureStatus::{Inapplicable, ResourceLimit, Unsupported};
+            let indicators = Tensor::stack(
+                &[
+                    statuses.eq(Inapplicable as i64),
+                    statuses.eq(Unsupported as i64),
+                    statuses.eq(ResourceLimit as i64),
+                ],
+                2,
+            )
+            .flatten(1, 2);
+            context_masks.push(indicators.any_dim(1, true));
+            context_tokens.push(
+                indicators
+                    .to_kind(Kind::Float)
+                    .apply(projection)
+                    .unsqueeze(1),
+            );
+        }
         let null_token = Tensor::zeros([batch, 1, self.wire_dim], (Kind::Float, device));
         let null_valid = Tensor::ones([batch, 1], (Kind::Bool, device));
         context_tokens.push(null_token);
@@ -87,7 +102,7 @@ impl StructuralStem {
         wire = (wire + message) * valid.to_kind(Kind::Float).unsqueeze(-1);
 
         for block in &self.blocks {
-            (wire, pair) = block.forward(&wire, &pair, &valid);
+            (wire, pair) = block.forward(&wire, &pair, &valid, share_wire_projections);
         }
         let identity = ((&matrix - &eye).abs() * pair_mask)
             .sum_dim_intlist([1i64, 2].as_slice(), false, Kind::Float)

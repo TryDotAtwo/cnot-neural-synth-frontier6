@@ -68,6 +68,7 @@ impl FusionTransformer {
         encoded: &EncodedState,
         family_tokens: &Tensor,
         available: &Tensor,
+        share_wire_projections: bool,
     ) -> Tensor {
         let shape = family_tokens.size();
         let batch = shape[0];
@@ -102,7 +103,7 @@ impl FusionTransformer {
             * encoded.valid.to_kind(family_inputs.kind()).unsqueeze(-1);
         let mut pair = encoded.pair.shallow_clone();
         for block in &self.structural_blocks {
-            (wire, pair) = block.forward(&wire, &pair, &encoded.valid);
+            (wire, pair) = block.forward(&wire, &pair, &encoded.valid, share_wire_projections);
         }
         let context = Tensor::cat(&[&wire, &encoded.context], 1);
         let context_valid = Tensor::cat(&[&encoded.valid, &encoded.context_valid], 1);

@@ -20,6 +20,7 @@ impl FullGraphObjective {
         config: FullGraphObjectiveConfig,
     ) -> Result<Self, String> {
         config.validate()?;
+        config.validate_policy(&policy)?;
         let policy_id = policy.id().map_err(|error| error.to_string())?;
         if config.require_all_model_inputs {
             let selected: HashSet<_> = policy.enabled_ids.iter().copied().collect();
@@ -36,6 +37,7 @@ impl FullGraphObjective {
 
         let mut alphabet_map = HashMap::with_capacity(alphabets.len());
         for alphabet in alphabets {
+            config.effective_neighbor_chunk_size(&policy, alphabet.dimension() as usize)?;
             if alphabet_map
                 .insert(alphabet.id().to_owned(), alphabet)
                 .is_some()
@@ -93,6 +95,7 @@ impl FullGraphObjective {
             config,
             config_sha256,
             exposures: ExposureLedger::default(),
+            closure_verified: false,
             last_diagnostics: ObjectiveDiagnostics::default(),
         })
     }

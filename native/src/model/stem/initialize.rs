@@ -9,6 +9,7 @@ impl StructuralStem {
         path: &nn::Path<'_>,
         specs: &[FeatureSpec],
         config: &ModelConfig,
+        missing_tokens: bool,
     ) -> Self {
         let mut projections = HashMap::with_capacity(specs.len());
         let mut group_role_projections = HashMap::new();
@@ -49,6 +50,18 @@ impl StructuralStem {
             specs: specs.to_vec(),
             projections,
             group_role_projections,
+            missing_projection: missing_tokens.then(|| {
+                let inputs = 3 * specs.len() as i64;
+                nn::linear(
+                    path / "missing_status",
+                    inputs,
+                    config.wire_dim,
+                    nn::LinearConfig {
+                        bias: false,
+                        ..pytorch_linear_config(inputs)
+                    },
+                )
+            }),
             raw_matrix: nn::linear(
                 path / "raw_matrix",
                 3,

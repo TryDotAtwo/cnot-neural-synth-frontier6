@@ -1,6 +1,18 @@
 use super::{ExposureAudit, FullGraphObjective, ObjectiveDiagnostics, EXPOSURE_SCHEMA};
 
 impl FullGraphObjective {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn alphabet_for(&self, id: &str) -> Result<&crate::CnotAlphabet, String> {
+        self.alphabets
+            .get(id)
+            .ok_or_else(|| format!("unknown objective alphabet {id}"))
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn feature_policy(&self) -> &crate::FeaturePolicy {
+        &self.policy
+    }
+
     pub fn config_sha256(&self) -> &str {
         &self.config_sha256
     }
@@ -10,8 +22,20 @@ impl FullGraphObjective {
     }
 
     pub fn audit(&self) -> ExposureAudit {
-        self.exposures
-            .audit(&self.forbidden, self.config.compact_exposures)
+        let mut audit = self.exposures.audit(&self.forbidden, self.config.compact_exposures);
+        if self.config.prevalidated_device_closure {
+            audit.strict_unseen &= self.closure_verified;
+            audit.audit_mode = if self.closure_verified {
+                "prevalidated_device_one_step_closure"
+            } else {
+                "prevalidated_device_closure_pending"
+            };
+            if self.closure_verified {
+                audit.set_sha256.insert("closure_contract".into(), self.config_sha256.clone());
+                audit.set_sha256.insert("forbidden".into(), super::fingerprint::identity_set_digest(&self.forbidden));
+            }
+        }
+        audit
     }
 
     /// Stable checkpoint contract for `Checkpoint.contract`.

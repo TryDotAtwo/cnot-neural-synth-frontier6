@@ -11,6 +11,9 @@ mod registration;
 mod summaries;
 mod types;
 
+#[cfg(feature = "cuda")]
+pub(crate) use compiler::{equation_bound, variable_count, working_bytes_upper_bound};
+
 pub use evaluation::compute_i09_response;
 pub use registration::{i09_source_sha256, register_i09_quadratic_response};
 pub use types::{

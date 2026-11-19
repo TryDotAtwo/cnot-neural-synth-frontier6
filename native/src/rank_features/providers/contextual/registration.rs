@@ -12,7 +12,7 @@ mod selected_residual;
 
 pub use rank_increment::register_rank_increment_probes;
 pub use restricted_intersections::register_restricted_intersections;
-pub use selected_residual::register_selected_residual_ranks;
+pub use selected_residual::{register_selected_residual_ranks, register_selected_residual_ranks_multi};
 
 fn contextual_spec(
     id: FeatureId,

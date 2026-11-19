@@ -73,6 +73,8 @@ pub struct FullGraphTrainingSession<'a> {
     config: TrainingSessionConfig,
 }
 
+#[cfg(feature = "cuda")]
+mod device;
 mod lifecycle;
 mod run;
 mod validation;

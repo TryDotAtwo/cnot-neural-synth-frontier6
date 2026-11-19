@@ -8,16 +8,29 @@ use super::types::{Stage38Error, Stage38Result};
 mod one_excess;
 mod one_excess_templates;
 
+#[cfg(all(test, feature = "cuda"))]
+mod cuda_phase_tests;
+
 /// Recognizes the exact `r+1` CNOT family after stage 37 excludes length `r`.
 pub fn recognize_stage38(
     state: &MatrixState,
     alphabet: &CnotAlphabet,
     max_entries: usize,
 ) -> Result<Stage38Result, Stage38Error> {
+    recognize_stage38_with_limits(state, alphabet, max_entries, None, None)
+}
+
+pub(crate) fn recognize_stage38_with_limits(
+    state: &MatrixState,
+    alphabet: &CnotAlphabet,
+    max_entries: usize,
+    max_component_events: Option<usize>,
+    max_history_counts: Option<u32>,
+) -> Result<Stage38Result, Stage38Error> {
     if state.dimension() != alphabet.dimension() || state.alphabet_id() != alphabet.id() {
         return Err(Stage38Error::AlphabetMismatch);
     }
-    if max_entries == 0 {
+    if max_entries == 0 || max_component_events == Some(0) || max_history_counts == Some(0) {
         return Err(Stage38Error::InvalidBudget);
     }
     if !is_complete_unit_alphabet(alphabet) {
@@ -54,7 +67,7 @@ pub fn recognize_stage38(
         Stage37Result::NoZeroExcess(_) => {}
     }
 
-    one_excess::recognize(state, alphabet, max_entries)
+    one_excess::recognize(state, alphabet, max_entries, max_component_events, max_history_counts)
 }
 
 /// Re-contracts exact results and replays their CNOT word.

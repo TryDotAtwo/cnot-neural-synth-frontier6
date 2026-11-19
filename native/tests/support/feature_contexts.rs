@@ -34,6 +34,7 @@ pub fn complete_model_input_contexts() -> FeatureProviderContexts {
             control: 0,
             target: 1,
         }],
+        selected_residual_additional_contexts: vec![],
         block_parity_contexts: vec![BlockContext::new(4, vec![0, 1], vec![2, 3]).unwrap()],
         max_parity_patterns: 8,
         max_parity_pairs: 8,
@@ -129,6 +130,7 @@ pub fn complete_model_input_contexts_for_n10() -> FeatureProviderContexts {
             control: 0,
             target: 5,
         }],
+        selected_residual_additional_contexts: vec![],
         block_parity_contexts: vec![
             BlockContext::new(10, (0..5).collect(), (5..10).collect()).unwrap()
         ],

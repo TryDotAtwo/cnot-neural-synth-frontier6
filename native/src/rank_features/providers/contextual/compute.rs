@@ -36,6 +36,12 @@ impl FeatureProducer for ContextualRankProducer {
             ContextualRankContext::SelectedResidual { alphabet, gates } => {
                 selected_residual::compute(state, alphabet, gates)
             }
+            ContextualRankContext::SelectedResidualMulti(contexts) => {
+                match contexts.iter().find(|context| context.alphabet.dimension() == state.dimension()) {
+                    Some(context) => selected_residual::compute(state, &context.alphabet, &context.gates),
+                    None => unavailable(FeatureStatus::Unsupported, "selected_residual_width_has_no_context"),
+                }
+            }
         }
     }
 }

@@ -11,7 +11,7 @@ const FRAME_31: &[(usize, usize)] = &[(1, 0), (0, 1)];
 const FRAME_21: &[(usize, usize)] = &[(0, 1), (1, 0), (0, 1)];
 pub(super) const FRAME_IDENTITY_WITH_SHARED: &[(usize, usize)] = &[(0, 1), (0, 1)];
 
-pub(super) fn is_full_unit_alphabet(alphabet: &CnotAlphabet) -> Result<bool, Stage35Error> {
+pub(crate) fn is_full_unit_alphabet(alphabet: &CnotAlphabet) -> Result<bool, Stage35Error> {
     let n = usize::try_from(alphabet.dimension()).map_err(|_| Stage35Error::IndexOverflow)?;
     let Some(action_count) = n.checked_mul(n.saturating_sub(1)) else {
         return Ok(false);
@@ -30,7 +30,7 @@ pub(super) fn is_full_unit_alphabet(alphabet: &CnotAlphabet) -> Result<bool, Sta
     Ok(true)
 }
 
-pub(super) fn is_identity_row(state: &MatrixState, row: usize) -> bool {
+pub(crate) fn is_identity_row(state: &MatrixState, row: usize) -> bool {
     state.row_words(row as u32).is_some_and(|words| {
         words.iter().enumerate().all(|(word, value)| {
             *value
@@ -43,7 +43,7 @@ pub(super) fn is_identity_row(state: &MatrixState, row: usize) -> bool {
     })
 }
 
-pub(super) fn bit(state: &MatrixState, row: usize, column: usize) -> bool {
+pub(crate) fn bit(state: &MatrixState, row: usize, column: usize) -> bool {
     state.row_words(row as u32).is_some_and(|words| {
         words
             .get(column / 64)
@@ -90,7 +90,7 @@ pub(super) fn gate(control: usize, target: usize) -> Result<CnotGate, Stage35Err
     })
 }
 
-pub(super) fn support_components(state: &MatrixState) -> usize {
+pub(crate) fn support_components(state: &MatrixState) -> usize {
     let n = state.dimension() as usize;
     let mut parent: Vec<usize> = (0..n).collect();
     for row in 0..n {

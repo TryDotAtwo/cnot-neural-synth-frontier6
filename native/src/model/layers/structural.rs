@@ -55,6 +55,7 @@ impl StructuralBlock {
         wire: &Tensor,
         pair: &Tensor,
         valid: &Tensor,
+        share_wire_projections: bool,
     ) -> (Tensor, Tensor) {
         let shape = wire.size();
         let batch = shape[0];
@@ -62,17 +63,19 @@ impl StructuralBlock {
         let float_mask = valid.to_kind(wire.kind());
         let pair_mask = float_mask.unsqueeze(2) * float_mask.unsqueeze(1);
 
-        let left = wire
-            .unsqueeze(2)
-            .expand([batch, nodes, nodes, self.wire_dim], true);
-        let right = wire
-            .unsqueeze(1)
-            .expand([batch, nodes, nodes, self.wire_dim], true);
-        let pair_input = Tensor::cat(&[pair, &pair.transpose(1, 2), &left, &right], -1);
-        let updated_pair = self
-            .pair_norm
-            .forward(&(pair + self.pair_update.forward(&pair_input)))
-            * pair_mask.unsqueeze(-1);
+        let update = if share_wire_projections {
+            self.pair_update.forward_shared_wires(wire, pair)
+        } else {
+            let left = wire
+                .unsqueeze(2)
+                .expand([batch, nodes, nodes, self.wire_dim], true);
+            let right = wire
+                .unsqueeze(1)
+                .expand([batch, nodes, nodes, self.wire_dim], true);
+            let input = Tensor::cat(&[pair, &pair.transpose(1, 2), &left, &right], -1);
+            self.pair_update.forward(&input)
+        };
+        let updated_pair = self.pair_norm.forward(&(pair + update)) * pair_mask.unsqueeze(-1);
 
         let qkv = wire.apply(&self.qkv).chunk(3, -1);
         let head_dim = self.wire_dim / self.heads;

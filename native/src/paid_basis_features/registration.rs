@@ -45,7 +45,7 @@ pub fn register_paid_basis_features(
     }
 
     let version = format!(
-        "verified_paid_basis_d09_d14_v1:{}",
+        "verified_paid_basis_d09_d14_v2:{}",
         config_digest(&contexts, config)
     );
     let shared = Arc::new(PaidBasisFeatureCache::new(contexts, config));

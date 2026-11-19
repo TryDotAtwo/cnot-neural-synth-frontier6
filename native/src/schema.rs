@@ -9,6 +9,8 @@ pub const H07_POST_FORWARD_DIAGNOSTIC_ID: FeatureId = FeatureId {
 };
 pub const FEATURE_ID_MANIFEST_ID: &str = "cnot_feature_ids_a01_i11_v1";
 pub const FEATURE_LAYOUT_ID: &str = "runtime_packet_layout_v24";
+/// Same numerical providers as v24, plus a learned signal for explicit missing outcomes.
+pub const MISSING_TOKEN_LAYOUT_ID: &str = "runtime_packet_layout_v25";
 
 pub const FAMILY_COUNTS: [(u8, u8); 9] = [
     (b'A', 20),

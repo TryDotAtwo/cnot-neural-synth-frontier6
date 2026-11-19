@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 
 const TRAINER: &str = env!("CARGO_BIN_EXE_cnot103-train");
 const DIMENSION: u32 = 4;
+#[path = "run_manifest/dev_search.rs"]
+mod dev_search;
 
 fn all_paths(alphabet: &CnotAlphabet) -> HashMap<MatrixState, Vec<CnotGate>> {
     let identity = MatrixState::identity(DIMENSION, alphabet.id()).unwrap();
@@ -95,6 +97,7 @@ fn record_json(
     state: &MatrixState,
     paths: &HashMap<MatrixState, Vec<CnotGate>>,
     split: &str,
+    ordinal: usize,
 ) -> Value {
     let reduction = paths
         .get(state)
@@ -104,7 +107,11 @@ fn record_json(
         .copied()
         .collect::<Vec<_>>();
     let identity = MatrixState::identity(DIMENSION, state.alphabet_id()).unwrap();
-    let lineage = format!("fixture-{split}");
+    let lineage = if ordinal == 0 {
+        format!("fixture-{split}")
+    } else {
+        format!("fixture-{split}-{ordinal}")
+    };
     json!({
         "state": {"n": DIMENSION, "alphabet_id": state.alphabet_id(), "packed_rows": state.packed_rows()},
         "verified_words": [{
@@ -171,9 +178,7 @@ fn run_manifest_rejects_invalid_json() {
     assert!(parse_run_manifest(b"{").is_err());
 }
 
-#[test]
-#[ignore = "runs the full 102-input CLI step/save/fresh-process-resume workflow on CUDA"]
-fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
+fn gl4_manifest(search_panel: bool, retain_variable: &str) -> (std::path::PathBuf, bool, Value) {
     let alphabet = CnotAlphabet::all_to_all_unit(DIMENSION).unwrap();
     let paths = all_paths(&alphabet);
     assert_eq!(paths.len(), 20_160, "fixture must cover all GL(4,2)");
@@ -182,8 +187,21 @@ fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
     let mut dev = identity.clone();
     dev.apply_cnot(alphabet.gates()[0]).unwrap();
     let test = MatrixState::from_packed_rows(DIMENSION, alphabet.id(), vec![2, 4, 1, 8]).unwrap();
-    let forbidden = finite_views(&dev, &paths)
-        .into_iter()
+    let mut devs = vec![dev];
+    // All four depth-two roots are fixed before training. A shared target
+    // keeps every one-hop successor within the Stage35 two-changed-row scope.
+    // Distinct targets also exercise the source's explicit Unsupported status.
+    if search_panel {
+        for [a, b] in [[3, 8], [0, 1], [1, 4], [5, 8]] {
+            devs.push(apply_path(
+                identity.clone(),
+                &[alphabet.gates()[a], alphabet.gates()[b]],
+            ));
+        }
+    }
+    let forbidden = devs
+        .iter()
+        .flat_map(|s| finite_views(s, &paths))
         .chain(finite_views(&test, &paths))
         .collect::<HashSet<_>>();
 
@@ -203,15 +221,23 @@ fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
         .cloned()
         .expect("train root and its one-CNOT successors must stay outside holdouts and have shear");
 
-    let directory = std::env::temp_dir().join(format!(
-        "cnot103-cli-run-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&directory).unwrap();
+    // Explicitly retaining this fixture permits a separate heldout search to
+    // use the very checkpoint and panel pair validated by this CLI test.
+    let retained = std::env::var_os(retain_variable);
+    let directory = retained
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "cnot103-cli-run-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+        });
+    fs::create_dir(&directory).expect("CLI fixture needs a new directory");
 
     let mut catalog_entries = Vec::with_capacity(paths.len());
     for state in &states {
@@ -247,9 +273,9 @@ fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
             ])).collect::<Vec<_>>(),
             "historical_keys": [], "rejected_train_lineages": [],
             "panels": {
-                "train": [record_json(&train, &paths, "train")],
-                "dev": [record_json(&dev, &paths, "dev")],
-                "test": [record_json(&test, &paths, "test")]
+                "train": [record_json(&train, &paths, "train",0)],
+                "dev": devs.iter().enumerate().map(|(i,s)|record_json(s,&paths,"dev",i)).collect::<Vec<_>>(),
+                "test": [record_json(&test, &paths, "test",0)]
             }
         }),
     );
@@ -301,7 +327,7 @@ fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
         "i09_limits":{"max_variables":1024,"max_equations":4096,"max_bytes":1048576},
         "i10_config":{"max_n":DIMENSION,"max_degree":12,"max_layer_states":25000,"max_transitions":3000000}
     });
-    let mut manifest = json!({
+    let manifest = json!({
         "schema":"cnot103_training_run_v1",
         "dataset":{"path":"dataset.json","sha256":dataset_digest},
         "exact_catalogs":{"path":"catalogs.json","sha256":catalog_digest},
@@ -313,22 +339,71 @@ fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
         "objective":{"bellman_weight":1.0,"supervision_weight":1.0,"qhat_weight":0.1,"teacher_weight":0.0,"neighbor_chunk_size":8,"teacher_temperature":4.0},
         "alphabets":[contexts["alphabet"].clone()],"feature_contexts":contexts
     });
+    (directory, retained.is_some(), manifest)
+}
+
+#[test]
+#[ignore = "runs the full 102-input CLI step/save/fresh-process-resume workflow on CUDA"]
+fn cli_fresh_checkpoint_resume_executes_next_update_in_a_new_process() {
+    let (directory, retained, mut manifest) = gl4_manifest(false, "CNOT103_CLI_TEST_ARTIFACTS");
     let manifest_path = directory.join("run.json");
 
     manifest["resume"] = json!(false);
     fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let first = run_cli(&manifest_path);
+    if retained {
+        fs::copy(&manifest_path, directory.join("fresh.json")).unwrap();
+    }
     assert_eq!(first["start_progress"]["attempted"], 0);
     assert_eq!(first["end_progress"]["attempted"], 1);
+    assert_eq!(first["end_progress"]["accepted"], 1);
+    assert_eq!(first["last_step"]["accepted"], true);
+    assert!(first["last_step"]["loss"].as_f64().unwrap().is_finite());
+    assert_eq!(first["training_runtime"], "cuda_primitive_full_graph_v1");
     assert_eq!(first["feature_model_inputs"], 102);
     assert_eq!(first["exposure_audit"]["strict_unseen"], true);
 
     manifest["resume"] = json!(true);
     fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let resumed = run_cli(&manifest_path);
+    if retained {
+        fs::copy(&manifest_path, directory.join("resume.json")).unwrap();
+    }
     assert_eq!(resumed["start_progress"]["attempted"], 1);
     assert_eq!(resumed["end_progress"]["attempted"], 2);
+    assert_eq!(resumed["end_progress"]["accepted"], 2);
     assert_eq!(resumed["dataset_sha256"], first["dataset_sha256"]);
     assert_eq!(resumed["objective_sha256"], first["objective_sha256"]);
-    fs::remove_dir_all(directory).unwrap();
+    manifest["resume"] = json!(false);
+    manifest["checkpoint_dir"] = json!("continuous-checkpoint");
+    manifest["training"]["attempts"] = json!(2);
+    manifest["training"]["checkpoint_every_attempts"] = json!(2);
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let continuous = run_cli(&manifest_path);
+    assert_eq!(continuous["end_progress"], resumed["end_progress"]);
+    assert_eq!(continuous["exposure_audit"], resumed["exposure_audit"]);
+    assert_eq!(continuous["last_step"], resumed["last_step"]);
+    assert_eq!(
+        continuous["checkpoint"]["sha256"],
+        resumed["checkpoint"]["sha256"]
+    );
+    println!("CUDA full graph n=4 inputs=102 train/dev/test=1/1/1 accepted=2 resumed=continuous checkpoint={} dataset={} objective={} loss={}",
+        resumed["checkpoint"]["sha256"], resumed["dataset_sha256"], resumed["objective_sha256"], resumed["last_step"]["loss"]);
+    if retained {
+        fs::copy(&manifest_path, directory.join("continuous.json")).unwrap();
+        fs::copy(directory.join("fresh.json"), &manifest_path).unwrap();
+        for (name, result) in [
+            ("first", first),
+            ("resumed", resumed),
+            ("continuous", continuous),
+        ] {
+            fs::write(
+                directory.join(format!("{name}-result.json")),
+                serde_json::to_vec_pretty(&result).unwrap(),
+            )
+            .unwrap();
+        }
+    } else {
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

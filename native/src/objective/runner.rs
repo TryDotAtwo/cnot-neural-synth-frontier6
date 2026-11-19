@@ -1,3 +1,6 @@
+#[cfg(feature = "cuda")]
+pub(super) mod device;
+
 use super::{FullGraphObjective, StateAdmission};
 use crate::checkpoint::{CheckpointManifest, CheckpointStore};
 use crate::features::FeatureRegistry;
@@ -30,7 +33,9 @@ impl<'a> FullGraphObjectiveRunner<'a> {
         if records.is_empty() {
             return Err("training record set is empty".into());
         }
-        if objective.config.compact_exposures && admission.is_none() {
+        if objective.config.compact_exposures && admission.is_none()
+            && !objective.config.prevalidated_device_closure
+        {
             return Err("compact exposure audit requires external admission".into());
         }
         if objective.config.external_admission != admission.is_some() {

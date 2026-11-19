@@ -120,6 +120,13 @@ impl FeatureContextsSpec {
                 .into_iter()
                 .map(GateSpec::build)
                 .collect(),
+            selected_residual_additional_contexts: self.selected_residual_additional_contexts
+                .into_iter()
+                .map(|context| Ok(crate::rank_features::SelectedResidualContext {
+                    alphabet: context.alphabet.build()?,
+                    gates: context.gates.into_iter().map(GateSpec::build).collect(),
+                }))
+                .collect::<Result<Vec<_>, String>>()?,
             block_parity_contexts,
             max_parity_patterns: self.max_parity_patterns,
             max_parity_pairs: self.max_parity_pairs,

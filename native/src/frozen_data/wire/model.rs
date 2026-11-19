@@ -1,6 +1,8 @@
 //! Strict serde model for the sealed frozen-data JSON wire format.
 
-use serde::Deserialize;
+use super::state::decode_state;
+use crate::state::MatrixState;
+use serde::{de::Error as _, Deserialize, Deserializer};
 use serde_json::{Number, Value};
 
 #[derive(Deserialize)]
@@ -38,8 +40,10 @@ pub(in crate::frozen_data) struct Gate {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::frozen_data) struct Word {
-    pub(in crate::frozen_data) start: State,
-    pub(in crate::frozen_data) end: State,
+    #[serde(deserialize_with = "matrix_state")]
+    pub(in crate::frozen_data) start: MatrixState,
+    #[serde(deserialize_with = "matrix_state")]
+    pub(in crate::frozen_data) end: MatrixState,
     pub(in crate::frozen_data) gates: Vec<Gate>,
     pub(in crate::frozen_data) physical_cost: u64,
     pub(in crate::frozen_data) producer: String,
@@ -48,7 +52,8 @@ pub(in crate::frozen_data) struct Word {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::frozen_data) struct Record {
-    pub(in crate::frozen_data) state: State,
+    #[serde(deserialize_with = "matrix_state")]
+    pub(in crate::frozen_data) state: MatrixState,
     pub(in crate::frozen_data) verified_words: Vec<Word>,
     pub(in crate::frozen_data) lineage_id: String,
     pub(in crate::frozen_data) seed: u64,
@@ -58,4 +63,11 @@ pub(in crate::frozen_data) struct Record {
     pub(in crate::frozen_data) exact_distance: Option<u64>,
     #[serde(default)]
     pub(in crate::frozen_data) exact_evidence: Option<String>,
+}
+
+// Convert each matrix as soon as it is read. Keeping arbitrary-precision JSON
+// Numbers for every record until the entire file is parsed multiplies memory
+// use and delays invalid-state detection on large datasets.
+fn matrix_state<'de, D: Deserializer<'de>>(deserializer: D) -> Result<MatrixState, D::Error> {
+    decode_state(State::deserialize(deserializer)?).map_err(D::Error::custom)
 }

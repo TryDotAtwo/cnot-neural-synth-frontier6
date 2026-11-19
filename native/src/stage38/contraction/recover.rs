@@ -1,5 +1,5 @@
 use super::super::{xor_rows, Histories, Stage38Error};
-use super::count::count_histories;
+use super::count::{count_histories_with_budget, HistoryCountBudget};
 use crate::state::CnotGate;
 use num_bigint::Sign;
 use std::collections::{HashMap, HashSet};
@@ -8,7 +8,16 @@ pub(in crate::stage38) fn recover_histories(
     initial: &Histories,
     max_entries: usize,
 ) -> Result<Vec<CnotGate>, Stage38Error> {
-    if count_histories(initial, max_entries, &HashSet::new())?
+    recover_histories_with_limits(initial, max_entries, None, &mut HistoryCountBudget::new(None))
+}
+
+pub(in crate::stage38) fn recover_histories_with_limits(
+    initial: &Histories,
+    max_entries: usize,
+    max_component_events: Option<usize>,
+    budget: &mut HistoryCountBudget,
+) -> Result<Vec<CnotGate>, Stage38Error> {
+    if count_histories_with_budget(initial, max_entries, &HashSet::new(), max_component_events, budget)?
         .count
         .sign()
         == Sign::NoSign
@@ -44,7 +53,7 @@ pub(in crate::stage38) fn recover_histories(
             }
             let mut updated = histories.clone();
             updated[target].remove(0);
-            if count_histories(&updated, max_entries, &protected)?
+            if count_histories_with_budget(&updated, max_entries, &protected, max_component_events, budget)?
                 .count
                 .sign()
                 != Sign::Plus

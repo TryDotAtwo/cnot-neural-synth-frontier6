@@ -47,7 +47,11 @@ pub(super) fn compute_record_loss(
         item.alphabet,
         BellmanSelectionConfig {
             macro_provider: None,
-            chunk_size: Some(objective.config.neighbor_chunk_size),
+            chunk_size: Some(
+                objective
+                    .config
+                    .effective_neighbor_chunk_size(&objective.policy, state.dimension() as usize)?,
+            ),
             require_complete_model_input_coverage: objective.config.require_all_model_inputs,
         },
     )

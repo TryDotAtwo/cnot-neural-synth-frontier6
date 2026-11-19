@@ -31,6 +31,8 @@ pub(super) fn digest(bytes: &[u8]) -> String {
 }
 
 pub(super) fn digest_parts(parts: &[&[u8]]) -> String {
+    #[cfg(feature = "torch")]
+    let _phase = crate::stage_profile::stage("checkpoint_sections_sha256");
     let mut hash = Sha256::new();
     for part in parts {
         hash.update(part);
@@ -39,8 +41,12 @@ pub(super) fn digest_parts(parts: &[&[u8]]) -> String {
 }
 
 pub(super) fn digest_reader(reader: &mut File) -> Result<String, CheckpointError> {
+    #[cfg(feature = "torch")]
+    let _phase = crate::stage_profile::stage("checkpoint_file_sha256");
     let mut hash = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
+    // Windows executables can start with a 1 MiB thread stack. Keep this I/O
+    // buffer on the heap so loading a checkpoint does not overflow that stack.
+    let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
@@ -82,4 +88,41 @@ pub(super) fn is_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom, Write};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn checkpoint_digest_fits_small_thread_stack() {
+        let path = std::env::temp_dir().join(format!(
+            "cnot103-digest-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b"abc").unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let handle = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || digest_reader(&mut file).unwrap())
+            .unwrap();
+        let actual = handle.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            actual,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

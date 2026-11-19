@@ -7,6 +7,8 @@ use crate::features::{FeatureComputation, FeaturePolicy, FeatureProducer};
 use crate::packet::FeatureStatus;
 use crate::schema::FeatureSpec;
 use crate::state::MatrixState;
+#[cfg(feature = "cuda")]
+pub(crate) use memory::working_bytes_upper_bound;
 
 pub(super) struct SharedRelationProducer {
     pub(super) spec: FeatureSpec,

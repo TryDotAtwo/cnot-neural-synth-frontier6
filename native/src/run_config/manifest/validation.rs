@@ -3,7 +3,9 @@ use super::RunManifest;
 impl RunManifest {
     pub(super) fn validate(&self) -> Result<(), String> {
         validate_sha256(&self.dataset.sha256, "dataset")?;
-        validate_sha256(&self.exact_catalogs.sha256, "exact catalogs")?;
+        if let Some(catalogs) = &self.exact_catalogs {
+            validate_sha256(&catalogs.sha256, "exact catalogs")?;
+        }
         if self.checkpoint_dir.as_os_str().is_empty() {
             return Err("checkpoint_dir must not be empty".into());
         }
@@ -15,14 +17,81 @@ impl RunManifest {
                 "attempts, batch_size, and checkpoint_every_attempts must be positive".into(),
             );
         }
+        if !self.training.cuda_devices.is_empty()
+            && (self.training.cuda_devices.len() != 2
+                || self.training.cuda_devices[0] != self.training.cuda_device
+                || self.training.cuda_devices[0] == self.training.cuda_devices[1])
+        {
+            return Err(
+                "cuda_devices must name two distinct devices, with cuda_device as the master".into(),
+            );
+        }
+        if self.training.cuda_devices.len() == 2 && self.training.batch_size < 2 {
+            return Err("two CUDA devices require batch_size of at least two".into());
+        }
         if self.feature_policy.schema_id.trim().is_empty() {
             return Err("feature_policy.schema_id must be nonempty".into());
+        }
+        if self.objective.adaptive_neighbor_chunk
+            && (self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID
+                || self.feature_policy.evaluations.0.is_some())
+        {
+            return Err("adaptive neighbor chunks require the missing-token schema and unlimited feature evaluations".into());
+        }
+        if self.objective.cache_root_f08
+            && (self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID
+                || self.feature_policy.evaluations.0.is_some())
+        {
+            return Err("root F08 cache requires the missing-token schema and unlimited feature evaluations".into());
+        }
+        if self.objective.sampled_neighbor_count.is_some()
+            && (self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID
+                || self.feature_policy.evaluations.0.is_some())
+        {
+            return Err("sampled neighbors require the missing-token schema and unlimited feature evaluations".into());
+        }
+        if self.objective.sampled_neighbor_count.is_some_and(|n| n < 2 || n > i64::MAX as usize)
+            || self.objective.sampled_neighbor_count.is_some() && self.objective.qhat_weight <= 0.0
+        {
+            return Err("sampled neighbors require at least two candidates and a positive Q-hat loss weight".into());
         }
         if self.alphabets.is_empty() {
             return Err("at least one exact alphabet must be provided".into());
         }
         if self.feature_contexts.max_n < 2 {
             return Err("feature_contexts.max_n must be at least two".into());
+        }
+        if let Some(max_n) = self.feature_contexts.f08_max_n {
+            if max_n < 2 || max_n > self.feature_contexts.max_n {
+                return Err("feature_contexts.f08_max_n must be between two and max_n".into());
+            }
+            if self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID {
+                return Err("feature_contexts.f08_max_n requires the missing-token schema".into());
+            }
+        }
+        if let Some(limit) = self.feature_contexts.f08_max_changed_rows {
+            if limit == 0 || limit > self.feature_contexts.f08_max_n() {
+                return Err("feature_contexts.f08_max_changed_rows must be between one and f08_max_n".into());
+            }
+            if self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID {
+                return Err("feature_contexts.f08_max_changed_rows requires the missing-token schema".into());
+            }
+        }
+        if let Some(limit) = self.feature_contexts.f08_max_component_events {
+            if limit == 0 || u64::from(limit) > u64::from(self.feature_contexts.f08_max_n()) + 1 {
+                return Err("feature_contexts.f08_max_component_events must be between one and f08_max_n plus one".into());
+            }
+            if self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID {
+                return Err("feature_contexts.f08_max_component_events requires the missing-token schema".into());
+            }
+        }
+        if let Some(limit) = self.feature_contexts.f08_max_history_counts {
+            if limit == 0 {
+                return Err("feature_contexts.f08_max_history_counts must be positive".into());
+            }
+            if self.feature_policy.schema_id != crate::schema::MISSING_TOKEN_LAYOUT_ID {
+                return Err("feature_contexts.f08_max_history_counts requires the missing-token schema".into());
+            }
         }
         let w = [
             self.objective.bellman_weight,

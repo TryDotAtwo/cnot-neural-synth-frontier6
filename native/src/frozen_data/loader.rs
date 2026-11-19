@@ -105,12 +105,14 @@ impl FrozenDataset {
             ));
         }
         let mut units = HashMap::new();
+        let mut alphabets = HashMap::new();
         let train = panel(
             body.panels.train,
             TrainingSplit::Train,
             "train",
             catalogs,
             &mut units,
+            &mut alphabets,
             &rejected,
         )?;
         let dev = panel(
@@ -119,6 +121,7 @@ impl FrozenDataset {
             "dev",
             catalogs,
             &mut units,
+            &mut alphabets,
             &rejected,
         )?;
         let test = panel(
@@ -127,6 +130,7 @@ impl FrozenDataset {
             "test",
             catalogs,
             &mut units,
+            &mut alphabets,
             &rejected,
         )?;
         if train.is_empty() || dev.is_empty() || test.is_empty() {
@@ -157,7 +161,7 @@ impl FrozenDataset {
                 "forbidden-key set differs from frozen split roots".into(),
             ));
         }
-        validate_train(&train, &forbidden)?;
+        validate_train(&train, &forbidden, &mut alphabets)?;
         Ok(Self {
             train,
             dev,

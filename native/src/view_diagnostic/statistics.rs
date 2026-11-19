@@ -39,6 +39,54 @@ pub fn compute_h07_prediction_spread(
     let population_variance = sum_squared_deviations / sample_count as f64;
     let range = maximum - minimum;
     let channel = population_variance as f32;
+    finish_spread(
+        model_contract_sha256,
+        problem_scope_sha256,
+        probes,
+        (view_sample_count, relabel_sample_count),
+        Spread {
+            mean,
+            population_variance,
+            range,
+            channel,
+        },
+    )
+}
+
+pub(super) struct Spread {
+    mean: f64,
+    population_variance: f64,
+    range: f64,
+    channel: f32,
+}
+
+#[cfg(feature = "cuda")]
+impl Spread {
+    pub(super) fn from_export([mean, population_variance, range, channel]: [f64; 4]) -> Self {
+        Self {
+            mean,
+            population_variance,
+            range,
+            channel: channel as f32,
+        }
+    }
+}
+
+// Both runtimes publish the same versioned report and digest. The CUDA
+// producer supplies the statistics computed by its own sorted device reduction.
+pub(super) fn finish_spread(
+    model_contract_sha256: String,
+    problem_scope_sha256: String,
+    probes: Vec<H07ProbePrediction>,
+    counts: (usize, usize),
+    spread: Spread,
+) -> Result<H07Diagnostic, H07Error> {
+    let Spread {
+        mean,
+        population_variance,
+        range,
+        channel,
+    } = spread;
     if !mean.is_finite()
         || !population_variance.is_finite()
         || !range.is_finite()
@@ -58,9 +106,9 @@ pub fn compute_h07_prediction_spread(
         mean,
         population_variance,
         range,
-        sample_count,
-        view_sample_count,
-        relabel_sample_count,
+        sample_count: probes.len(),
+        view_sample_count: counts.0,
+        relabel_sample_count: counts.1,
         probes,
     })
 }

@@ -81,6 +81,26 @@ struct Fixture {
     alphabet: CnotAlphabet,
 }
 
+#[test]
+fn projection_order_is_bound_to_the_checkpoint() {
+    let f = fixture();
+    let build = |share_candidate_wire_projections| {
+        FullGraphObjective::new(
+            vec![f.alphabet.clone()],
+            &f.registry,
+            f.policy.clone(),
+            vec![],
+            vec![],
+            FullGraphObjectiveConfig {
+                share_candidate_wire_projections,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    assert_ne!(build(false).config_sha256(), build(true).config_sha256());
+}
+
 fn fixture() -> Fixture {
     let alphabet = CnotAlphabet::all_to_all_unit(3).unwrap();
     let mut registry = FeatureRegistry::new();

@@ -9,6 +9,7 @@ on:
       - .github/scripts/fetch_public_holdout.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
       - native/Cargo.toml
+      - 'native/src/**'
       - native/src/bin/cnot103_validate_data.rs
 
 permissions:
@@ -37,4 +38,3 @@ jobs:
       - name: Check the validator without CUDA or project data
         working-directory: native
         run: cargo check --no-default-features --bin cnot103-validate-data
-

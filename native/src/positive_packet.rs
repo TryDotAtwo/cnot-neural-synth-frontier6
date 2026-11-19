@@ -11,11 +11,11 @@ use std::fmt;
 pub const STAGE59_SOURCE_SHA256: &str =
     "63824b056fa1983a10b3d535532c2975c7c3a1c96cfb2a90267ead2a1b168987";
 
-const DEFAULT_MAX_N: usize = 144;
-const DEFAULT_MAX_SLOTS: usize = 256;
-const DEFAULT_MAX_MONOMIALS: usize = 4096;
-const DEFAULT_MAX_FACTOR_ENTRIES: usize = 65_536;
-const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_N: usize = 144;
+pub(crate) const DEFAULT_MAX_SLOTS: usize = 256;
+pub(crate) const DEFAULT_MAX_MONOMIALS: usize = 4096;
+pub(crate) const DEFAULT_MAX_FACTOR_ENTRIES: usize = 65_536;
+pub(crate) const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EXACT_F32_INTEGER: usize = 1 << 24;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +124,8 @@ impl OptionalGatePacket {
 }
 
 mod compute;
+#[cfg(feature = "cuda")]
+pub(crate) use compute::{factor_entry_count, working_bytes_upper_bound};
 mod producer;
 
 pub use producer::{register_default_positive_packet_contexts, register_positive_packet_contexts};

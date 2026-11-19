@@ -2,7 +2,7 @@ use crate::alphabet::{CnotAlphabet, WordCertificate};
 use crate::state::MatrixState;
 use num_bigint::Sign;
 
-use super::super::contraction::recover_histories;
+use super::super::contraction::{recover_histories_with_limits, HistoryCountBudget};
 use super::super::support::{identity_row, resource_limit, stage38_lineage};
 use super::super::types::{Stage38Error, Stage38Exact, Stage38NoOneExcess, Stage38Result};
 use super::super::{
@@ -13,6 +13,8 @@ pub(super) fn recognize(
     state: &MatrixState,
     alphabet: &CnotAlphabet,
     max_entries: usize,
+    max_component_events: Option<usize>,
+    max_history_counts: Option<u32>,
 ) -> Result<Stage38Result, Stage38Error> {
     let n = usize::try_from(state.dimension()).map_err(|_| Stage38Error::SizeOverflow)?;
     let initial = (0..n)
@@ -35,9 +37,12 @@ pub(super) fn recognize(
         .and_then(|count| count.checked_add(1))
         .ok_or(Stage38Error::SizeOverflow)?;
 
+    let mut budget = HistoryCountBudget::new(max_history_counts);
     let enumeration = match super::one_excess_templates::enumerate(
         state,
         max_entries,
+        max_component_events,
+        &mut budget,
         &initial,
         &final_rows,
         &changed,
@@ -80,7 +85,7 @@ pub(super) fn recognize(
     let chosen = chosen.ok_or(Stage38Error::ContractionInvariant(
         "positive amplitude has no retained history template",
     ))?;
-    let mut gates = match recover_histories(&chosen, max_entries) {
+    let mut gates = match recover_histories_with_limits(&chosen, max_entries, max_component_events, &mut budget) {
         Ok(gates) => gates,
         Err(Stage38Error::ContractionBudgetExceeded(reason)) => {
             return Ok(resource_limit(

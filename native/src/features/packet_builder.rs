@@ -10,6 +10,12 @@ use crate::schema::{feature_spec, FeatureId, FEATURE_COUNT};
 use crate::state::MatrixState;
 use crate::structural;
 
+pub(crate) fn workspace_bytes_per_state(n: usize) -> Option<usize> {
+    n.checked_mul(n)?
+        .checked_mul(1024)?
+        .checked_add(n.checked_mul(256)?)
+}
+
 impl FeatureRegistry {
     pub fn build(
         &self,
@@ -64,14 +70,7 @@ impl FeatureRegistry {
         let estimated_bytes = states
             .iter()
             .try_fold(0usize, |total, state| {
-                let n = state.dimension() as usize;
-                n.checked_mul(n)
-                    .and_then(|square| square.checked_mul(1024))
-                    .and_then(|matrix| {
-                        n.checked_mul(256)
-                            .and_then(|vectors| matrix.checked_add(vectors))
-                    })
-                    .and_then(|bytes| total.checked_add(bytes))
+                total.checked_add(workspace_bytes_per_state(state.dimension() as usize)?)
             })
             .ok_or_else(|| FeatureBuildError("feature workspace estimate overflow".into()))?;
         let budget_exhausted_before_compute = policy

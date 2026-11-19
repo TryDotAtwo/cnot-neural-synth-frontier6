@@ -4,12 +4,14 @@
 //! it a group/1 placeholder. The normative feature bank describes additional
 //! forwards over equivalent views and relabel probes. This module runs those
 //! forwards on caller-built packets and emits an auditable diagnostic; probe
-//! construction and the exact source availability policy remain explicit.
+//! construction and the versioned admission rule are recorded for each view.
 
 #[cfg(feature = "torch")]
 mod coverage;
 #[cfg(feature = "torch")]
 mod model;
+#[cfg(feature = "cuda")]
+pub(crate) mod resident;
 mod statistics;
 mod types;
 

@@ -16,8 +16,9 @@ pub(in crate::frozen_data) fn decode_state(raw: State) -> Result<MatrixState, Fr
             raw.n
         )));
     }
-    let alpha = CnotAlphabet::all_to_all_unit(raw.n).map_err(|e| FrozenDataError(e.to_string()))?;
-    if raw.alphabet_id != alpha.id() || raw.packed_rows.len() != raw.n as usize {
+    if raw.alphabet_id != CnotAlphabet::all_to_all_unit_id(raw.n)
+        || raw.packed_rows.len() != raw.n as usize
+    {
         return Err(FrozenDataError(
             "matrix alphabet or row count mismatch".into(),
         ));
@@ -25,6 +26,16 @@ pub(in crate::frozen_data) fn decode_state(raw: State) -> Result<MatrixState, Fr
     let width = (raw.n as usize).div_ceil(64);
     let mut packed = Vec::with_capacity(raw.n as usize * width);
     for (i, value) in raw.packed_rows.iter().enumerate() {
+        if let Some(word) = value.as_u64() {
+            if raw.n < 64 && word >> raw.n != 0 {
+                return Err(FrozenDataError(format!(
+                    "row {i} has bits outside matrix width"
+                )));
+            }
+            packed.push(word);
+            packed.resize(packed.len() + width - 1, 0);
+            continue;
+        }
         let text = value.to_string();
         let bits = BigUint::parse_bytes(text.as_bytes(), 10)
             .ok_or_else(|| FrozenDataError(format!("row {i} is not a nonnegative integer")))?;

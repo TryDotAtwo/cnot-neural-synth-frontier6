@@ -104,6 +104,28 @@ fn explicit_context_bundle_registers_all_model_input_ids() {
 }
 
 #[test]
+fn explicit_context_bundle_parses_and_binds_multi_width_c10() {
+    let mut value = explicit_test_contexts_json();
+    value["selected_residual_additional_contexts"] = json!([{
+        "alphabet": {
+            "dimension":2, "id":"all_to_all_unit_cnot:2",
+            "gates":[{"control":0,"target":1},{"control":1,"target":0}],
+            "costs":[1,1]
+        },
+        "gates":[{"control":1,"target":0}]
+    }]);
+    let contexts: FeatureContextsSpec = serde_json::from_value(value.clone()).unwrap();
+    let contexts = contexts.build().unwrap();
+    assert_eq!(contexts.selected_residual_additional_contexts.len(), 1);
+    let registry = FeatureRegistry::with_all_model_input_providers(contexts).unwrap();
+    let c10 = crate::FeatureId::new(b'C', 10).unwrap();
+    assert!(registry.specs()[c10.index()].producer_version.starts_with("selected_residual_rank_multi_v1:"));
+    value["selected_residual_additional_contexts"][0]["alphabet"] = value["alphabet"].clone();
+    let duplicate: FeatureContextsSpec = serde_json::from_value(value).unwrap();
+    assert!(FeatureRegistry::with_all_model_input_providers(duplicate.build().unwrap()).is_err());
+}
+
+#[test]
 fn complete_manifest_parses_with_explicit_null_limits() {
     let contexts = explicit_test_contexts_json();
     let alphabet = contexts["alphabet"].clone();
@@ -141,8 +163,82 @@ fn complete_manifest_parses_with_explicit_null_limits() {
     let parsed = parse_run_manifest(&serde_json::to_vec(&value).unwrap())
         .expect("complete manifest must parse without opening its artifacts");
     assert_eq!(parsed.training.attempts, 1);
+    assert!(!parsed.objective.adaptive_neighbor_chunk);
     assert!(parsed.feature_policy.evaluations.0.is_none());
     assert!(parsed.feature_policy.max_bytes.0.is_none());
+    let mut sequential = value.clone();
+    sequential["objective"]["sequential_batch_gradients"] = json!(true);
+    let parsed = parse_run_manifest(&serde_json::to_vec(&sequential).unwrap()).unwrap();
+    assert!(parsed.objective.sequential_batch_gradients);
+    let mut limited = value.clone();
+    limited["feature_policy"]["schema_id"] = json!(crate::schema::MISSING_TOKEN_LAYOUT_ID);
+    limited["feature_contexts"]["f08_max_n"] = json!(2);
+    parse_run_manifest(&serde_json::to_vec(&limited).unwrap())
+        .expect("v25 must accept a separate F08 width limit");
+    limited["feature_contexts"]["f08_max_changed_rows"] = json!(1);
+    parse_run_manifest(&serde_json::to_vec(&limited).unwrap())
+        .expect("v25 must accept a per-state F08 guard");
+    for invalid in [0, 4] {
+        limited["feature_contexts"]["f08_max_changed_rows"] = json!(invalid);
+        assert!(parse_run_manifest(&serde_json::to_vec(&limited).unwrap()).is_err());
+    }
+    limited["feature_contexts"].as_object_mut().unwrap().remove("f08_max_changed_rows");
+    limited["feature_contexts"]["f08_max_component_events"] = json!(3);
+    parse_run_manifest(&serde_json::to_vec(&limited).unwrap())
+        .expect("v25 must accept a per-component F08 guard");
+    for invalid in [0, 4] {
+        limited["feature_contexts"]["f08_max_component_events"] = json!(invalid);
+        assert!(parse_run_manifest(&serde_json::to_vec(&limited).unwrap()).is_err());
+    }
+    limited["feature_contexts"].as_object_mut().unwrap().remove("f08_max_component_events");
+    limited["feature_contexts"]["f08_max_history_counts"] = json!(16);
+    parse_run_manifest(&serde_json::to_vec(&limited).unwrap())
+        .expect("v25 must accept a total F08 history-call guard");
+    limited["feature_contexts"]["f08_max_history_counts"] = json!(0);
+    assert!(parse_run_manifest(&serde_json::to_vec(&limited).unwrap()).is_err());
+    limited["feature_contexts"].as_object_mut().unwrap().remove("f08_max_history_counts");
+    let mut cached = limited.clone();
+    cached["objective"]["cache_root_f08"] = json!(true);
+    let parsed = parse_run_manifest(&serde_json::to_vec(&cached).unwrap()).unwrap();
+    assert!(parsed.objective.cache_root_f08);
+    cached["feature_policy"]["evaluations"] = json!(100);
+    assert!(parse_run_manifest(&serde_json::to_vec(&cached).unwrap()).is_err());
+    cached["feature_policy"]["evaluations"] = Value::Null;
+    cached["feature_contexts"].as_object_mut().unwrap().remove("f08_max_n");
+    cached["feature_policy"]["schema_id"] = json!("runtime_packet_layout_v24");
+    assert!(parse_run_manifest(&serde_json::to_vec(&cached).unwrap()).is_err());
+    let mut adaptive = limited.clone();
+    adaptive["objective"]["adaptive_neighbor_chunk"] = json!(true);
+    let parsed = parse_run_manifest(&serde_json::to_vec(&adaptive).unwrap()).unwrap();
+    assert!(parsed.objective.adaptive_neighbor_chunk);
+    adaptive["feature_policy"]["evaluations"] = json!(100);
+    assert!(parse_run_manifest(&serde_json::to_vec(&adaptive).unwrap()).is_err());
+    adaptive["feature_policy"]["evaluations"] = Value::Null;
+    adaptive["feature_contexts"]
+        .as_object_mut()
+        .unwrap()
+        .remove("f08_max_n");
+    adaptive["feature_policy"]["schema_id"] = json!("runtime_packet_layout_v24");
+    assert!(parse_run_manifest(&serde_json::to_vec(&adaptive).unwrap()).is_err());
+    for invalid in [1, 4] {
+        limited["feature_contexts"]["f08_max_n"] = json!(invalid);
+        assert!(parse_run_manifest(&serde_json::to_vec(&limited).unwrap()).is_err());
+    }
+    limited["feature_contexts"]["f08_max_n"] = json!(2);
+    limited["feature_policy"]["schema_id"] = json!("runtime_packet_layout_v24");
+    assert!(parse_run_manifest(&serde_json::to_vec(&limited).unwrap()).is_err());
+    let mut intervals = value;
+    intervals.as_object_mut().unwrap().remove("exact_catalogs");
+    intervals["feature_policy"]
+        .as_object_mut()
+        .unwrap()
+        .remove("schema_id");
+    let parsed = parse_run_manifest(&serde_json::to_vec(&intervals).unwrap()).unwrap();
+    assert!(parsed.exact_catalogs.is_none());
+    assert_eq!(
+        parsed.feature_policy.schema_id,
+        crate::schema::MISSING_TOKEN_LAYOUT_ID
+    );
 }
 
 #[test]

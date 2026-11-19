@@ -12,7 +12,7 @@ const RUN_SCHEMA: &str = "cnot103_training_run_v1";
 #[derive(Debug)]
 pub struct RunManifest {
     pub(super) dataset: PinnedArtifact,
-    pub(super) exact_catalogs: PinnedArtifact,
+    pub(super) exact_catalogs: Option<PinnedArtifact>,
     pub(super) checkpoint_dir: PathBuf,
     pub(super) resume: bool,
     pub(super) training: TrainingSpec,
@@ -29,7 +29,7 @@ pub struct RunManifest {
 struct RawRunManifest {
     schema: String,
     dataset: PinnedArtifact,
-    exact_catalogs: PinnedArtifact,
+    exact_catalogs: Option<PinnedArtifact>,
     checkpoint_dir: PathBuf,
     resume: bool,
     training: TrainingSpec,
@@ -48,26 +48,43 @@ pub(super) struct PinnedArtifact {
     pub(super) sha256: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TrainingSpec {
     pub(super) seed: u64,
     pub(super) cuda_device: usize,
+    #[serde(default)]
+    pub(super) cuda_devices: Vec<usize>,
     pub(super) attempts: u64,
     pub(super) batch_size: usize,
     pub(super) checkpoint_every_attempts: u64,
 }
 
-#[derive(Debug, Deserialize)]
+impl TrainingSpec {
+    pub(super) fn effective_cuda_devices(&self) -> Vec<usize> {
+        if self.cuda_devices.is_empty() {
+            vec![self.cuda_device]
+        } else {
+            self.cuda_devices.clone()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FeaturePolicySpec {
+    #[serde(default = "default_feature_schema")]
     pub(super) schema_id: String,
     pub(super) solver_assisted: bool,
     pub(super) evaluations: ExplicitNullable<usize>,
     pub(super) max_bytes: ExplicitNullable<usize>,
 }
 
-#[derive(Debug)]
+fn default_feature_schema() -> String {
+    crate::schema::MISSING_TOKEN_LAYOUT_ID.to_owned()
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct ExplicitNullable<T>(Option<T>);
 
 impl<T> ExplicitNullable<T> {
@@ -85,7 +102,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for ExplicitNullable<T> {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ModelSpec {
     wire_dim: i64,
@@ -98,7 +115,7 @@ pub(super) struct ModelSpec {
 }
 
 impl ModelSpec {
-    pub(super) fn build(self) -> ModelConfig {
+    pub(super) fn build(&self) -> ModelConfig {
         ModelConfig {
             wire_dim: self.wire_dim,
             pair_dim: self.pair_dim,
@@ -119,6 +136,20 @@ pub(super) struct ObjectiveSpec {
     qhat_weight: f64,
     teacher_weight: f64,
     neighbor_chunk_size: usize,
+    #[serde(default)]
+    sampled_neighbor_count: Option<usize>,
+    #[serde(default)]
+    adaptive_neighbor_chunk: bool,
+    #[serde(default)]
+    share_candidate_wire_projections: bool,
+    #[serde(default)]
+    share_training_wire_projections_min_width: Option<u32>,
+    #[serde(default)]
+    cache_root_f08: bool,
+    #[serde(default)]
+    sequential_batch_gradients: bool,
+    #[serde(default)]
+    prevalidated_device_closure_audit: bool,
     teacher_temperature: f64,
 }
 
@@ -130,11 +161,26 @@ impl ObjectiveSpec {
             qhat_weight: self.qhat_weight,
             teacher_weight: self.teacher_weight,
             neighbor_chunk_size: self.neighbor_chunk_size,
+            sampled_neighbor_count: self.sampled_neighbor_count,
+            adaptive_neighbor_chunk: self.adaptive_neighbor_chunk,
+            share_candidate_wire_projections: self.share_candidate_wire_projections,
+            share_training_wire_projections_min_width: self.share_training_wire_projections_min_width,
+            cache_root_f08: self.cache_root_f08,
+            sequential_batch_gradients: self.sequential_batch_gradients,
             teacher_temperature: self.teacher_temperature,
             external_admission: false,
             external_admission_sha256: None,
             require_all_model_inputs: true,
-            compact_exposures: false,
+            compact_exposures: self.prevalidated_device_closure_audit,
+            prevalidated_device_closure: self.prevalidated_device_closure_audit,
+        }
+    }
+
+    pub(super) fn runtime_id(&self) -> &'static str {
+        if self.sampled_neighbor_count.is_some() {
+            "cuda_qhat_sampled_bellman_v1"
+        } else {
+            "cuda_primitive_full_graph_v1"
         }
     }
 }

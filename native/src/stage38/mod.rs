@@ -18,6 +18,7 @@ mod support;
 mod types;
 
 pub use recognition::{recognize_stage38, verify_stage38_result};
+pub(crate) use recognition::recognize_stage38_with_limits;
 use support::xor_rows;
 pub use types::{
     Stage38Error, Stage38Exact, Stage38NoOneExcess, Stage38ResourceLimit, Stage38Result,

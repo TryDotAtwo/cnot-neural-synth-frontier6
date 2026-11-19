@@ -1,6 +1,6 @@
 //! Conservative pre-allocation estimate for I06 relation tensors.
 
-pub(super) fn working_bytes_upper_bound(
+pub(crate) fn working_bytes_upper_bound(
     n: usize,
     vectors: usize,
     coordinates: usize,

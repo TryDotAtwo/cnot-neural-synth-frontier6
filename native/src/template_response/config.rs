@@ -58,6 +58,16 @@ pub struct TemplateResponseConfig {
 }
 
 impl TemplateResponseConfig {
+    pub fn choices(&self) -> &[TemplateChoice] {
+        &self.choices
+    }
+    pub fn points(&self) -> &[Vec<RationalProbability>] {
+        &self.points
+    }
+    pub fn budgets(&self) -> TemplateResponseBudgets {
+        self.budgets
+    }
+
     pub fn new(
         choices: Vec<TemplateChoice>,
         points: Vec<Vec<RationalProbability>>,

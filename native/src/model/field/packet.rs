@@ -52,6 +52,8 @@ impl FusionDistanceField {
                 "feature packet producer schema differs from model contract".into(),
             ));
         }
-        self.stem.forward(packet, self.device)
+        let tensors =
+            crate::model::tensor_packet::TensorPacket::from_host(packet, &self.specs, self.device)?;
+        self.stem.forward(&tensors, false)
     }
 }

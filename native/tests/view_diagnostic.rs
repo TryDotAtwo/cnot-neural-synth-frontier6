@@ -1,3 +1,7 @@
+#[cfg(feature = "cuda")]
+#[path = "view_diagnostic/resident.rs"]
+mod resident;
+
 use cnot103_native::{
     compute_h07_prediction_spread, FeatureId, FeatureStatus, H07Error, H07InputCoverage,
     H07InputCoverageEntry, H07ProbeKind, H07ProbePrediction,

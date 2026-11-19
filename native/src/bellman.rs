@@ -5,6 +5,8 @@
 //! before the differentiable pass so the objective cannot silently change its
 //! target between selection and backward.
 
+#[cfg(feature = "cuda")]
+pub mod device;
 mod fingerprint;
 mod recompute;
 mod selection;

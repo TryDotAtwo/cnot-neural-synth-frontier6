@@ -1,12 +1,12 @@
 //! Verified training records and exact-distance catalogs.
 //!
-//! Exact labels are admitted only from a finite, alphabet-closed catalog with
-//! replayable reductions and a globally 1-Lipschitz distance potential. This
-//! is stronger than treating one short word as a shortest-path proof.
+//! Exact labels are checked against a supplied closed catalog, or certified by
+//! a replayed word attaining an independently derived lower bound.
 
 mod bounds;
 mod catalog;
 mod catalog_bundle;
+mod matrix_proof;
 mod record;
 
 pub use bounds::elementary_lower_bound;

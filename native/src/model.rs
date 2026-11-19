@@ -6,16 +6,19 @@
 
 mod auxiliary;
 mod contracts;
+mod device_packet;
 mod family_heads;
 mod field;
 mod fusion;
 mod layers;
 mod packet;
 mod stem;
+mod tensor_packet;
 
 pub(super) const AUXILIARY_HIDDEN_DIM: i64 = 128;
 
 pub use contracts::{FieldOutput, ModelConfig, ModelError};
+pub use device_packet::{DeviceFeatureEntry, DeviceFeaturePacket, DeviceFeatureStatus};
 pub use field::FusionDistanceField;
 pub(super) use layers::{pytorch_linear_config, Mlp, MultiHeadAttention, StructuralBlock};
 use packet::{matrix_batch_values, shape_i64};

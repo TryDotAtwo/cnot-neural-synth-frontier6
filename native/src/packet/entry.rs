@@ -11,6 +11,26 @@ pub enum FeatureStatus {
 }
 
 impl FeatureStatus {
+    /// A01 is the matrix itself. Its absence denotes a failed packet allocation,
+    /// not an optional provider outside its mathematical domain.
+    pub(crate) fn admitted(
+        self,
+        id: crate::schema::FeatureId,
+        available: u8,
+        schema: &str,
+    ) -> bool {
+        let tokens = schema == crate::schema::MISSING_TOKEN_LAYOUT_ID;
+        if tokens && id.index() == 0 {
+            return self == Self::Computed && available == 1;
+        }
+        match self {
+            Self::Computed => available == 1,
+            Self::Inapplicable => available == 0,
+            Self::Unsupported | Self::ResourceLimit => tokens && available == 0,
+            Self::NotRequested => false,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Computed => "computed",

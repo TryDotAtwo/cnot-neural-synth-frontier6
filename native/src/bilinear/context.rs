@@ -85,7 +85,8 @@ impl BilinearContext {
         self.n
     }
 
-    pub(super) fn dimensions(&self) -> (usize, usize, usize, usize, usize) {
+    /// Ordered matrix dimensions (m,r,p,t,q), including zero-dimensional ports.
+    pub fn dimensions(&self) -> (usize, usize, usize, usize, usize) {
         (
             self.rows.len(),
             self.columns.len(),
@@ -95,7 +96,26 @@ impl BilinearContext {
         )
     }
 
-    pub(super) fn matrix_bit_budget(&self) -> Option<usize> {
+    pub fn rows(&self) -> &[u32] {
+        &self.rows
+    }
+    pub fn columns(&self) -> &[u32] {
+        &self.columns
+    }
+    pub fn u_rows(&self) -> &[Vec<u64>] {
+        &self.u.rows
+    }
+    pub fn v_rows(&self) -> &[Vec<u64>] {
+        &self.v.rows
+    }
+    pub fn a0_rows(&self) -> &[Vec<u64>] {
+        &self.a0.rows
+    }
+    pub fn d0_rows(&self) -> &[Vec<u64>] {
+        &self.d0.rows
+    }
+
+    pub(crate) fn matrix_bit_budget(&self) -> Option<usize> {
         let (m, r, p, t, q) = self.dimensions();
         p.checked_mul(t)?
             .checked_add(t.checked_mul(q)?)?
@@ -104,7 +124,7 @@ impl BilinearContext {
             .checked_add(m.checked_mul(r)?)
     }
 
-    pub(super) fn working_bytes_upper_bound(&self) -> Option<usize> {
+    pub(crate) fn working_bytes_upper_bound(&self) -> Option<usize> {
         let (m, r, p, t, q) = self.dimensions();
         let n = usize::try_from(self.n).ok()?;
         let side = n.max(m).max(r).max(p).max(t).max(q).max(1);

@@ -6,7 +6,7 @@ mod partial_shear;
 
 pub use contextual::{
     register_rank_increment_probes, register_restricted_intersections,
-    register_selected_residual_ranks,
+    register_selected_residual_ranks, register_selected_residual_ranks_multi,
 };
 pub use labeled_cuts::register_labeled_cuts;
 pub use partial_shear::register_partial_shear_rank;

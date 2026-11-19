@@ -3,8 +3,7 @@
 use super::super::alphabet::alphabet;
 use super::super::types::{FrozenDataError, FrozenPanel, FrozenRecordMetadata};
 use super::model::Record;
-use super::state::decode_state;
-use crate::alphabet::WordCertificate;
+use crate::alphabet::{CnotAlphabet, WordCertificate};
 use crate::state::{CnotGate, MatrixState};
 use crate::training_data::{ExactCatalog, TrainingRecord, TrainingSplit};
 use std::collections::{HashMap, HashSet};
@@ -23,6 +22,7 @@ pub(in crate::frozen_data) fn panel(
     name: &str,
     catalogs: &HashMap<String, ExactCatalog>,
     units: &mut HashMap<(String, u64), TrainingSplit>,
+    alphabets: &mut HashMap<u32, CnotAlphabet>,
     rejected: &HashSet<String>,
 ) -> Result<FrozenPanel, FrozenDataError> {
     let mut records = Vec::with_capacity(raw.len());
@@ -45,11 +45,11 @@ pub(in crate::frozen_data) fn panel(
                 )));
             }
         }
-        let state = decode_state(item.state)?;
+        let state = item.state;
         if !roots.insert(state.clone()) {
             return Err(FrozenDataError(format!("{name} repeats a root")));
         }
-        let alpha = alphabet(&state)?;
+        let alpha = alphabet(alphabets, state.dimension())?;
         if item.verified_words.is_empty() {
             return Err(FrozenDataError(format!("{name}[{index}] has no word")));
         }
@@ -57,8 +57,8 @@ pub(in crate::frozen_data) fn panel(
             .map_err(|e| FrozenDataError(e.to_string()))?;
         let mut words = Vec::with_capacity(item.verified_words.len());
         for raw_word in item.verified_words {
-            let start = decode_state(raw_word.start)?;
-            let end = decode_state(raw_word.end)?;
+            let start = raw_word.start;
+            let end = raw_word.end;
             if start != state || end != identity {
                 return Err(FrozenDataError(format!(
                     "{name}[{index}] word endpoints mismatch"
@@ -79,8 +79,6 @@ pub(in crate::frozen_data) fn panel(
                 producer: raw_word.producer,
                 lineage_id: raw_word.lineage_id,
             };
-            cert.verify(&alpha)
-                .map_err(|e| FrozenDataError(e.to_string()))?;
             words.push(cert);
         }
         let record = TrainingRecord {
@@ -90,10 +88,8 @@ pub(in crate::frozen_data) fn panel(
             exact_distance: item.exact_distance,
             lineage_id: item.lineage_id,
         };
-        let mut verifier = record.clone();
-        verifier.split = TrainingSplit::Train;
-        verifier
-            .validate_for_training(&alpha, catalogs.get(alpha.id()))
+        record
+            .validate_evidence(alpha, catalogs.get(alpha.id()))
             .map_err(|e| FrozenDataError(format!("{name}[{index}]: {e}")))?;
         if split == TrainingSplit::Train && rejected.contains(&record.lineage_id) {
             return Err(FrozenDataError(

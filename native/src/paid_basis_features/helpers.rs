@@ -5,7 +5,7 @@ use crate::packet::FeatureStatus;
 use crate::paid_basis::{PaidBasisError, PaidShearConfig};
 use sha2::{Digest, Sha256};
 
-pub(super) fn workspace_estimate(dimension: usize, groups: usize) -> Option<usize> {
+pub(crate) fn workspace_estimate(dimension: usize, groups: usize) -> Option<usize> {
     let pair_values = dimension.checked_mul(dimension)?.checked_mul(4)?;
     let pair_bytes = pair_values.checked_mul(std::mem::size_of::<f32>())?;
     let incidence = groups
@@ -42,7 +42,7 @@ pub(super) fn status_for_compile_error(error: &PaidBasisError) -> FeatureStatus 
 
 pub(super) fn config_digest(contexts: &[PaidBasisBlockContext], config: PaidShearConfig) -> String {
     let mut digest = Sha256::new();
-    hash_field(&mut digest, b"verified_paid_basis_d09_d14_v1");
+    hash_field(&mut digest, b"verified_paid_basis_d09_d14_v2");
     hash_field(&mut digest, &(config.local_width as u64).to_le_bytes());
     hash_field(&mut digest, &(config.sweeps as u64).to_le_bytes());
     hash_field(&mut digest, &(contexts.len() as u64).to_le_bytes());
