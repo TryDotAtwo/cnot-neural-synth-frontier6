@@ -47,7 +47,7 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
     profile.device(manifest.training.cuda_device);
     let replica_device = devices.get(1).copied();
     let pinned = artifacts::load(&manifest, &paths)?;
-    let widths = pinned.dataset.train.records().iter().map(|r| r.state.dimension()).collect();
+    let widths: std::collections::BTreeSet<u32> = pinned.dataset.train.records().iter().map(|r| r.state.dimension()).collect();
     let BoundField { dataset, registry, plans, selected_count, mut objective, model, variables, mut replica } =
         BoundField::build(pinned, manifest.feature_contexts, manifest.feature_policy,
                           manifest.model, manifest.objective, &manifest.training, widths,
@@ -182,7 +182,7 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
     profile.device(manifest.training.cuda_device);
     let replica_device = devices.get(1).copied();
     let pinned = artifacts::load(&manifest, &paths)?;
-    let widths = pinned
+    let widths: std::collections::BTreeSet<u32> = pinned
         .dataset
         .train
         .records()
