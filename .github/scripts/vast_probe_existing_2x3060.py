@@ -158,19 +158,30 @@ def main() -> int:
                         phase = "parse"
                         status, disk = classify_output(raw)
     except HTTPError as error:
-        status = {
-            "inventory": "inventory_http_error",
-            "execute": "execute_http_error",
-            "result": "result_http_error",
-            "parse": "result_http_error",
-        }.get(phase, "query_failed")
-        if error.code == 429:
+        if phase == "execute":
             status = {
-                "inventory": "inventory_rate_limited",
-                "execute": "execute_rate_limited",
-                "result": "result_rate_limited",
-                "parse": "result_rate_limited",
-            }.get(phase, "query_failed")
+                400: "execute_bad_request",
+                401: "execute_auth_rejected",
+                403: "execute_permission_denied",
+                404: "execute_endpoint_unavailable",
+                413: "execute_payload_rejected",
+                429: "execute_rate_limited",
+            }.get(error.code, "execute_http_error")
+        elif phase == "inventory":
+            status = {
+                401: "inventory_auth_rejected",
+                403: "inventory_permission_denied",
+                429: "inventory_rate_limited",
+            }.get(error.code, "inventory_http_error")
+        elif phase in {"result", "parse"}:
+            status = {
+                401: "result_auth_rejected",
+                403: "result_permission_denied",
+                404: "result_not_ready",
+                429: "result_rate_limited",
+            }.get(error.code, "result_http_error")
+        else:
+            status = "query_failed"
     except URLError:
         status = {
             "inventory": "inventory_network_error",
