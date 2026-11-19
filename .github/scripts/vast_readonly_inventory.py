@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
@@ -46,13 +45,10 @@ def inventory() -> str:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        label = row.get("label")
         gpu = row.get("gpu_name")
         count = row.get("num_gpus", row.get("gpu_count"))
         if (
-            isinstance(label, str)
-            and re.fullmatch(r"(?i)cnot103[a-z0-9_.-]{1,120}", label)
-            and isinstance(gpu, str)
+            isinstance(gpu, str)
             and "3060" in gpu.casefold()
             and isinstance(count, int)
             and not isinstance(count, bool)

@@ -290,16 +290,30 @@ fn accumulate_replica(
             "replica autograd gradient count differs from parameter count",
         ));
     }
-    tch::no_grad(|| {
-        for (sum, gradient) in accumulated[replica].iter_mut().zip(gradients) {
+    tch::no_grad(|| -> Result<(), TchTrainingError> {
+        for ((sum, gradient), parameter) in accumulated[replica]
+            .iter_mut()
+            .zip(gradients)
+            .zip(parameters)
+        {
             if gradient.defined() {
+                if gradient.is_sparse()
+                    || gradient.kind() != Kind::Float
+                    || gradient.device() != parameter.device()
+                    || gradient.size() != parameter.size()
+                {
+                    return Err(TchTrainingError::Invalid(
+                        "replica gradient differs from its parameter contract",
+                    ));
+                }
                 *sum = Some(match sum.take() {
                     Some(previous) => previous + gradient,
                     None => gradient,
                 });
             }
         }
-    });
+        Ok(())
+    })?;
     let weight = local_count as f64 / batch_size as f64;
     losses.push(data.loss.detach().to_device(master_parameters[0].device()) * weight);
     votes.push(data.valid.to_device(master_parameters[0].device()));
