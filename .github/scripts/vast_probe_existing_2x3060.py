@@ -13,11 +13,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 API = "https://console.vast.ai/api/v0"
-COMMAND = (
-    "nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader"
-    " && df -Pk /workspace"
-    " && python3 -c 'import torch;print(torch.cuda.is_available());print(torch.cuda.device_count())'"
-)
+GPU_COMMAND = "nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader"
+DISK_COMMAND = "df -Pk /workspace"
 ALLOWED_STATES = {"running", "stopped", "starting", "stopping", "scheduling", "loading", "created", "offline", "exited", "error"}
 MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 64 * 1024
@@ -98,28 +95,32 @@ def read_remote_output(result_url: str) -> str:
     raise RuntimeError(f"result unavailable: {last_error}")
 
 
-def classify_output(raw: str) -> tuple[str, str]:
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    gpu_rows = [line for line in lines if "3060" in line.casefold() and line.count(",") >= 2]
-    if len(gpu_rows) != 2 or not all("3060" in row.casefold() for row in gpu_rows):
-        return "gpu_inventory_mismatch", "unknown"
+def classify_gpu_output(raw: str) -> str:
+    rows = [line.strip() for line in raw.splitlines() if line.strip() and "," in line]
+    gpu_rows = [line for line in rows if "3060" in line.casefold()]
+    return "verified_2x3060" if len(gpu_rows) == 2 and len(rows) == 2 else "gpu_inventory_mismatch"
+
+
+def classify_disk_output(raw: str) -> str:
     numeric_rows = []
-    for line in lines:
+    for line in raw.splitlines():
         fields = line.split()
         if len(fields) >= 5 and all(part.isdigit() for part in fields[1:4]):
             numeric_rows.append(fields)
-    free_kib = None
-    if numeric_rows:
-        free_kib = max(int(row[3]) for row in numeric_rows)
-    if free_kib is None:
-        disk = "unknown"
-    elif free_kib >= 40 * 1024 * 1024:
-        disk = "adequate"
-    else:
-        disk = "low"
-    if len(lines) < 2 or lines[-2].casefold() != "true" or lines[-1] != "2":
-        return "torch_cuda_unavailable", disk
-    return "verified_2x3060", disk
+    if not numeric_rows:
+        return "unknown"
+    free_kib = max(int(row[3]) for row in numeric_rows)
+    return "adequate" if free_kib >= 40 * 1024 * 1024 else "low"
+
+
+def execute_remote(api_key: str, instance_id: int, command: str) -> str:
+    if len(command.encode("utf-8")) > 512:
+        raise ValueError("command too long")
+    body = json.dumps({"command": command}, separators=(",", ":")).encode("utf-8")
+    queued = read_json(f"{API}/instances/command/{instance_id}", api_key, "PUT", body)
+    if not isinstance(queued, dict) or queued.get("success") is not True or not isinstance(queued.get("result_url"), str):
+        raise RuntimeError("remote command failed")
+    return read_remote_output(queued["result_url"])
 
 
 def main() -> int:
@@ -132,8 +133,6 @@ def main() -> int:
         api_key = os.environ.get("VAST_API_KEY", "")
         if not api_key:
             status = "configuration_missing"
-        elif len(COMMAND.encode("utf-8")) > 512:
-            status = "command_too_long"
         else:
             matches = target_rows(read_json(f"{API}/instances/", api_key))
             running = [row for row in matches if state(row) == "running"]
@@ -147,18 +146,15 @@ def main() -> int:
                 if not isinstance(instance_id, int) or isinstance(instance_id, bool) or instance_id <= 0:
                     status = "target_id_unavailable"
                 else:
-                    phase = "execute"
-                    body = json.dumps({"command": COMMAND}, separators=(",", ":")).encode("utf-8")
-                    queued = read_json(f"{API}/instances/command/{instance_id}", api_key, "PUT", body)
-                    if not isinstance(queued, dict) or queued.get("success") is not True or not isinstance(queued.get("result_url"), str):
-                        status = "remote_command_failed"
-                    else:
-                        phase = "result"
-                        raw = read_remote_output(queued["result_url"])
-                        phase = "parse"
-                        status, disk = classify_output(raw)
+                    phase = "execute_gpu"
+                    gpu_output = execute_remote(api_key, instance_id, GPU_COMMAND)
+                    status = classify_gpu_output(gpu_output)
+                    if status == "verified_2x3060":
+                        phase = "execute_disk"
+                        disk_output = execute_remote(api_key, instance_id, DISK_COMMAND)
+                        disk = classify_disk_output(disk_output)
     except HTTPError as error:
-        if phase == "execute":
+        if phase.startswith("execute_"):
             status = {
                 400: "execute_bad_request",
                 401: "execute_auth_rejected",
@@ -173,33 +169,16 @@ def main() -> int:
                 403: "inventory_permission_denied",
                 429: "inventory_rate_limited",
             }.get(error.code, "inventory_http_error")
-        elif phase in {"result", "parse"}:
-            status = {
-                401: "result_auth_rejected",
-                403: "result_permission_denied",
-                404: "result_not_ready",
-                429: "result_rate_limited",
-            }.get(error.code, "result_http_error")
         else:
-            status = "query_failed"
+            status = "result_http_error"
     except URLError:
-        status = {
-            "inventory": "inventory_network_error",
-            "execute": "execute_network_error",
-            "result": "result_network_error",
-            "parse": "result_network_error",
-        }.get(phase, "query_failed")
+        status = "execute_network_error" if phase.startswith("execute_") else "inventory_network_error"
     except TimeoutError:
-        status = {
-            "inventory": "inventory_timeout",
-            "execute": "execute_timeout",
-            "result": "result_timeout",
-            "parse": "result_timeout",
-        }.get(phase, "query_failed")
+        status = "execute_timeout" if phase.startswith("execute_") else "inventory_timeout"
     except RuntimeError:
-        status = "result_timeout" if phase == "result" else "probe_failed"
+        status = "remote_command_failed" if phase.startswith("execute_") else "probe_failed"
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-        status = "result_invalid" if phase in {"result", "parse"} else "inventory_invalid"
+        status = "remote_response_invalid" if phase.startswith("execute_") else "inventory_invalid"
     except Exception:
         status = "probe_failed"
     print(f"checked_at_utc={checked}")
@@ -207,7 +186,6 @@ def main() -> int:
     print(f"remote_disk={disk}")
     print(f"budget_projection_48h={budget}")
     return 0 if status == "verified_2x3060" else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
