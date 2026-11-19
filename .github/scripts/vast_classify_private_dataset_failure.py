@@ -35,6 +35,11 @@ DETAIL_CLASSES = {
     "network_failure",
     "holdout_panels_incomplete",
     "holdout_database_invalid",
+    "holdout_database_missing",
+    "holdout_database_empty",
+    "holdout_database_no_roots_table",
+    "holdout_roots_schema_unsupported",
+    "holdout_database_read_error",
     "holdout_record_invalid",
     "holdout_certificate_invalid",
     "holdout_identity_or_symmetry_overlap",
@@ -63,8 +68,13 @@ REMOTE_CLASSIFIER = f"""set -euo pipefail
 ROOT='/workspace/tqp_remote_dataset_{RUN_ID}_{SOURCE_SHA8}_a{ATTEMPT}'
 LOG="$ROOT/remote-dataset.private.log"
 BUILDER_LOG="$ROOT/dataset-builder.private.log"
+DB="$ROOT/input/full_shared_native_holdout_20261001.sqlite"
 if [ ! -r "$LOG" ]; then
   detail=private_log_missing
+elif [ ! -e "$DB" ]; then
+  detail=holdout_database_missing
+elif [ ! -s "$DB" ]; then
+  detail=holdout_database_empty
 elif grep -Eiq 'no space left|disk quota exceeded' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=disk_full
 elif grep -Eiq 'command not found|cargo: not found' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
@@ -73,8 +83,12 @@ elif grep -Eiq 'HTTPError|urlopen error|connection reset|could not resolve|timed
   detail=network_failure
 elif grep -Fq 'holdout does not contain the pinned 1792+1792 panels' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_panels_incomplete
-elif grep -Eiq 'holdout database has no roots table|holdout roots table has an unsupported schema|holdout database could not be read' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
-  detail=holdout_database_invalid
+elif grep -Fq 'holdout database has no roots table' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=holdout_database_no_roots_table
+elif grep -Fq 'holdout roots table has an unsupported schema' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=holdout_roots_schema_unsupported
+elif grep -Fq 'holdout database could not be read' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=holdout_database_read_error
 elif grep -Eiq 'holdout reduction word does not replay|holdout certificate|holdout word certificate|holdout certificate endpoints' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_certificate_invalid
 elif grep -Eiq 'holdout record|holdout state|holdout gate' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
