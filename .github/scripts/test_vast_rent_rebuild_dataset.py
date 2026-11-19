@@ -51,6 +51,13 @@ class OfferAndBudgetTests(unittest.TestCase):
         self.assertTrue(controller.budget_allows(0.0, 0.28, run_hours=55, reserve=reserve))
         self.assertFalse(controller.budget_allows(0.0, 0.29, run_hours=55, reserve=reserve))
 
+    def test_budget_gate_reports_whether_history_or_offer_price_blocks_rent(self):
+        rows = [offer(10)]
+        self.assertEqual(controller.budget_gate_reason(0.0, rows), "within_budget")
+        self.assertEqual(controller.budget_gate_reason(5.0, rows), "prior_spend")
+        expensive = [offer(11, dph_total=0.50)]
+        self.assertEqual(controller.budget_gate_reason(0.0, expensive), "offer_cost")
+
     def test_invalid_costs_fail_closed(self):
         for spent, rate, reserve in [
             (float("nan"), 0.1, 1.0),
