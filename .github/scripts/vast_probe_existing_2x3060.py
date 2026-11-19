@@ -1,23 +1,52 @@
 #!/usr/bin/env python3
-"""Read-only preflight for the sole already-running 2x RTX 3060 target."""
+"""Redacted, reversible SSH preflight for the sole already-running 2x RTX 3060."""
 
 from __future__ import annotations
 
 import json
 import math
 import os
+import pathlib
+import re
+import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 API = "https://console.vast.ai/api/v0"
-GPU_COMMAND = "nvidia-smi"
+MAX_JSON_BYTES = 4 * 1024 * 1024
+GPU_COMMAND = "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader"
 DISK_COMMAND = "df -Pk /workspace"
 ALLOWED_STATES = {"running", "stopped", "starting", "stopping", "scheduling", "loading", "created", "offline", "exited", "error"}
-MAX_JSON_BYTES = 4 * 1024 * 1024
-MAX_RESULT_BYTES = 64 * 1024
+
+
+class ApiFailure(RuntimeError):
+    def __init__(self, status: int | None):
+        super().__init__("api request failed")
+        self.status = status
+
+
+def api_json(api_key: str, path: str, method: str = "GET", payload: object | None = None) -> object:
+    body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json", "User-Agent": "TheQuantumProject-GitHub-Actions/1.0"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = Request(f"{API}{path}", data=body, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=25) as response:
+            raw = response.read(MAX_JSON_BYTES + 1)
+    except HTTPError as error:
+        raise ApiFailure(error.code) from None
+    except (URLError, TimeoutError, OSError):
+        raise ApiFailure(None) from None
+    if len(raw) > MAX_JSON_BYTES:
+        raise ApiFailure(None)
+    try:
+        return json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiFailure(None) from None
 
 
 def state(row: dict) -> str:
@@ -28,184 +57,238 @@ def state(row: dict) -> str:
     return value if value in ALLOWED_STATES else "unknown"
 
 
-def read_json(url: str, api_key: str, method: str = "GET", body: bytes | None = None) -> object:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
-        "User-Agent": "TheQuantumProject-GitHub-Actions/1.0",
-    }
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    request = Request(url, headers=headers, data=body, method=method)
-    with urlopen(request, timeout=25) as response:
-        payload = response.read(MAX_JSON_BYTES + 1)
-    if len(payload) > MAX_JSON_BYTES:
-        raise ValueError("response too large")
-    return json.loads(payload)
-
-
 def target_rows(payload: object) -> list[dict]:
     rows = payload if isinstance(payload, list) else payload.get("instances") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise ValueError("invalid inventory")
-    result = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        gpu = row.get("gpu_name")
-        count = row.get("num_gpus", row.get("gpu_count"))
-        if (
-            isinstance(gpu, str)
-            and "3060" in gpu.casefold()
-            and isinstance(count, int)
-            and not isinstance(count, bool)
-            and count == 2
-        ):
-            result.append(row)
-    return result
+    return [
+        row for row in rows
+        if isinstance(row, dict)
+        and isinstance(row.get("gpu_name"), str)
+        and "3060" in row["gpu_name"].casefold()
+        and isinstance(row.get("num_gpus", row.get("gpu_count")), int)
+        and not isinstance(row.get("num_gpus", row.get("gpu_count")), bool)
+        and row.get("num_gpus", row.get("gpu_count")) == 2
+    ]
 
 
-def read_remote_output(result_url: str) -> str:
-    parsed = urlparse(result_url)
-    host = (parsed.hostname or "").lower()
-    if (
-        parsed.scheme != "https"
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.port is not None
-        or not (host == "s3.amazonaws.com" or host.endswith(".amazonaws.com") or host.endswith(".vast.ai"))
-    ):
-        raise ValueError("untrusted result host")
-    request = Request(result_url, headers={"User-Agent": "TheQuantumProject-GitHub-Actions/1.0"})
-    last_error = None
-    for _ in range(15):
+def ssh_key_blob(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    fields = value.strip().split()
+    return fields[1] if len(fields) >= 2 and fields[0].startswith("ssh-") else None
+
+
+def find_attached_key_id(api_key: str, instance_id: int, public_key: str) -> int | None:
+    response = api_json(api_key, f"/instances/{instance_id}/ssh")
+    if not isinstance(response, dict):
+        return None
+    keys = response.get("ssh_keys")
+    if isinstance(keys, str):
         try:
-            with urlopen(request, timeout=10) as response:
-                raw = response.read(MAX_RESULT_BYTES + 1)
-            if len(raw) > MAX_RESULT_BYTES:
-                raise ValueError("result too large")
-            return raw.decode("utf-8", errors="strict")
-        except HTTPError as error:
-            last_error = error.code
-            if error.code not in {404, 409, 425, 429, 500, 502, 503, 504}:
-                break
-        except (URLError, TimeoutError, UnicodeDecodeError, OSError):
-            last_error = "transient"
-        time.sleep(2)
-    raise RuntimeError(f"result unavailable: {last_error}")
+            keys = json.loads(keys)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(keys, list):
+        return None
+    wanted = ssh_key_blob(public_key)
+    for item in keys:
+        if not isinstance(item, dict) or ssh_key_blob(item.get("public_key") or item.get("ssh_key") or item.get("key")) != wanted:
+            continue
+        key_id = item.get("id")
+        if isinstance(key_id, int) and not isinstance(key_id, bool) and key_id > 0:
+            return key_id
+    return None
+
+
+def run_ssh(host: str, port: int, key_path: pathlib.Path, known_hosts: pathlib.Path, command: str) -> subprocess.CompletedProcess[str] | None:
+    argv = [
+        "ssh", "-i", str(key_path), "-p", str(port),
+        "-o", "BatchMode=yes",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={known_hosts}",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=8",
+        "-o", "ConnectionAttempts=1",
+        f"root@{host}", command,
+    ]
+    for attempt in range(4):
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=18, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode == 0:
+            return result
+        if attempt < 3:
+            time.sleep(3)
+    return None
 
 
 def classify_gpu_output(raw: str) -> str:
     rows = [line.strip() for line in raw.splitlines() if line.strip()]
-    gpu_rows = [line for line in rows if "3060" in line.casefold()]
-    return "verified_2x3060" if len(gpu_rows) == 2 else "gpu_inventory_mismatch"
+    return "verified_2x3060" if len(rows) == 2 and all("3060" in line.casefold() for line in rows) else "gpu_inventory_mismatch"
 
 
 def classify_disk_output(raw: str) -> str:
-    numeric_rows = []
+    available = []
     for line in raw.splitlines():
         fields = line.split()
         if len(fields) >= 5 and all(part.isdigit() for part in fields[1:4]):
-            numeric_rows.append(fields)
-    if not numeric_rows:
+            available.append(int(fields[3]))
+    if not available:
         return "unknown"
-    free_kib = max(int(row[3]) for row in numeric_rows)
-    return "adequate" if free_kib >= 40 * 1024 * 1024 else "low"
+    return "adequate" if max(available) >= 40 * 1024 * 1024 else "low"
 
 
-def execute_remote(api_key: str, instance_id: int, command: str) -> str:
-    if len(command.encode("utf-8")) > 512:
-        raise ValueError("command too long")
-    body = json.dumps({"command": command}, separators=(",", ":")).encode("utf-8")
-    queued = read_json(f"{API}/instances/command/{instance_id}", api_key, "PUT", body)
-    if not isinstance(queued, dict) or queued.get("success") is not True or not isinstance(queued.get("result_url"), str):
-        raise RuntimeError("remote command failed")
-    return read_remote_output(queued["result_url"])
+def safe_budget_projection(rows: list[dict]) -> str:
+    running = [row for row in rows if state(row) == "running"]
+    if len(running) != 1:
+        return "unknown"
+    rate = running[0].get("dph_total")
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate < 0:
+        return "unknown"
+    return "within_48h_cap" if rate * 48 <= 19.0 else "above_48h_cap"
 
 
 def main() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    status = "query_failed"
+    inventory = "query_failed"
+    ssh_status = "not_attempted"
+    gpu = "unknown"
     disk = "unknown"
     budget = "unknown"
-    phase = "inventory"
+    cleanup = "not_needed"
+    temp_dir: pathlib.Path | None = None
+    attach_attempted = False
+    api_key = os.environ.get("VAST_API_KEY", "")
+    instance_id: int | None = None
+    public_key = ""
+
     try:
-        api_key = os.environ.get("VAST_API_KEY", "")
         if not api_key:
-            status = "configuration_missing"
+            inventory = "configuration_missing"
         else:
-            matches = target_rows(read_json(f"{API}/instances/", api_key))
-            running = [row for row in matches if state(row) == "running"]
+            rows = target_rows(api_json(api_key, "/instances/"))
+            budget = safe_budget_projection(rows)
+            running = [row for row in rows if state(row) == "running"]
             if len(running) != 1:
-                status = "running_target_ambiguous"
+                inventory = "running_target_ambiguous"
             else:
-                hourly = running[0].get("dph_total")
-                if isinstance(hourly, (int, float)) and not isinstance(hourly, bool) and math.isfinite(hourly) and hourly >= 0:
-                    budget = "within_48h_cap" if hourly * 48 <= 19.0 else "above_48h_cap"
-                instance_id = running[0].get("id")
-                if not isinstance(instance_id, int) or isinstance(instance_id, bool) or instance_id <= 0:
-                    status = "target_id_unavailable"
+                candidate = running[0].get("id")
+                if not isinstance(candidate, int) or isinstance(candidate, bool) or candidate <= 0:
+                    inventory = "target_id_unavailable"
                 else:
-                    phase = "execute_gpu"
-                    gpu_output = execute_remote(api_key, instance_id, GPU_COMMAND)
-                    status = classify_gpu_output(gpu_output)
-                    if status == "verified_2x3060":
-                        phase = "execute_disk"
-                        disk_output = execute_remote(api_key, instance_id, DISK_COMMAND)
-                        disk = classify_disk_output(disk_output)
-    except HTTPError as error:
-        if phase.startswith("execute_"):
-            if error.code == 400:
-                try:
-                    detail = json.loads(error.read(4096))
-                    kind = detail.get("error") if isinstance(detail, dict) else None
-                    message = detail.get("msg", "").casefold() if isinstance(detail, dict) and isinstance(detail.get("msg"), str) else ""
-                except Exception:
-                    kind = None
-                    message = ""
-                if "command" in message and "invalid" in message:
-                    status = "execute_command_invalid"
-                elif "container" in message:
-                    status = "execute_container_unavailable"
-                elif "json" in message:
-                    status = "execute_body_invalid"
-                else:
-                    status = {
-                        "invalid_args": "execute_invalid_args",
-                        "invalid_container_id": "execute_no_container_id",
-                        "invalid_container": "execute_container_unavailable",
-                    }.get(kind, "execute_bad_request")
-            else:
-                status = {
-                    401: "execute_auth_rejected",
-                    403: "execute_permission_denied",
-                    404: "execute_endpoint_unavailable",
-                    413: "execute_payload_rejected",
-                    429: "execute_rate_limited",
-                }.get(error.code, "execute_http_error")
-        elif phase == "inventory":
-            status = {
-                401: "inventory_auth_rejected",
-                403: "inventory_permission_denied",
-                429: "inventory_rate_limited",
-            }.get(error.code, "inventory_http_error")
+                    instance_id = candidate
+                    inventory = "verified_single_running_target"
+                    host = running[0].get("ssh_host")
+                    port = running[0].get("ssh_port")
+                    if not isinstance(host, str) or not re.fullmatch(r"ssh[0-9]+\.vast\.ai", host.casefold()):
+                        ssh_status = "endpoint_unavailable"
+                    elif isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+                        ssh_status = "endpoint_unavailable"
+                    else:
+                        temp_dir = pathlib.Path(tempfile.mkdtemp(prefix="vast-ssh-"))
+                        key_path = temp_dir / "temporary"
+                        known_hosts = temp_dir / "known_hosts"
+                        generated = subprocess.run(
+                            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"gha-{os.environ.get('GITHUB_RUN_ID', 'run')}", "-f", str(key_path)],
+                            capture_output=True, text=True, timeout=15, check=False,
+                        )
+                        if generated.returncode != 0:
+                            ssh_status = "key_generation_failed"
+                        else:
+                            public_key = (key_path.with_suffix(".pub")).read_text(encoding="utf-8").strip()
+                            if find_attached_key_id(api_key, instance_id, public_key) is not None:
+                                ssh_status = "key_collision"
+                            else:
+                                attach_attempted = True
+                                attached = api_json(api_key, f"/instances/{instance_id}/ssh", "POST", {"ssh_key": public_key})
+                                if not isinstance(attached, dict) or attached.get("success") is not True:
+                                    ssh_status = "key_attach_failed"
+                                else:
+                                    ssh_status = "attached"
+                                    if find_attached_key_id(api_key, instance_id, public_key) is None:
+                                        ssh_status = "key_attach_unconfirmed"
+                                    else:
+                                        gpu_result = run_ssh(host, port, key_path, known_hosts, GPU_COMMAND)
+                                        if gpu_result is None:
+                                            ssh_status = "connection_failed"
+                                        else:
+                                            ssh_status = "connected"
+                                            gpu = classify_gpu_output(gpu_result.stdout)
+                                            disk_result = run_ssh(host, port, key_path, known_hosts, DISK_COMMAND)
+                                            if disk_result is None:
+                                                disk = "unknown"
+                                            else:
+                                                disk = classify_disk_output(disk_result.stdout)
+    except ApiFailure as error:
+        if error.status in {401, 403}:
+            inventory = "api_auth_failed"
         else:
-            status = "result_http_error"
-    except URLError:
-        status = "execute_network_error" if phase.startswith("execute_") else "inventory_network_error"
-    except TimeoutError:
-        status = "execute_timeout" if phase.startswith("execute_") else "inventory_timeout"
-    except RuntimeError:
-        status = "remote_command_failed" if phase.startswith("execute_") else "probe_failed"
-    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-        status = "remote_response_invalid" if phase.startswith("execute_") else "inventory_invalid"
-    except Exception:
-        status = "probe_failed"
-    print(f"checked_at_utc={checked}")
-    print(f"remote_probe={status}")
+            inventory = "api_query_failed"
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        if inventory == "verified_single_running_target" and ssh_status == "not_attempted":
+            ssh_status = "preflight_failed"
+        elif inventory == "query_failed":
+            inventory = "query_failed"
+
+    finally:
+        if attach_attempted and api_key and instance_id is not None and public_key:
+            try:
+                key_id = find_attached_key_id(api_key, instance_id, public_key)
+                if key_id is None:
+                    cleanup = "not_found"
+                else:
+                    detached = api_json(api_key, f"/instances/{instance_id}/ssh/{key_id}", "DELETE")
+                    cleanup = "detached" if isinstance(detached, dict) and detached.get("success") is True else "failed"
+            except (ApiFailure, ValueError):
+                cleanup = "failed"
+        if temp_dir is not None:
+            for name in ("temporary", "temporary.pub", "known_hosts"):
+                try:
+                    (temp_dir / name).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                temp_dir.rmdir()
+            except OSError:
+                pass
+
+    print(f"checked_at={checked}")
+    print(f"inventory={inventory}")
+    print(f"ssh={ssh_status}")
+    print(f"gpu={gpu}")
     print(f"remote_disk={disk}")
     print(f"budget_projection_48h={budget}")
-    return 0 if status == "verified_2x3060" else 1
+    print(f"temporary_ssh_key={cleanup}")
+    try:
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(
+                    "## Existing 2x3060 preflight\n"
+                    f"- checked_at: {checked}\n"
+                    f"- inventory: {inventory}\n"
+                    f"- ssh: {ssh_status}\n"
+                    f"- gpu: {gpu}\n"
+                    f"- remote_disk: {disk}\n"
+                    f"- budget_projection_48h: {budget}\n"
+                    f"- temporary_ssh_key: {cleanup}\n"
+                )
+    except OSError:
+        pass
+
+    ok = (
+        inventory == "verified_single_running_target"
+        and ssh_status == "connected"
+        and gpu == "verified_2x3060"
+        and disk == "adequate"
+        and budget == "within_48h_cap"
+        and cleanup in {"detached", "not_needed"}
+    )
+    return 0 if ok else 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
