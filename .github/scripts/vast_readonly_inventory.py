@@ -57,7 +57,8 @@ def inventory() -> str:
             matches.append(state(row.get("actual_status") or row.get("cur_state") or row.get("next_state")))
 
     if len(matches) > 1:
-        return "multiple_targets"
+        states = "_".join(sorted(set(matches)))
+        return f"multiple_targets_{states}"
     if not matches:
         return "no_existing_target"
     return f"existing_target_{matches[0]}"
