@@ -13,6 +13,10 @@ name = "cnot103-train"
 path = "src/bin/cnot103_train.rs"
 required-features = ["cuda"]
 
+[[bin]]
+name = "cnot103-validate-data"
+path = "src/bin/cnot103_validate_data.rs"
+
 [[test]]
 name = "run_manifest"
 path = "tests/run_manifest.rs"

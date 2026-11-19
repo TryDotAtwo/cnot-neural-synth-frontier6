@@ -8,6 +8,7 @@ on:
       - .github/scripts/rebuild_frozen_dataset.py
       - .github/scripts/fetch_public_holdout.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
+      - native/Cargo.toml
       - native/src/bin/cnot103_validate_data.rs
 
 permissions:
