@@ -1,0 +1,46 @@
+name: Classify private dataset rebuild failure
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/scripts/vast_classify_private_dataset_failure.py
+      - .github/workflows/vast-classify-private-dataset-failure.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-dataset-failure-classifier-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parse remote helpers without project data or network access
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for name in (
+              '.github/scripts/vast_classify_private_dataset_failure.py',
+              '.github/scripts/vast_rebuild_remote_dataset.py',
+              '.github/scripts/vast_probe_existing_2x3060.py',
+          ):
+              ast.parse(Path(name).read_text(encoding='utf-8'), filename=name)
+          print('classifier_syntax=pass')
+          PY
+      - name: Read only an allowlisted failure category from the existing Vast disk
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python .github/scripts/vast_classify_private_dataset_failure.py
