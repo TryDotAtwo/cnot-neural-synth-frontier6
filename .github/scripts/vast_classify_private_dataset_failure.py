@@ -100,6 +100,7 @@ DETAIL_CLASSES = {
     "unavailable",
 }
 REMOTE_CLASSIFIER = f"""set -euo pipefail
+if [ -x "$HOME/.cargo/bin/cargo" ]; then export PATH="$HOME/.cargo/bin:$PATH"; fi
 ROOT='/workspace/tqp_remote_dataset_{RUN_ID}_{SOURCE_SHA8}_a{ATTEMPT}'
 LOG="$ROOT/remote-dataset.private.log"
 BUILDER_LOG="$ROOT/dataset-builder.private.log"
