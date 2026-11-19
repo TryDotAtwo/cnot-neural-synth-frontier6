@@ -48,6 +48,11 @@ DETAIL_CLASSES = {
     "holdout_sqlite_busy",
     "holdout_sqlite_query_error",
     "holdout_record_invalid",
+    "holdout_record_metadata_invalid",
+    "holdout_split_invalid",
+    "holdout_matrix_invalid",
+    "generated_record_generation_failed",
+    "builder_arguments_invalid",
     "holdout_certificate_invalid",
     "holdout_identity_or_symmetry_overlap",
     "generated_certificate_replay_failed",
@@ -96,6 +101,8 @@ elif grep -Eiq 'command not found|cargo: not found' "$LOG" "$BUILDER_LOG" 2>/dev
   detail=toolchain_unavailable
 elif grep -Eiq 'HTTPError|urlopen error|connection reset|could not resolve|timed out' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=network_failure
+elif grep -Fq 'holdout contains a singular matrix' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=holdout_matrix_invalid
 elif grep -Fq 'holdout does not contain the pinned 1792+1792 panels' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_panels_incomplete
 elif grep -Fq 'holdout database has no roots table' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
@@ -148,6 +155,10 @@ elif grep -Eiq 'holdout reduction word does not replay|holdout certificate|holdo
   detail=holdout_certificate_invalid
 elif grep -Eiq 'holdout record|holdout state|holdout gate' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_record_invalid
+elif grep -Eiq 'holdout exact-distance field|holdout exact-evidence field' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=holdout_record_metadata_invalid
+elif grep -Fq 'holdout contains an unsupported split' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=holdout_split_invalid
 elif grep -Eiq 'dev/test .*repeats|finite-symmetry views overlap|finite-symmetry view set is incomplete' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=holdout_identity_or_symmetry_overlap
 elif grep -Fq 'generated reduction certificate failed replay' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
@@ -160,6 +171,10 @@ elif grep -Eiq 'could not compile|failed to compile' "$LOG" "$BUILDER_LOG" 2>/de
   detail=validator_build_failed
 elif grep -Eiq 'output path is outside|refusing to overwrite|destination appeared during the write|preserving an existing' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=artifact_conflict
+elif grep -Eiq 'invalid random range|generated gate is outside the CNOT alphabet' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=generated_record_generation_failed
+elif grep -Eiq 'run directory does not exist|output file names are invalid|remote rebuild arguments are incomplete|seed must fit|source revision must be a lowercase commit SHA' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
+  detail=builder_arguments_invalid
 else
   detail=other_generation_validation_failure
 fi
