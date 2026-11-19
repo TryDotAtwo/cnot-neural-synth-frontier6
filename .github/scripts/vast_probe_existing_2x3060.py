@@ -127,6 +127,7 @@ def main() -> int:
     status = "query_failed"
     disk = "unknown"
     budget = "unknown"
+    phase = "inventory"
     try:
         api_key = os.environ.get("VAST_API_KEY", "")
         if not api_key:
@@ -146,14 +147,50 @@ def main() -> int:
                 if not isinstance(instance_id, int) or isinstance(instance_id, bool) or instance_id <= 0:
                     status = "target_id_unavailable"
                 else:
+                    phase = "execute"
                     body = json.dumps({"command": COMMAND}, separators=(",", ":")).encode("utf-8")
                     queued = read_json(f"{API}/instances/command/{instance_id}", api_key, "PUT", body)
                     if not isinstance(queued, dict) or queued.get("success") is not True or not isinstance(queued.get("result_url"), str):
                         status = "remote_command_failed"
                     else:
-                        status, disk = classify_output(read_remote_output(queued["result_url"]))
+                        phase = "result"
+                        raw = read_remote_output(queued["result_url"])
+                        phase = "parse"
+                        status, disk = classify_output(raw)
+    except HTTPError as error:
+        status = {
+            "inventory": "inventory_http_error",
+            "execute": "execute_http_error",
+            "result": "result_http_error",
+            "parse": "result_http_error",
+        }.get(phase, "query_failed")
+        if error.code == 429:
+            status = {
+                "inventory": "inventory_rate_limited",
+                "execute": "execute_rate_limited",
+                "result": "result_rate_limited",
+                "parse": "result_rate_limited",
+            }.get(phase, "query_failed")
+    except URLError:
+        status = {
+            "inventory": "inventory_network_error",
+            "execute": "execute_network_error",
+            "result": "result_network_error",
+            "parse": "result_network_error",
+        }.get(phase, "query_failed")
+    except TimeoutError:
+        status = {
+            "inventory": "inventory_timeout",
+            "execute": "execute_timeout",
+            "result": "result_timeout",
+            "parse": "result_timeout",
+        }.get(phase, "query_failed")
+    except RuntimeError:
+        status = "result_timeout" if phase == "result" else "probe_failed"
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        status = "result_invalid" if phase in {"result", "parse"} else "inventory_invalid"
     except Exception:
-        status = "query_failed"
+        status = "probe_failed"
     print(f"checked_at_utc={checked}")
     print(f"remote_probe={status}")
     print(f"remote_disk={disk}")
