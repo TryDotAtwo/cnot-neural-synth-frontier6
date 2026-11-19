@@ -61,6 +61,12 @@ DETAIL_CLASSES = {
     "validator_build_failed",
     "artifact_conflict",
     "other_generation_validation_failure",
+    "builder_domain_error_unclassified",
+    "builder_io_error",
+    "builder_exception_other",
+    "dataset_artifacts_incomplete",
+    "dataset_outputs_missing",
+    "validator_failure_unclassified",
     "target_not_running",
     "target_ambiguous",
     "budget_gate_closed",
@@ -89,6 +95,9 @@ ROOT='/workspace/tqp_remote_dataset_{RUN_ID}_{SOURCE_SHA8}_a{ATTEMPT}'
 LOG="$ROOT/remote-dataset.private.log"
 BUILDER_LOG="$ROOT/dataset-builder.private.log"
 DB="$ROOT/input/full_shared_native_holdout_20261001.sqlite"
+DATA="$ROOT/data/frozen_train_10k.json"
+SHA="$ROOT/data/frozen_train_10k.sha256"
+RECEIPT="$ROOT/data/build.receipt.json"
 if [ ! -r "$LOG" ]; then
   detail=private_log_missing
 elif [ ! -e "$DB" ]; then
@@ -175,8 +184,18 @@ elif grep -Eiq 'invalid random range|generated gate is outside the CNOT alphabet
   detail=generated_record_generation_failed
 elif grep -Eiq 'run directory does not exist|output file names are invalid|remote rebuild arguments are incomplete|seed must fit|source revision must be a lowercase commit SHA' "$LOG" "$BUILDER_LOG" 2>/dev/null; then
   detail=builder_arguments_invalid
+elif [ -s "$BUILDER_LOG" ] && grep -Eq '^(BuildError):' "$BUILDER_LOG"; then
+  detail=builder_domain_error_unclassified
+elif [ -s "$BUILDER_LOG" ] && grep -Eq '^(OSError|PermissionError|FileNotFoundError):' "$BUILDER_LOG"; then
+  detail=builder_io_error
+elif [ -s "$BUILDER_LOG" ]; then
+  detail=builder_exception_other
+elif [ -e "$DATA" ] && [ -e "$SHA" ] && [ -e "$RECEIPT" ]; then
+  detail=validator_failure_unclassified
+elif [ -e "$DATA" ] || [ -e "$SHA" ] || [ -e "$RECEIPT" ]; then
+  detail=dataset_artifacts_incomplete
 else
-  detail=other_generation_validation_failure
+  detail=dataset_outputs_missing
 fi
 printf 'dataset_failure_detail=%s\\n' "$detail"
 """
