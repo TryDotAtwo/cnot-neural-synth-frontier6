@@ -26,6 +26,8 @@ jobs:
 
       - name: Check controller syntax
         run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_rebuild_remote_dataset.py').read_text(encoding='utf-8'))"
+      - name: Verify pinned holdout metadata before Vast access
+        run: python3 .github/scripts/fetch_public_holdout.py --metadata-check
 
       - name: Rebuild and validate only on the existing running 2x3060 target
         timeout-minutes: 140
