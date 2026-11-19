@@ -52,6 +52,16 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
         BoundField::build(pinned, manifest.feature_contexts, manifest.feature_policy,
                           manifest.model, manifest.objective, &manifest.training, widths,
                           replica_device)?;
+    let (quality_before, quality_before_seconds) = if let Some(spec) = quality.as_ref() {
+        let timer = Instant::now();
+        let report = quality::evaluate(spec, &dataset, &model, &plans, &variables, selected_count)?;
+        for &index in &devices {
+            tch::Cuda::synchronize(index as i64);
+        }
+        (Some(report), timer.elapsed().as_secs_f64())
+    } else {
+        (None, 0.0)
+    };
     let sampler = Sampler::new(dataset.train.len(), manifest.training.seed).map_err(|e| e.to_string())?;
     let mut trainer = NeuralTrainer::new(&variables, sampler, manifest.optimizer).map_err(|e| e.to_string())?;
     objective.bind_frozen_dataset(&dataset)?;
@@ -68,7 +78,7 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
             for &index in &devices {
                 tch::Cuda::synchronize(index as i64);
             }
-            let prepared_seconds = started.elapsed().as_secs_f64();
+            let prepared_seconds = (started.elapsed().as_secs_f64() - quality_before_seconds).max(0.0);
             let timer = Instant::now();
             let last = runner.run_interval(
                 &mut trainer,
@@ -91,7 +101,7 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
                 &mut objective, &model, &variables, &registry, dataset.train.records(), None,
             )?.into_device(plans)?;
             tch::Cuda::synchronize(manifest.training.cuda_device as i64);
-            let prepared_seconds = started.elapsed().as_secs_f64();
+            let prepared_seconds = (started.elapsed().as_secs_f64() - quality_before_seconds).max(0.0);
             let timer = Instant::now();
             let last = runner.run_interval(
                 &mut trainer,
@@ -123,15 +133,25 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => return Err("invalid benchmark digest flag".into()),
     };
-    let evaluation = match (quality, evaluation_plans) {
-        (Some(spec), Some(plans)) => Some(quality::evaluate(
-            spec, &dataset, &model, &plans, &variables, selected_count,
-        )?),
-        (None, None) => None,
+    let (evaluation, quality_after_seconds) = match (quality.as_ref(), evaluation_plans) {
+        (Some(spec), Some(plans)) => {
+            let timer = Instant::now();
+            let report = quality::evaluate(
+                spec, &dataset, &model, &plans, &variables, selected_count,
+            )?;
+            tch::Cuda::synchronize(manifest.training.cuda_device as i64);
+            (Some(report), timer.elapsed().as_secs_f64())
+        }
+        (None, None) => (None, 0.0),
         _ => unreachable!("evaluation spec and resident plans are paired"),
     };
+    let quality_delta = match (&quality_before, &evaluation) {
+        (Some(before), Some(after)) => Some(quality::compare(before, after)?),
+        (None, None) => None,
+        _ => unreachable!("before/after search reports are paired"),
+    };
     Ok(json!({
-        "schema": "cnot103_discard_only_benchmark_v1",
+        "schema": "cnot103_discard_only_benchmark_v2",
         "run_manifest_sha256": paths.run_sha256,
         "dataset_sha256": dataset.sha256,
         "objective_sha256": objective.config_sha256(),
@@ -148,11 +168,15 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
         "exposure_audit": audit_json(audit),
         "setup_seconds": prepared_seconds,
         "update_seconds": update_seconds,
+        "quality_before_seconds": quality_before_seconds,
+        "quality_after_seconds": quality_after_seconds,
         "total_seconds": started.elapsed().as_secs_f64(),
         "checkpoint_written": false,
         "checkpoint_time_included": false,
         "state_digests": state_digests,
-        "dev_search": evaluation,
+        "quality_before": quality_before,
+        "quality_after": evaluation,
+        "quality_delta": quality_delta,
     }))
 }
 
