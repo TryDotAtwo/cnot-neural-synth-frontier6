@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -74,10 +75,125 @@ def ensure_ssh_tools() -> bool:
         return False
 
 
+AREA_FILES = {
+    "run_config_root": "native/src/run_config.rs",
+    "run_exec_root": "native/src/run_config/execution.rs",
+    "run_exec_artifacts": "native/src/run_config/execution/artifacts.rs",
+    "run_exec_coverage": "native/src/run_config/execution/coverage.rs",
+    "run_exec_evaluation": "native/src/run_config/execution/evaluation.rs",
+    "run_exec_feature_runtime": "native/src/run_config/execution/feature_runtime.rs",
+    "run_exec_field": "native/src/run_config/execution/field.rs",
+    "run_exec_h07": "native/src/run_config/execution/h07.rs",
+    "run_exec_quality": "native/src/run_config/execution/quality.rs",
+    "run_exec_search": "native/src/run_config/execution/search.rs",
+    "run_manifest_mod": "native/src/run_config/manifest/mod.rs",
+    "run_manifest_parser": "native/src/run_config/manifest/parser.rs",
+    "run_manifest_validation": "native/src/run_config/manifest/validation.rs",
+    "nn_training_root": "native/src/nn_training.rs",
+    "nn_trainer_root": "native/src/nn_training/trainer.rs",
+    "nn_trainer_device": "native/src/nn_training/trainer/device.rs",
+    "nn_trainer_step": "native/src/nn_training/trainer/step.rs",
+    "nn_trainer_checkpoint": "native/src/nn_training/trainer/checkpoint.rs",
+    "nn_trainer_microbatch": "native/src/nn_training/trainer/device/microbatch.rs",
+    "nn_trainer_data_parallel": "native/src/nn_training/trainer/device/data_parallel.rs",
+    "training_session_root": "native/src/training_session.rs",
+    "training_session_run": "native/src/training_session/run.rs",
+}
+SAFE_FUNCTIONS = {
+    "execute_benchmark_manifest", "execute_run_manifest", "audit_json", "parse_run_manifest", "validate", "new",
+    "build", "run_device_updates", "run_device_block",
+    "run_device_microbatch_updates", "run_device_microbatch_block",
+    "run_device_data_parallel_block", "bind_replica_parameters",
+    "sync_replica", "accumulate_replica",
+}
+
+
+def diagnostic_area(path: str) -> str:
+    p = "/" + path.replace("\\", "/").lstrip("/")
+    if p.endswith("/run_config/execution.rs"):
+        return "run_exec_root"
+    if p.endswith("/run_config.rs"):
+        return "run_config_root"
+    if "/run_config/execution/" in p:
+        name = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if name in {"artifacts", "coverage", "evaluation", "feature_runtime", "field", "h07", "quality", "search"}:
+            return "run_exec_" + name
+    if "/run_config/manifest/" in p:
+        name = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if name in {"mod", "parser", "validation"}:
+            return "run_manifest_" + name
+    if p.endswith("/nn_training.rs"):
+        return "nn_training_root"
+    if p.endswith("/nn_training/trainer.rs"):
+        return "nn_trainer_root"
+    if "/nn_training/trainer/" in p:
+        name = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if name in {"device", "step", "checkpoint", "data_parallel", "microbatch"}:
+            return "nn_trainer_" + name
+    if p.endswith("/training_session.rs"):
+        return "training_session_root"
+    if "/training_session/" in p:
+        name = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if name in {"device", "lifecycle", "run", "validation"}:
+            return "training_session_" + name
+    return "other"
+
+
+def diagnostic_summary(source: pathlib.Path, workspace: pathlib.Path) -> str:
+    pairs: set[str] = set()
+    saw_error = False
+    try:
+        for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict) or item.get("reason") != "compiler-message":
+                continue
+            message = item.get("message")
+            if not isinstance(message, dict) or message.get("level") != "error":
+                continue
+            saw_error = True
+            code = message.get("code")
+            code = code.get("code") if isinstance(code, dict) else None
+            if not isinstance(code, str) or not re.fullmatch(r"E[0-9]{4}", code):
+                code = "EOTHER"
+            spans = message.get("spans")
+            primary = next((span for span in spans if isinstance(span, dict) and span.get("is_primary")), None) if isinstance(spans, list) else None
+            filename = primary.get("file_name", "") if primary else ""
+            line_number = primary.get("line_start", 0) if primary else 0
+            line_number = line_number if isinstance(line_number, int) and line_number > 0 else 0
+            area = diagnostic_area(filename)
+            function = "module"
+            relative = AREA_FILES.get(area)
+            if relative:
+                try:
+                    lines = (workspace / relative).read_text(encoding="utf-8").splitlines()
+                    pattern = re.compile(r"\s*(?:(?:pub(?:\([^)]*\))?)\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)")
+                    for source_line in lines[:max(0, min(line_number, len(lines)))]:
+                        found = pattern.match(source_line)
+                        if found:
+                            function = found.group(1)
+                except (OSError, ValueError):
+                    function = "source_unavailable"
+            if function not in SAFE_FUNCTIONS and function not in {"module", "source_unavailable"}:
+                function = "function_other"
+            pairs.add(code + "_" + area + "_" + function)
+    except OSError:
+        return "unavailable"
+    if not saw_error:
+        return "no_compiler_diagnostics"
+    if not pairs:
+        return "unavailable"
+    result = "+".join(sorted(pairs)[:6])
+    return result if re.fullmatch(r"E[0-9]{4}_[a-z0-9_]+(?:\+E[0-9]{4}_[a-z0-9_]+){0,5}", result) else "unavailable"
+
+
 def main() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     result = "not_stored"
     cleanup = "not_needed"
+    diagnostic = "unavailable"
     temp_dir: pathlib.Path | None = None
     attach_attempted = False
     public_key = ""
@@ -86,6 +202,8 @@ def main() -> int:
 
     try:
         source = pathlib.Path(os.environ.get("PRIVATE_DIAGNOSTIC_PATH", ""))
+        if source.is_file() and 0 < source.stat().st_size <= MAX_BYTES:
+            diagnostic = diagnostic_summary(source, pathlib.Path(os.environ.get("GITHUB_WORKSPACE", ".")))
         if not api_key or not source.is_file() or source.stat().st_size == 0 or source.stat().st_size > MAX_BYTES:
             result = "input_unavailable"
             raise RuntimeError()
@@ -214,7 +332,10 @@ def main() -> int:
                 pass
 
     print(f"checked_at={checked}")
+    if diagnostic not in {"no_compiler_diagnostics", "unavailable"} and not re.fullmatch(r"E[0-9]{4}_[a-z0-9_]+(?:\\+E[0-9]{4}_[a-z0-9_]+){0,5}", diagnostic):
+        diagnostic = "unavailable"
     print(f"private_build_diagnostic={result}")
+    print(f"private_build_diagnostic_summary={diagnostic}")
     print(f"temporary_ssh_key={cleanup}")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
