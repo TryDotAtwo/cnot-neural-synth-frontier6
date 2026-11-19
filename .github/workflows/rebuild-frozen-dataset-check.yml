@@ -118,40 +118,84 @@ jobs:
         shell: bash
         working-directory: native
         run: |
-          log_file="${RUNNER_TEMP}/cuda-feature-build.log"
-          if cargo build --features cuda --bin cnot103-train --bin cnot103-benchmark >"${log_file}" 2>&1; then
+          log_file="\${RUNNER_TEMP}/cuda-feature-build.jsonl"
+          safe_status="\${RUNNER_TEMP}/cuda-feature-build.status"
+          if cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark >"\${log_file}" 2>&1; then
             printf 'cuda_feature_build=pass\n'
-            printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
+            printf 'cuda_feature_build=pass\n' >> "\${GITHUB_STEP_SUMMARY}"
           else
-            printf 'cuda_feature_build=fail\n'
-            failure_class="other_build_failure"
-            if grep -Eiq 'nvcc fatal|unsupported gpu architecture|cuda compiler.*not found' "${log_file}"; then
-              failure_class="cuda_toolchain"
-            elif grep -Eiq 'error\[E[0-9]+\]|could not compile `?cnot103' "${log_file}"; then
-              diagnostic_codes="$(grep -oE 'error\[E[0-9]+\]' "${log_file}" | sed -E 's/error\[(E[0-9]+)\]/\1/' | sort -u | head -n 4 | tr '\n' '_')"
-              diagnostic_codes="${diagnostic_codes%_}"
-              diagnostic_modules="$(grep -Eo -- '--> [^:]+\.rs:[0-9]+:[0-9]+' "${log_file}" | sed -E 's/^[[:space:]]*--> //' | cut -d: -f1 | while IFS= read -r source_file; do case "${source_file}" in */nn_training/*|*/training_session/*|*/training.rs) printf 'training\\n' ;; */objective/*) printf 'objective\\n' ;; */bellman/*) printf 'bellman\\n' ;; */model/*|*/basis/*) printf 'model\\n' ;; */device_feature_plan*|*/rank_features/*|*/features/*|*/basis_gradient*|*/bound_features*|*/guarded_features*|*/paid_basis_features*|*/positive_packet*|*/frequency_context*|*/template_response*|*/block_parities*|*/shared_relation*|*/i09_quadratic*|*/matrix_boundary*|*/bilinear*|*/diffusion*|*/shear*|*/stage26*|*/stage35*|*/stage37*|*/stage38*|*/structural*|*/response*|*/schema*|*/general_compiler*|*/paid_basis*) printf 'feature_families\\n' ;; */cuda*|*/device_*|*/torch_device.rs) printf 'device_runtime\\n' ;; */run_config/*|*/bin/*|*/checkpoint*) printf 'orchestration\\n' ;; */frozen_data/*|*/training_data/*|*/packet*) printf 'data_contracts\\n' ;; */alphabet.rs|*/state.rs|*/lib.rs) printf 'core_contracts\\n' ;; *) printf 'other\\n' ;;esac; done | sort -u | head -n 4 | tr '\n' '_')"
-              diagnostic_modules="${diagnostic_modules%_}"
-              if [[ -n "${diagnostic_codes}" ]]; then
-                failure_class="rust_compile_${diagnostic_codes}"
-              else
-                failure_class="rust_compile"
-              fi
-              if [[ -n "${diagnostic_modules}" ]]; then
-                failure_class="${failure_class}_${diagnostic_modules}"
-              fi
-            elif grep -Eiq 'undefined reference|cannot find -l|ld returned|linker.*failed' "${log_file}"; then
-              failure_class="link"
-            elif grep -Eiq 'no space left|out of memory|killed signal' "${log_file}"; then
-              failure_class="runner_resource"
-            elif grep -Eiq 'timed out|failed to download|failed to get|could not resolve|connection reset' "${log_file}"; then
-              failure_class="network"
-            elif grep -Eiq 'could not find|not found|no such file|cmake error' "${log_file}"; then
-              failure_class="dependency_or_cmake"
+            if python3 - "\${log_file}" "\${safe_status}" "\${GITHUB_STEP_SUMMARY}" <<'PY' >/dev/null 2>&1
+          import json
+          import os
+          import pathlib
+          import sys
+
+          log_path, safe_path, summary_path = map(pathlib.Path, sys.argv[1:4])
+          allowed_codes = {"E0282", "E0283", "E0308", "E0369"}
+
+          def area(path):
+              p = "/" + path.replace("\\\\", "/").lstrip("/")
+              if "/nn_training/" in p or "/training_session/" in p or p.endswith("/training.rs"):
+                  return "training"
+              if "/objective/" in p:
+                  return "objective"
+              if "/bellman/" in p:
+                  return "bellman"
+              if "/model/" in p or "/basis/" in p:
+                  return "model"
+              if any(part in p for part in (
+                  "/features/", "/device_feature_plan", "/rank_features", "/basis_gradient",
+                  "/bound_features", "/guarded_features", "/paid_basis_features", "/positive_packet",
+                  "/frequency_context", "/template_response", "/block_parities", "/shared_relation",
+                  "/i09_quadratic", "/matrix_boundary", "/bilinear", "/diffusion", "/shear",
+                  "/stage26", "/stage35", "/stage37", "/stage38", "/structural", "/response",
+                  "/schema", "/general_compiler", "/paid_basis",
+              )):
+                  return "feature_families"
+              if "/cuda" in p or "/device_" in p or p.endswith("/torch_device.rs"):
+                  return "device_runtime"
+              if "/run_config/" in p or "/bin/" in p or "/checkpoint/" in p:
+                  return "orchestration"
+              if "/frozen_data/" in p or "/training_data/" in p or "/packet/" in p:
+                  return "data_contracts"
+              if p.endswith("/lib.rs") or p.endswith("/alphabet.rs") or p.endswith("/state.rs"):
+                  return "core_contracts"
+              return "other"
+
+          pairs = set()
+          for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+              try:
+                  message = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if message.get("reason") != "compiler-message":
+                  continue
+              diagnostic = message.get("message")
+              if not isinstance(diagnostic, dict) or diagnostic.get("level") != "error":
+                  continue
+              code = diagnostic.get("code")
+              code = code.get("code") if isinstance(code, dict) else None
+              code = code if code in allowed_codes else "EOTHER"
+              spans = diagnostic.get("spans")
+              if not isinstance(spans, list):
+                  spans = []
+              primary = next((span for span in spans if isinstance(span, dict) and span.get("is_primary")), None)
+              filename = primary.get("file_name", "") if primary else ""
+              pairs.add(f"{code}_{area(filename)}")
+
+          values = sorted(pairs)[:6]
+          detail = "_".join(values) if values else "unknown"
+          lines = ["cuda_feature_build=fail", f"cuda_build_failure=rust_compile_{detail}"]
+          safe_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+          with summary_path.open("a", encoding="utf-8") as summary:
+              summary.write("\\n".join(lines) + "\\n")
+          PY
+            then
+              cat "\${safe_status}"
+            else
+              printf 'cuda_feature_build=fail\n'
+              printf 'cuda_build_failure=rust_compile_unknown\n'
+              printf 'cuda_feature_build=fail\ncuda_build_failure=rust_compile_unknown\n' >> "\${GITHUB_STEP_SUMMARY}"
             fi
-            printf 'cuda_build_failure=%s\n' "${failure_class}"
-            printf 'cuda_feature_build=fail\n' >> "${GITHUB_STEP_SUMMARY}"
-            printf 'cuda_build_failure=%s\n' "${failure_class}" >> "${GITHUB_STEP_SUMMARY}"
             exit 1
           fi
-
