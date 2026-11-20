@@ -193,3 +193,79 @@ mod missing_status_tests {
         assert_eq!(&admitted[batch-2..], &[0, 0]);
     }
 }
+
+
+#[cfg(test)]
+mod winner_activity_tests {
+    use super::*;
+    use crate::schema::{FeatureId, FeatureRole, FeatureSpec, FEATURE_COUNT};
+    use tch::{Device, Kind};
+
+    fn packet(token_valid: &[u8]) -> DeviceFeaturePacket {
+        let device = Device::Cpu;
+        let batch = token_valid.len() as i64;
+        let id = FeatureId::new(b'B', 1).unwrap();
+        let spec = FeatureSpec {
+            id,
+            role: FeatureRole::Group,
+            channels: 1,
+            scope: "winner-activity-test".into(),
+            producer_version: "test".into(),
+            dependencies: Vec::new(),
+            exactness: "exact".into(),
+            cost_tier: "T1".into(),
+            wire_roles: vec!["source".into()],
+            requires_solver_assisted: false,
+        };
+        let mut entries: Vec<_> = (0..FEATURE_COUNT).map(|_| None).collect();
+        entries[id.index()] = Some(DeviceFeatureEntry::new(
+            spec,
+            Tensor::zeros([batch, 1, 1], (Kind::Float, device)),
+            Tensor::full(
+                [batch],
+                DeviceFeatureStatus::Computed as i64,
+                (Kind::Uint8, device),
+            ),
+            Some(Tensor::from_slice(token_valid).to_kind(Kind::Bool).view([batch, 1])),
+            Some(Tensor::zeros([batch, 1, 1, 1], (Kind::Float, device))),
+        ));
+        DeviceFeaturePacket {
+            tensors: TensorPacket {
+                matrix: Tensor::zeros([batch, 1, 1], (Kind::Float, device)),
+                valid_nodes: Tensor::ones([batch, 1], (Kind::Bool, device)),
+                entries,
+            },
+            schema_id: "winner-activity-test".into(),
+            policy_id: "winner-activity-test".into(),
+        }
+    }
+
+    #[test]
+    fn winner_activity_ignores_group_tokens_from_losing_candidate() {
+        let chunk = packet(&[0, 1]);
+        assert_eq!(chunk.group_activity().int64_value(&[0]), 1);
+
+        let (_, activity) = chunk.freeze_winner_with_activity(
+            &Tensor::from_slice(&[0i64]),
+            None,
+        );
+        assert_eq!(activity.int64_value(&[0]), 0);
+    }
+
+    #[test]
+    fn merged_winner_activity_tracks_the_selected_packet() {
+        let chunk = packet(&[0, 1]);
+        let incumbent = packet(&[1]);
+        let keep_incumbent = Tensor::ones([], (Kind::Bool, Device::Cpu));
+        let (winner, activity) = chunk.freeze_winner_with_activity(
+            &Tensor::from_slice(&[0i64]),
+            Some((&incumbent, &keep_incumbent)),
+        );
+        assert_eq!(activity.int64_value(&[0]), 1);
+        assert_eq!(
+            winner.tensors.entries[FeatureId::new(b'B', 1).unwrap().index()]
+                .as_ref().unwrap().token_valid.as_ref().unwrap().int64_value(&[0, 0]),
+            1,
+        );
+    }
+}
