@@ -58,7 +58,9 @@ class OfferAndBudgetTests(unittest.TestCase):
         rows = [offer(10)]
         self.assertEqual(controller.budget_gate_reason(0.0, rows), "within_budget")
         self.assertEqual(controller.budget_gate_reason(20.0, rows), "prior_spend")
-        expensive = [offer(11, dph_total=0.50)]
+        reserve = controller.total_reserve(0.15)
+        over_budget_rate = (controller.BUDGET_CAP - reserve) / controller.RUN_HOURS + 0.001
+        expensive = [offer(11, dph_total=over_budget_rate, storage_cost=0.15)]
         self.assertEqual(controller.budget_gate_reason(0.0, expensive), "offer_cost")
 
     def test_invalid_costs_fail_closed(self):
