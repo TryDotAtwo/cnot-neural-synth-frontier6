@@ -129,7 +129,7 @@ class HFProfileValidationTests(unittest.TestCase):
             revision_getter=lambda: "b" * 40,
         )
 
-        self.assertEqual(status, "candidate_ambiguous")
+        self.assertEqual(status, "candidate_contexts_incomparable")
 
     def test_select_profile_prefers_exact_context_extension(self):
         base_profile = _self_test_profile()
@@ -149,6 +149,32 @@ class HFProfileValidationTests(unittest.TestCase):
 
         self.assertIsNotNone(selected)
         self.assertEqual(selected[0], "profiles/extended_context_profile.json")
+
+
+    def test_inspect_profile_reports_distinct_source_pins(self):
+        first = _self_test_profile()
+        second = _self_test_profile()
+        second["source"]["revision"] = "c" * 40
+        profiles = {
+            "profiles/first_context_profile.json": json.dumps(first).encode(),
+            "profiles/second_feature_profile.json": json.dumps(second).encode(),
+        }
+        paths = list(profiles)
+
+        def fetch_file(url, _limit, _allowed_host):
+            for path, payload in profiles.items():
+                if url.endswith(path):
+                    return payload
+            self.fail("unexpected candidate URL")
+
+        status = inspect_profile(
+            fetch_page=lambda _url: (paths, None),
+            fetch_file=fetch_file,
+            source_exists=lambda _revision, _path: True,
+            revision_getter=lambda: "b" * 40,
+        )
+
+        self.assertEqual(status, "candidate_source_ambiguous")
 
     def test_missing_pinned_source_is_unverified_not_unavailable(self):
         def missing_source(*_args):
