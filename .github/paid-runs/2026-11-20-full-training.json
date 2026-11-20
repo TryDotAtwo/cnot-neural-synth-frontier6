@@ -1,0 +1,8 @@
+{
+  "schema": "cnot103_full_training_v1",
+  "max_total_usd": 20,
+  "max_active_hours": 48,
+  "disk_gb": 64,
+  "preserve_remote_disk": true,
+  "resume_existing_label": "cnot103-r10k-44749514754-a1"
+}
