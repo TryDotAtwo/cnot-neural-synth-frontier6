@@ -71,6 +71,28 @@ class HFProfileValidationTests(unittest.TestCase):
         with self.assertRaises(ProfileCheckError):
             list_candidate_paths("a" * 40, fetch_page=lambda _: ([], repeated))
 
+    def test_inspect_profile_tries_explicit_profile_names_before_context_folder(self):
+        profile = _self_test_profile()
+        payloads = {
+            "metadata/unrelated_profile.json": b'{"schema":"wrong"}',
+            "feature_contexts/context.json": json.dumps(profile).encode(),
+        }
+
+        def fetch_file(url, _limit, _allowed_host):
+            for path, payload in payloads.items():
+                if url.endswith(path):
+                    return payload
+            self.fail("unexpected candidate URL")
+
+        status = inspect_profile(
+            fetch_page=lambda _url: (list(payloads), None),
+            fetch_file=fetch_file,
+            source_exists=lambda _revision, _path: True,
+            revision_getter=lambda: "b" * 40,
+        )
+
+        self.assertEqual(status, "schema_source_pinned")
+
     def test_inspect_profile_skips_unrelated_json_and_finds_one_pinned_profile(self):
         profile = _self_test_profile()
         paths = [
