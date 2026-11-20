@@ -1,3 +1,4 @@
+import copy
 import json
 import tempfile
 import unittest
@@ -63,6 +64,35 @@ class TrainingManifestTests(unittest.TestCase):
         self.assertEqual(widths["labeled_cuts"], [3])
         self.assertNotIn(10, widths["labeled_cuts"])
         self.assertEqual(widths["i10_max_n"], [3])
+
+    def test_rejects_selected_residual_alphabet_outside_objective_widths(self):
+        bad = copy.deepcopy(self.profile)
+        n = 3
+        gates = [
+            {"control": control, "target": target}
+            for control in range(n)
+            for target in range(n)
+            if control != target
+        ]
+        bad["feature_contexts"]["alphabet"] = {
+            "dimension": n,
+            "id": f"all_to_all_unit_cnot:{n}",
+            "gates": gates,
+            "costs": [1] * len(gates),
+        }
+        with self.assertRaises(ValueError):
+            validate_profile(bad)
+
+    def test_rejects_additional_residual_alphabet_with_noncanonical_costs(self):
+        bad = copy.deepcopy(self.profile)
+        alphabet = copy.deepcopy(bad["feature_contexts"]["alphabet"])
+        alphabet["costs"][0] = 2
+        bad["feature_contexts"]["selected_residual_additional_contexts"] = [{
+            "alphabet": alphabet,
+            "gates": [{"control": 0, "target": 1}],
+        }]
+        with self.assertRaises(ValueError):
+            validate_profile(bad)
 
     def test_rejects_unpinned_or_malformed_profile(self):
         bad = json.loads(json.dumps(self.profile))

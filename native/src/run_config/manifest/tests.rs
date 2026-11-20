@@ -187,6 +187,25 @@ fn complete_manifest_parses_with_explicit_null_limits() {
         parsed.validate_feature_profile().unwrap(),
         crate::schema::MODEL_INPUT_COUNT
     );
+    let mut incompatible = value.clone();
+    let objective_gates: Vec<_> = (0..4)
+        .flat_map(|control| {
+            (0..4).filter_map(move |target| {
+                (control != target).then(|| json!({"control":control,"target":target}))
+            })
+        })
+        .collect();
+    incompatible["alphabets"] = json!([{
+        "dimension":4,
+        "id":"all_to_all_unit_cnot:4",
+        "gates":objective_gates,
+        "costs":vec![1; 12]
+    }]);
+    let parsed = parse_run_manifest(&serde_json::to_vec(&incompatible).unwrap()).unwrap();
+    let error = parsed
+        .validate_feature_profile()
+        .expect_err("feature contexts must use an objective alphabet");
+    assert!(error.contains("feature-context alphabet must exactly match an objective alphabet"));
     assert_eq!(parsed.training.attempts, 1);
     let mut zero_target = value.clone();
     zero_target["training"]["target_attempts"] = json!(0);

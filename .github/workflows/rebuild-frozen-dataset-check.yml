@@ -74,6 +74,15 @@ jobs:
       - name: Parse the private diagnostic transporter without network access
         run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_store_private_diagnostic.py').read_text(encoding='utf-8'))"
 
+      - name: Run CPU feature-profile manifest tests
+        if: always()
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check manifest feature-profile compatibility without CUDA
+        if: always()
+        working-directory: native
+        run: cargo test --no-default-features --lib run_config::manifest::tests
+
       - name: Compile the canonical frozen-data validator
         uses: dtolnay/rust-toolchain@stable
 
@@ -84,7 +93,10 @@ jobs:
   cuda-feature-build:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(join(github.event.head_commit.modified, ','), 'native/') ||
+      (
+        contains(join(github.event.head_commit.modified, ','), 'native/src/') &&
+        !contains(join(github.event.head_commit.modified, ','), 'native/src/run_config/manifest/tests.rs')
+      ) ||
       contains(join(github.event.head_commit.modified, ','), '.github/scripts/build_training_manifest.py')
     runs-on: ubuntu-latest
     timeout-minutes: 45
