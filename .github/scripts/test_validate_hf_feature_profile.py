@@ -290,7 +290,7 @@ class HFProfileValidationTests(unittest.TestCase):
             revision_getter=lambda: "b" * 40,
         )
 
-        self.assertEqual(status, "candidate_schema_unverified")
+        self.assertEqual(status, "candidate_rejected_profile_schema")
 
     def test_inspect_profile_classifies_missing_pinned_source(self):
         profile = _self_test_profile()
