@@ -10,6 +10,9 @@ on:
       - .github/scripts/rebuild_frozen_dataset.py
       - .github/scripts/vast_rebuild_remote_dataset.py
       - .github/scripts/test_rebuild_frozen_dataset.py
+      - .github/scripts/test_vast_rent_rebuild_dataset.py
+      - .github/scripts/vast_probe_existing_2x3060.py
+      - .github/scripts/vast_readonly_inventory.py
       - .github/scripts/build_training_manifest.py
       - .github/scripts/test_build_training_manifest.py
       - .github/scripts/vast_store_private_diagnostic.py
@@ -48,6 +51,9 @@ jobs:
 
       - name: Test frozen dataset admission and receipt lifecycle
         run: python3 -m unittest discover -s .github/scripts -p 'test_rebuild_frozen_dataset.py' -v
+
+      - name: Test the Vast target ownership and budget controller
+        run: python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
 
       - name: Check the pinned training manifest builder
         run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py'

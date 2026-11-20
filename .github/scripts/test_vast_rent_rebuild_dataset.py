@@ -92,6 +92,16 @@ class OfferAndBudgetTests(unittest.TestCase):
 
         self.assertEqual(create_call.call_count, 1)
 
+    def test_preflight_targets_only_owned_instances(self):
+        owned_id = next(iter(controller.OWNED_INSTANCE_IDS))
+        unowned = offer(30, id=99999999, label="other-project")
+        labeled = offer(31, id=99999998, label="cnot103-r10k-run-a1")
+        legacy_owned = offer(32, id=owned_id, label="legacy-cnot-target")
+
+        selected = controller.probe.target_rows([unowned, labeled, legacy_owned])
+
+        self.assertEqual(selected, [labeled, legacy_owned])
+
     def test_target_scope_ignores_other_2x3060_rows(self):
         wanted = offer(20, label="cnot103-2x3060-rebuild-v1", actual_status="running")
         unrelated = offer(21, label="other-project", actual_status="running")
