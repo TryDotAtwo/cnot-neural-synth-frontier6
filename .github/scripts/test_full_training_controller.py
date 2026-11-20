@@ -193,6 +193,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
             patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
             patch.object(controller.base, "instance_rows", return_value=[row]),
             patch.object(controller.base, "is_2x3060", return_value=True),
@@ -250,6 +251,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
             patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
             patch.object(controller.base, "instance_rows", side_effect=[[running], [stopped]]),
             patch.object(controller.base, "is_2x3060", return_value=True),
