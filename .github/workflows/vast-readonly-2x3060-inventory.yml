@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: tqp-vast-readonly-inventory
@@ -85,3 +86,26 @@ jobs:
             printf 'vast_inventory=%s\n' "$INVENTORY"
             printf 'vast_volume_attachment=%s\n' "$VOLUME"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish redacted read-only inventory status
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          QUERY_RESULT: ${{ needs.inventory.result }}
+          INVENTORY: ${{ needs.inventory.outputs.inventory }}
+          VOLUME: ${{ needs.inventory.outputs.volume }}
+        with:
+          script: |
+            const inventoryValues = new Set(["none", "one_running", "one_nonrunning", "multiple", "unavailable"]);
+            const volumeValues = new Set(["running_attached", "exited_attached", "other_3060_state_attached", "other_instances_attached", "detached_volumes_present", "no_volumes", "unavailable"]);
+            const inventory = inventoryValues.has(process.env.INVENTORY) ? process.env.INVENTORY : "unavailable";
+            const volume = volumeValues.has(process.env.VOLUME) ? process.env.VOLUME : "unavailable";
+            const success = process.env.QUERY_RESULT === "success" && inventory !== "unavailable" && volume !== "unavailable";
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: success ? "success" : "failure",
+              context: "CNOT 2x3060 read-only Vast inventory",
+              description: `${inventory}; ${volume}`,
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
