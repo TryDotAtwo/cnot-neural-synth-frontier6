@@ -6,6 +6,7 @@ from run_full_training import (
     select_dev_indices,
     validate_training_result,
     validate_feature_coverage,
+    validate_feature_coverage_preflight,
 )
 
 
@@ -176,6 +177,67 @@ class FeatureCoverageTests(unittest.TestCase):
                 "resource_limit_values": 0,
             },
         ])
+
+
+    def _summary_for_preflight(self):
+        arguments = {
+            "expected_manifest_sha256": "a" * 64,
+            "expected_dataset_sha256": "b" * 64,
+            "expected_rows_by_width": {10: 2, 13: 1},
+            "expected_feature_count": 102,
+            "profile_id": "n10-test-support-v1",
+            "profile_sha256": "c" * 64,
+            "profile_context_widths": {"labeled_cuts": [10]},
+        }
+        train = validate_feature_coverage(
+            self.coverage_report("train"), expected_panel="train", **arguments
+        )
+        dev = validate_feature_coverage(
+            self.coverage_report("dev"), expected_panel="dev", **arguments
+        )
+        return {
+            "schema": "cnot103_feature_coverage_summary_v1",
+            "dataset_sha256": "b" * 64,
+            "profile_id": "n10-test-support-v1",
+            "profile_sha256": "c" * 64,
+            "profile_context_widths": {"labeled_cuts": [10]},
+            "model_input_slots": 102,
+            "panels": {"train": train, "dev": dev},
+        }
+
+    def test_pretraining_gate_requires_actual_dataset_and_profile_pins(self):
+        summary = self._summary_for_preflight()
+
+        with self.assertRaises(RunError):
+            validate_feature_coverage_preflight(
+                summary,
+                expected_dataset_sha256="d" * 64,
+                expected_profile_id="n10-test-support-v1",
+                expected_profile_sha256="c" * 64,
+                expected_profile_context_widths={"labeled_cuts": [10]},
+            )
+
+    def test_pretraining_gate_checks_actual_availability_against_profile_widths(self):
+        summary = self._summary_for_preflight()
+
+        self.assertIsNone(validate_feature_coverage_preflight(
+            summary,
+            expected_dataset_sha256="b" * 64,
+            expected_profile_id="n10-test-support-v1",
+            expected_profile_sha256="c" * 64,
+            expected_profile_context_widths={"labeled_cuts": [10]},
+        ))
+        summary["panels"]["train"]["availability_by_width"][1]["profile_context_keys"] = [
+            "labeled_cuts"
+        ]
+        with self.assertRaises(RunError):
+            validate_feature_coverage_preflight(
+                summary,
+                expected_dataset_sha256="b" * 64,
+                expected_profile_id="n10-test-support-v1",
+                expected_profile_sha256="c" * 64,
+                expected_profile_context_widths={"labeled_cuts": [10]},
+            )
 
 if __name__ == "__main__":
     unittest.main()

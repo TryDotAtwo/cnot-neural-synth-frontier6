@@ -232,7 +232,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
         ):
             self.assertEqual(controller.cleanup(), 0)
 
-        stop.assert_called_once_with(run_label, "123", "1")
+        stop.assert_called_once_with(run_label, "123", "1", expected_id=123)
 
 
     def test_cleanup_stops_legacy_target_after_matching_run_owner_stamp(self):
@@ -265,7 +265,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             session_factory.return_value.close.return_value = "detached"
             self.assertEqual(controller.cleanup(), 0)
 
-        stop.assert_called_once_with(old_label, "123", "1")
+        stop.assert_called_once_with(old_label, "123", "1", expected_id=123)
 
 
 class InterruptedStartCleanupTests(unittest.TestCase):
