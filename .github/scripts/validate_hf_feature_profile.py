@@ -338,43 +338,57 @@ def inspect_profile(
 ) -> str:
     try:
         revision = revision_getter()
-        candidates = list_candidate_paths(revision, fetch_page=fetch_page)
-        json_candidates = sorted(
-            {path for path in candidates if path.casefold().endswith(".json")}
-        )
-        if not candidates:
-            return "not_found"
-        if not json_candidates:
-            return "candidate_unverified"
+    except ProfileCheckError:
+        return "unavailable_revision"
 
-        saw_schema_valid = False
-        for priority in sorted({_candidate_priority(path) for path in json_candidates}):
-            tier = [
-                path for path in json_candidates
-                if _candidate_priority(path) == priority
-            ]
-            if len(tier) > MAX_PROFILE_CANDIDATES:
-                return "candidate_limit_exceeded"
-            pinned_profiles = []
-            for path in tier:
+    try:
+        candidates = list_candidate_paths(revision, fetch_page=fetch_page)
+    except ProfileCheckError:
+        return "unavailable_tree"
+
+    json_candidates = sorted(
+        {path for path in candidates if path.casefold().endswith(".json")}
+    )
+    if not candidates:
+        return "not_found"
+    if not json_candidates:
+        return "candidate_unverified"
+
+    saw_schema_valid = False
+    for priority in sorted({_candidate_priority(path) for path in json_candidates}):
+        tier = [
+            path for path in json_candidates
+            if _candidate_priority(path) == priority
+        ]
+        if len(tier) > MAX_PROFILE_CANDIDATES:
+            return "candidate_limit_exceeded"
+        pinned_profiles = []
+        for path in tier:
+            try:
                 raw = fetch_file(
                     _candidate_url(revision, path),
                     MAX_PROFILE_BYTES,
                     _allowed_hub_download_host,
                 )
-                try:
-                    profile = validate_profile_bytes(raw)
-                except ProfileCheckError:
-                    continue
-                saw_schema_valid = True
-                if source_exists(profile["source_revision"], profile["source_path"]):
-                    pinned_profiles.append((path, profile))
-            if pinned_profiles:
-                return _profile_selection_status(pinned_profiles)
+            except ProfileCheckError:
+                return "unavailable_profile_download"
+            try:
+                profile = validate_profile_bytes(raw)
+            except ProfileCheckError:
+                continue
+            saw_schema_valid = True
+            try:
+                is_pinned = source_exists(
+                    profile["source_revision"], profile["source_path"]
+                )
+            except ProfileCheckError:
+                return "unavailable_source_check"
+            if is_pinned:
+                pinned_profiles.append((path, profile))
+        if pinned_profiles:
+            return _profile_selection_status(pinned_profiles)
 
-        return "candidate_source_unverified" if saw_schema_valid else "candidate_schema_unverified"
-    except ProfileCheckError:
-        return "unavailable"
+    return "candidate_source_unverified" if saw_schema_valid else "candidate_schema_unverified"
 
 
 if __name__ == "__main__":
@@ -385,6 +399,8 @@ if __name__ == "__main__":
         "candidate_source_ambiguous", "candidate_source_unverified",
         "candidate_unverified", "not_found",
         "schema_source_pinned", "unavailable",
+        "unavailable_profile_download", "unavailable_revision",
+        "unavailable_source_check", "unavailable_tree",
     }:
         status = "unavailable"
     print(f"profile_validation={status}")
