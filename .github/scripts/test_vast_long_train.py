@@ -116,6 +116,21 @@ class RunLockTests(unittest.TestCase):
             self.assertEqual(retry, "already_reserved")
             self.assertFalse(controller.may_launch_run(retry))
 
+    def test_concurrent_run_lock_claims_allow_at_most_one_launcher(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                statuses = list(pool.map(
+                    lambda _: controller.claim_run_lock(
+                        root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA
+                    ),
+                    range(8),
+                ))
+            self.assertEqual(sum(value == "reserved" for value in statuses), 1)
+            self.assertEqual(sum(controller.may_launch_run(value) for value in statuses), 1)
+
     def test_manifest_or_source_identity_mismatch_never_starts_a_second_run(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -125,11 +140,16 @@ class RunLockTests(unittest.TestCase):
                 ),
                 "reserved",
             )
-            mismatch = controller.claim_run_lock(
-                root, self.RUN_KEY, "c" * 40, self.MANIFEST_SHA
+            mismatches = (
+                controller.claim_run_lock(
+                    root, self.RUN_KEY, "c" * 40, self.MANIFEST_SHA
+                ),
+                controller.claim_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, "d" * 64
+                ),
             )
-            self.assertEqual(mismatch, "identity_mismatch")
-            self.assertFalse(controller.may_launch_run(mismatch))
+            self.assertEqual(mismatches, ("identity_mismatch", "identity_mismatch"))
+            self.assertFalse(any(controller.may_launch_run(value) for value in mismatches))
 
     def test_corrupt_existing_lock_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
