@@ -45,17 +45,19 @@ class OfferAndBudgetTests(unittest.TestCase):
         self.assertTrue(controller.budget_allows(5.0, 0.24, run_hours=50, reserve=3.0))
         self.assertFalse(controller.budget_allows(5.0, 0.241, run_hours=50, reserve=3.0))
 
-    def test_stopped_storage_and_48h_run_projection_fit_the_budget(self):
+    def test_stopped_storage_and_dataset_rebuild_projection_fit_the_budget(self):
         reserve = controller.total_reserve(0.15)
         self.assertAlmostEqual(reserve, 2.49)
-        self.assertEqual(controller.RUN_HOURS, 51.0)
+        self.assertEqual(controller.RUN_HOURS, 3.0)
         self.assertTrue(controller.budget_allows(0.0, 0.30, reserve=reserve))
-        self.assertFalse(controller.budget_allows(0.0, 0.35, reserve=reserve))
+        max_rate = (controller.BUDGET_CAP - reserve) / controller.RUN_HOURS
+        self.assertTrue(controller.budget_allows(0.0, max_rate, reserve=reserve))
+        self.assertFalse(controller.budget_allows(0.0, max_rate + 0.001, reserve=reserve))
 
     def test_budget_gate_reports_whether_history_or_offer_price_blocks_rent(self):
         rows = [offer(10)]
         self.assertEqual(controller.budget_gate_reason(0.0, rows), "within_budget")
-        self.assertEqual(controller.budget_gate_reason(8.0, rows), "prior_spend")
+        self.assertEqual(controller.budget_gate_reason(20.0, rows), "prior_spend")
         expensive = [offer(11, dph_total=0.50)]
         self.assertEqual(controller.budget_gate_reason(0.0, expensive), "offer_cost")
 
