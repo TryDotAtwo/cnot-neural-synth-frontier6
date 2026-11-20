@@ -319,7 +319,7 @@ class Supervisor:
             raise TimeLimit("48-hour wall-time guard reached")
 
     def _runner(self, name: str) -> pathlib.Path:
-        return self.source / "native" / "target" / "release" / name
+        return self.root / "cargo-target" / "release" / name
 
     def _run(
         self,
@@ -511,6 +511,7 @@ class Supervisor:
             "cargo_release_build",
             [
                 "cargo", "build", "--release", "--features", "cuda",
+                "--manifest-path", str(self.source / "native/Cargo.toml"),
                 "--bin", "cnot103-train",
                 "--bin", "cnot103-benchmark",
                 "--bin", "cnot103-search",
