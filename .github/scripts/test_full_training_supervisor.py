@@ -45,6 +45,7 @@ class FullTrainingSupervisorTests(unittest.TestCase):
             "cuda_devices": [0, 1],
             "start_progress": {"attempted": 1},
             "end_progress": {"attempted": 2, "accepted": 2, "rejected": 0},
+            "last_step": {"accepted": True},
             "exposure_audit": {"strict_unseen": True},
         }
         validate_training_result(report, expected_start=1, expected_end=2)
