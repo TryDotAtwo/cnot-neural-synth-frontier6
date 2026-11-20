@@ -268,10 +268,10 @@ mod winner_activity_tests {
     fn merged_winner_activity_tracks_the_selected_packet() {
         let chunk = packet(&[0, 1]);
         let incumbent = packet(&[1]);
-        let keep_incumbent = Tensor::ones([], (Kind::Bool, Device::Cpu));
+        let replace_candidate = Tensor::zeros([], (Kind::Bool, Device::Cpu));
         let (winner, activity) = chunk.freeze_winner_with_activity(
             &Tensor::from_slice(&[0i64]),
-            Some((&incumbent, &keep_incumbent)),
+            Some((&incumbent, &replace_candidate)),
         );
         assert_eq!(activity.int64_value(&[0]), 1);
         assert_eq!(
