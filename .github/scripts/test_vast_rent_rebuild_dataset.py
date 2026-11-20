@@ -102,6 +102,15 @@ class OfferAndBudgetTests(unittest.TestCase):
 
         self.assertEqual(selected, [labeled, legacy_owned])
 
+    def test_existing_rebuild_budget_reserves_storage_and_prior_charges(self):
+        self.assertTrue(
+            hasattr(controller, "existing_rebuild_budget_allows"),
+            "existing-target rebuild must use the shared total-spend gate",
+        )
+        target = offer(33, dph_total=0.2, storage_cost=0.15)
+        self.assertTrue(controller.existing_rebuild_budget_allows(target, 16.5))
+        self.assertFalse(controller.existing_rebuild_budget_allows(target, 17.0))
+
     def test_target_scope_ignores_other_2x3060_rows(self):
         wanted = offer(20, label="cnot103-2x3060-rebuild-v1", actual_status="running")
         unrelated = offer(21, label="other-project", actual_status="running")
