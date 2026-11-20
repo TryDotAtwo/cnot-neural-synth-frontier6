@@ -5,6 +5,7 @@ from run_full_training import (
     quality_metrics,
     select_dev_indices,
     validate_training_result,
+    validate_feature_coverage,
 )
 
 
@@ -53,6 +54,88 @@ class FullTrainingSupervisorTests(unittest.TestCase):
         with self.assertRaises(RunError):
             validate_training_result(report, expected_start=1, expected_end=2)
 
+
+class FeatureCoverageTests(unittest.TestCase):
+    @staticmethod
+    def coverage_report(panel="train"):
+        widths = []
+        for width, rows in ((10, 2), (13, 1)):
+            features = []
+            for index in range(102):
+                if width == 10 and index == 0:
+                    counts = (rows, 0, 0, 0, 0)
+                elif width == 13 and index == 1:
+                    counts = (rows, 0, 0, 0, 0)
+                elif index == 1 and width == 10:
+                    counts = (0, 0, rows, 0, 0)
+                elif index == 0 and width == 13:
+                    counts = (0, 0, 0, rows, 0)
+                else:
+                    counts = (0, rows, 0, 0, 0)
+                features.append({
+                    "id": f"feature-{index}",
+                    "role": "candidate",
+                    "scope": "matrix",
+                    "provider": "native-v25",
+                    "not_requested": counts[4],
+                    "computed": counts[0],
+                    "inapplicable": counts[1],
+                    "unsupported": counts[2],
+                    "resource_limit": counts[3],
+                })
+            widths.append({
+                "width": width,
+                "rows": rows,
+                "rejected_rows": 0,
+                "features": features,
+            })
+        return {
+            "schema": "cnot103_feature_coverage_v1",
+            "input_schema": "runtime_packet_layout_v25",
+            "policy_id": "policy-v25-test",
+            "manifest_sha256": "a" * 64,
+            "dataset_sha256": "b" * 64,
+            "panel": panel,
+            "batch_size": 1,
+            "widths": widths,
+        }
+
+    def test_coverage_keeps_102_slots_and_records_status_by_width(self):
+        summary = validate_feature_coverage(
+            self.coverage_report(),
+            expected_manifest_sha256="a" * 64,
+            expected_dataset_sha256="b" * 64,
+            expected_panel="train",
+            expected_rows_by_width={10: 2, 13: 1},
+            expected_feature_count=102,
+            profile_id="n10-test-support-v1",
+            profile_sha256="c" * 64,
+            profile_context_widths={"labeled_cuts": [10]},
+        )
+
+        self.assertEqual(summary["model_input_slots"], 102)
+        self.assertEqual(summary["selected_feature_count"], 102)
+        self.assertEqual([row["width"] for row in summary["widths"]], [10, 13])
+        self.assertEqual(summary["widths"][0]["features"][0]["computed"], 2)
+        self.assertEqual(summary["widths"][1]["features"][0]["unsupported"], 1)
+        self.assertEqual(summary["widths"][1]["features"][1]["computed"], 1)
+
+    def test_coverage_rejects_unrequested_features_and_bad_row_accounting(self):
+        report = self.coverage_report()
+        report["widths"][0]["features"][0]["not_requested"] = 1
+
+        with self.assertRaises(RunError):
+            validate_feature_coverage(
+                report,
+                expected_manifest_sha256="a" * 64,
+                expected_dataset_sha256="b" * 64,
+                expected_panel="train",
+                expected_rows_by_width={10: 2, 13: 1},
+                expected_feature_count=102,
+                profile_id="n10-test-support-v1",
+                profile_sha256="c" * 64,
+                profile_context_widths={"labeled_cuts": [10]},
+            )
 
 if __name__ == "__main__":
     unittest.main()
