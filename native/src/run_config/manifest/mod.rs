@@ -67,13 +67,26 @@ impl RunManifest {
     /// Validate provider construction and the complete runtime model-input selection
     /// without opening the pinned dataset or touching a CUDA device.
     pub fn validate_feature_profile(&self) -> Result<usize, String> {
+        let f08_max_n = self.feature_contexts.f08_max_n();
+        let f08_max_changed_rows = self.feature_contexts.f08_max_changed_rows();
+        let f08_max_component_events = self.feature_contexts.f08_max_component_events();
+        let f08_max_history_counts = self.feature_contexts.f08_max_history_counts();
         let contexts = self.feature_contexts.clone().build()?;
-        let registry = FeatureRegistry::with_all_model_input_providers(contexts)
-            .map_err(|error| error.to_string())?;
+        let registry = FeatureRegistry::with_all_model_input_providers_f08_limit(
+            contexts,
+            f08_max_n,
+            f08_max_changed_rows,
+            f08_max_component_events,
+            f08_max_history_counts,
+        )
+        .map_err(|error| error.to_string())?;
         let mut policy = FeaturePolicy::all_model_inputs_augmentation_only(
             self.feature_policy.schema_id.clone(),
         );
+        policy.seed = self.training.seed;
         policy.solver_assisted = self.feature_policy.solver_assisted;
+        policy.evaluations = self.feature_policy.evaluations.0;
+        policy.max_bytes = self.feature_policy.max_bytes.0;
         let selected = registry
             .selected_specs(&policy)
             .map_err(|error| error.to_string())?;

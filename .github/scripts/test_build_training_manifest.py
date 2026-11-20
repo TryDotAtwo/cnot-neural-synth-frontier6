@@ -35,10 +35,21 @@ class TrainingManifestTests(unittest.TestCase):
             self.assertEqual(len(alphabet["gates"]), n * (n - 1))
             self.assertEqual(len(alphabet["costs"]), n * (n - 1))
         self.assertEqual(manifest["training"]["target_attempts"], 250_000)
-        self.assertEqual(manifest["training"]["attempts"], 12_500)
+        self.assertEqual(manifest["training"]["attempts"], 250_000)
         self.assertEqual(manifest["training"]["cuda_devices"], [0, 1])
         self.assertEqual(manifest["training"]["batch_size"], 4)
-        self.assertEqual(manifest["model"]["structural_blocks"], 8)
+        self.assertEqual(
+            manifest["model"],
+            {
+                "wire_dim": 744,
+                "pair_dim": 186,
+                "structural_blocks": 8,
+                "attention_heads": 8,
+                "feedforward_dim": 1488,
+                "fusion_blocks": 2,
+                "basis_proposal_hidden_dim": 256,
+            },
+        )
         self.assertEqual(manifest["feature_policy"]["schema_id"], FEATURE_SCHEMA)
         self.assertEqual(manifest["objective"]["sampled_neighbor_count"], 4)
         self.assertEqual(provenance["model_input_slots"], MODEL_INPUT_COUNT)
@@ -85,7 +96,7 @@ class TrainingManifestTests(unittest.TestCase):
         )
         self.assertTrue(manifest["resume"])
         self.assertEqual(manifest["training"]["target_attempts"], 250_000)
-        self.assertEqual(manifest["training"]["attempts"], 12_500)
+        self.assertEqual(manifest["training"]["attempts"], 250_000)
 
     def test_cli_writes_manifest_and_private_provenance(self):
         manifest, provenance = build_manifest(
