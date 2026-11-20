@@ -325,6 +325,8 @@ class ObservedStopStateTests(unittest.TestCase):
 
 class ExactExpectedIdStopTests(unittest.TestCase):
     def test_label_reassignment_to_another_id_is_not_stopped(self):
+        from unittest.mock import patch
+
         label = "cnot103-fulltrain-123-a1"
         replacement = {
             "id": 124, "label": label, "gpu_name": "RTX 3060", "num_gpus": 2,
