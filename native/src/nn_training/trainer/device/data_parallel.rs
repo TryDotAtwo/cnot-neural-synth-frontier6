@@ -49,7 +49,7 @@ impl NeuralTrainer {
             ))?;
         let mut flat = tch::no_grad(|| FlatAdamW::new(&self.optimizer, model))?;
         let mut replica_pairs = bind_replica_parameters(&self.optimizer, variables, replica_variables)?;
-        sync_replica(&mut replica_pairs)?;
+        crate::stage_profile::measure("replica_sync", || sync_replica(&mut replica_pairs))?;
         let master_parameters = self
             .optimizer
             .parameter_refs()
@@ -65,7 +65,7 @@ impl NeuralTrainer {
         self.poisoned = true;
         let result = (|| {
             for _ in 0..attempts {
-                let indices = sampler.next(batch_size)?;
+                let indices = crate::stage_profile::measure("sampler", || sampler.next(batch_size))?;
                 let mut accumulated: [Vec<Option<Tensor>>; 2] = std::array::from_fn(|_| {
                     (0..parameter_count).map(|_| None).collect()
                 });
@@ -136,16 +136,21 @@ impl NeuralTrainer {
                     }
                 }
 
-                let (master_gradient, master_defined) =
-                    flatten_gradients(&accumulated[0], &master_parameters);
-                let (replica_gradient, replica_defined) =
-                    flatten_gradients(&accumulated[1], &replica_parameters);
-                let total_gradient = master_gradient + replica_gradient.to_device(variables.device());
-                let defined: Vec<_> = master_defined
-                    .into_iter()
-                    .zip(replica_defined)
-                    .map(|(a, b)| a || b)
-                    .collect();
+                let (total_gradient, defined) =
+                    crate::stage_profile::measure("gradient_flatten_transfer_reduce", || {
+                        let (master_gradient, master_defined) =
+                            flatten_gradients(&accumulated[0], &master_parameters);
+                        let (replica_gradient, replica_defined) =
+                            flatten_gradients(&accumulated[1], &replica_parameters);
+                        let total_gradient =
+                            master_gradient + replica_gradient.to_device(variables.device());
+                        let defined: Vec<_> = master_defined
+                            .into_iter()
+                            .zip(replica_defined)
+                            .map(|(a, b)| a || b)
+                            .collect();
+                        (total_gradient, defined)
+                    });
                 let loss = Tensor::stack(&losses, 0).sum(Kind::Float);
                 let update = DeviceUpdateLoss {
                     valid: Tensor::stack(&votes, 0)
@@ -154,7 +159,7 @@ impl NeuralTrainer {
                     group_activity: Tensor::stack(&groups, 0).any_dim(0, false),
                     loss,
                 };
-                crate::stage_profile::measure("data_parallel_reduce", || {
+                crate::stage_profile::measure("adamw", || {
                     tch::no_grad(|| {
                         flat.update_flat(
                             &mut self.optimizer,
@@ -164,9 +169,11 @@ impl NeuralTrainer {
                         )
                     })
                 })?;
-                sync_replica(&mut replica_pairs)?;
+                crate::stage_profile::measure("replica_sync", || sync_replica(&mut replica_pairs))?;
             }
-            flat.finish(&mut self.optimizer, || commit_audit(state))
+            crate::stage_profile::measure("interval_audit_commit", || {
+                flat.finish(&mut self.optimizer, || commit_audit(state))
+            })
         })();
 
         match result {
@@ -180,7 +187,7 @@ impl NeuralTrainer {
             }
             Err(error) => {
                 tch::no_grad(|| flat.rollback(&mut self.optimizer))?;
-                sync_replica(&mut replica_pairs)?;
+                crate::stage_profile::measure("replica_sync", || sync_replica(&mut replica_pairs))?;
                 self.poisoned = matches!(
                     error,
                     TchTrainingError::Invalid(crate::nn_training::optimizer::NONFINITE_CANDIDATE)
@@ -290,29 +297,31 @@ fn accumulate_replica(
             "replica autograd gradient count differs from parameter count",
         ));
     }
-    tch::no_grad(|| -> Result<(), TchTrainingError> {
-        for ((sum, gradient), parameter) in accumulated[replica]
-            .iter_mut()
-            .zip(gradients)
-            .zip(parameters)
-        {
-            if gradient.defined() {
-                if gradient.is_sparse()
-                    || gradient.kind() != Kind::Float
-                    || gradient.device() != parameter.device()
-                    || gradient.size() != parameter.size()
-                {
-                    return Err(TchTrainingError::Invalid(
-                        "replica gradient differs from its parameter contract",
-                    ));
+    crate::stage_profile::measure("replica_gradient_accumulate", || {
+        tch::no_grad(|| -> Result<(), TchTrainingError> {
+            for ((sum, gradient), parameter) in accumulated[replica]
+                .iter_mut()
+                .zip(gradients)
+                .zip(parameters)
+            {
+                if gradient.defined() {
+                    if gradient.is_sparse()
+                        || gradient.kind() != Kind::Float
+                        || gradient.device() != parameter.device()
+                        || gradient.size() != parameter.size()
+                    {
+                        return Err(TchTrainingError::Invalid(
+                            "replica gradient differs from its parameter contract",
+                        ));
+                    }
+                    *sum = Some(match sum.take() {
+                        Some(previous) => previous + gradient,
+                        None => gradient,
+                    });
                 }
-                *sum = Some(match sum.take() {
-                    Some(previous) => previous + gradient,
-                    None => gradient,
-                });
             }
-        }
-        Ok(())
+            Ok(())
+        })
     })?;
     let weight = local_count as f64 / batch_size as f64;
     losses.push(data.loss.detach().to_device(master_parameters[0].device()) * weight);

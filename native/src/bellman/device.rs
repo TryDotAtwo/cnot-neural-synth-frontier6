@@ -272,11 +272,13 @@ impl DevicePrimitiveBellman {
                 let probe_start = crate::stage_profile::candidate_chunk_start();
                 let size = (count - start).min(width) as i64;
                 let ordinals = primitive_indices.as_ref().map(|indices| indices.narrow(0, start as i64, size));
-                let packed = if sampling {
-                    self.selected_children(root, ordinals.as_ref().expect("sampled indices"))?
-                } else {
-                    self.children(root, start as i64, size)?
-                };
+                let packed = crate::stage_profile::measure("candidate_materialize", || {
+                    if sampling {
+                        self.selected_children(root, ordinals.as_ref().expect("sampled indices"))
+                    } else {
+                        self.children(root, start as i64, size)
+                    }
+                })?;
                 let packet = crate::stage_profile::measure("candidate_packet", || plan.build(&packed))?;
                 if strict_coverage {
                     valid = valid.logical_and(&packet.complete_coverage().map_err(|e| e.0)?);
@@ -289,16 +291,21 @@ impl DevicePrimitiveBellman {
                 } else {
                     &packet
                 };
-                let values = model
-                    .candidate_value_device(scoring_packet, share_candidate_wire_projections)
-                    .map_err(|e| e.0)?;
-                let costs = if sampling {
-                    self.costs.index_select(0, ordinals.as_ref().expect("sampled indices"))
-                } else {
-                    self.costs.narrow(0, start as i64, size)
-                };
-                let scores = values.view([size]).to_kind(Kind::Double) + costs;
-                valid = valid.logical_and(&scores.isfinite().all());
+                let values = crate::stage_profile::measure("candidate_model_forward", || {
+                    model
+                        .candidate_value_device(scoring_packet, share_candidate_wire_projections)
+                        .map_err(|e| e.0)
+                })?;
+                let scores = crate::stage_profile::measure("candidate_score", || {
+                    let costs = if sampling {
+                        self.costs.index_select(0, ordinals.as_ref().expect("sampled indices"))
+                    } else {
+                        self.costs.narrow(0, start as i64, size)
+                    };
+                    let scores = values.view([size]).to_kind(Kind::Double) + costs;
+                    valid = valid.logical_and(&scores.isfinite().all());
+                    scores
+                });
                 if nonterminal {
                     let (score, local) = scores.min_dim(0, false);
                     let index = if sampling {
@@ -340,16 +347,23 @@ impl DevicePrimitiveBellman {
         let mut group_activity = parent_packet.group_activity();
         let shared_parent = if early_parent.is_some() {
             early_parent
+        } else if model.uses_missing_tokens() {
+            Some(crate::stage_profile::measure("parent_model_forward", || {
+                model
+                    .training_forward_device(&parent_packet, share_training_wire_projections)
+                    .map_err(|e| e.0)
+            })?)
         } else {
-            model.uses_missing_tokens().then(|| model.training_forward_device(&parent_packet, share_training_wire_projections))
-                .transpose().map_err(|e| e.0)?
+            None
         };
         let value = match &shared_parent {
             Some(parent) => parent.value.view([]),
-            None => model
-                .candidate_value_device(&parent_packet, share_training_wire_projections)
-                .map_err(|e| e.0)?
-                .view([]),
+            None => crate::stage_profile::measure("parent_model_forward", || {
+                model
+                    .candidate_value_device(&parent_packet, share_training_wire_projections)
+                    .map_err(|e| e.0)
+            })?
+            .view([]),
         };
         let (residual, selected_index) = match winner {
             None => (value, None),
@@ -359,14 +373,22 @@ impl DevicePrimitiveBellman {
                     // Only the global winner is differentiated. When immutable
                     // chunk widths differ, evaluate that same row in each layout
                     // and gather its source-shaped value using its device index.
-                    let values = layout
-                        .signatures
-                        .iter()
-                        .map(|sig| {
-                            let packet = winner.packet.source_layout(sig)?;
-                            Ok(model.candidate_value_device(&packet, share_training_wire_projections).map_err(|e| e.0)?.view([]))
-                        })
-                        .collect::<Result<Vec<Tensor>, String>>()?;
+                    let values = crate::stage_profile::measure("winner_model_forward", || {
+                        layout
+                            .signatures
+                            .iter()
+                            .map(|sig| {
+                                let packet = winner.packet.source_layout(sig)?;
+                                Ok(model
+                                    .candidate_value_device(
+                                        &packet,
+                                        share_training_wire_projections,
+                                    )
+                                    .map_err(|e| e.0)?
+                                    .view([]))
+                            })
+                            .collect::<Result<Vec<Tensor>, String>>()
+                    })?;
                     if values.len() == 1 {
                         values.into_iter().next().expect("one signature")
                     } else {
@@ -377,10 +399,15 @@ impl DevicePrimitiveBellman {
                             .view([])
                     }
                 } else {
-                    model
-                        .candidate_value_device(&winner.packet, share_training_wire_projections)
-                        .map_err(|e| e.0)?
-                        .view([])
+                    crate::stage_profile::measure("winner_model_forward", || {
+                        model
+                            .candidate_value_device(
+                                &winner.packet,
+                                share_training_wire_projections,
+                            )
+                            .map_err(|e| e.0)
+                    })?
+                    .view([])
                 };
                 let cost = self
                     .costs
@@ -394,7 +421,11 @@ impl DevicePrimitiveBellman {
         // Older schemas retain the reference FP32 gradient accumulation order.
         let parent = match shared_parent {
             Some(parent) => parent,
-            None => model.training_forward_device(&parent_packet, share_training_wire_projections).map_err(|e| e.0)?,
+            None => crate::stage_profile::measure("parent_model_forward", || {
+                model
+                    .training_forward_device(&parent_packet, share_training_wire_projections)
+                    .map_err(|e| e.0)
+            })?,
         };
         valid = valid.logical_and(&loss.isfinite());
         Ok(DevicePrimitiveBackup {

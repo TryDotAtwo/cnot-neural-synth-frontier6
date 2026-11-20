@@ -40,8 +40,7 @@ impl RootF08 {
             while count > 1 && !plan.fits_workspace(roots.dimension(), count as usize)? {
                 count /= 2;
             }
-            let packet = plan.build(&roots.rows(start, count)?)?;
-            let f08 = packet.feature(id).ok_or("root F08 cache requires F08")?;
+            let f08 = plan.build_feature_entry(&roots.rows(start, count)?, id)?;
             if let Some(previous) = &spec {
                 if previous != f08.spec() { return Err("root F08 cache contract changed".into()); }
             } else {
@@ -107,9 +106,11 @@ impl DeviceTrainingData {
     ) -> Result<Self, String> {
         let device = Device::Cuda(index);
         let mut partitions: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        let _partition_stage = crate::stage_profile::stage("training_record_partition");
         for (i, r) in records.iter().enumerate() {
             partitions.entry(r.state.alphabet_id()).or_default().push(i);
         }
+        drop(_partition_stage);
         let mut metadata: Vec<Option<Record>> = (0..records.len()).map(|_| None).collect();
         let mut groups = Vec::new();
         for (id, indices) in partitions {
@@ -125,6 +126,7 @@ impl DeviceTrainingData {
             let mut targets = Vec::new();
             let mut teacher_indices = Vec::new();
             let mut deltas = Vec::new();
+            let _pack_stage = crate::stage_profile::stage("training_record_pack");
             for (row, i) in indices.iter().copied().enumerate() {
                 let record = &records[i];
                 let upper = admitted_upper_bound(
@@ -157,7 +159,9 @@ impl DeviceTrainingData {
                 targets.extend([upper as f64, record.exact_distance.unwrap_or(0) as f64]);
                 packed.extend(record.state.packed_rows().iter().map(|&w| w as i64));
             }
+            drop(_pack_stage);
             let count = indices.len() as i64;
+            let _upload_stage = crate::stage_profile::stage("training_tensor_upload");
             let roots = DeviceStateBatch::from_packed_tensor_for_alphabet(
                 Tensor::from_slice(&packed)
                     .view([count, i64::from(n), i64::from(n.div_ceil(64))])
@@ -178,10 +182,12 @@ impl DeviceTrainingData {
                 teacher_cost_deltas: Tensor::from_slice(&deltas).to_device(device),
                 root_f08: None,
             });
+            drop(_upload_stage);
         }
         // Complete the admission checks for every group before evaluating any
         // immutable root features.
         if objective.config.cache_root_f08 {
+            let _cache_stage = crate::stage_profile::stage("f08_root_cache_prepare");
             for group in &mut groups {
                 let width = group.roots.dimension();
                 group.root_f08 = Some(RootF08::prepare(&plans[&width], &group.roots)?);
@@ -197,7 +203,7 @@ impl DeviceTrainingData {
             if objective.feature_policy().schema_id == crate::schema::MISSING_TOKEN_LAYOUT_ID {
                 None
             } else {
-                Some(
+                Some(crate::stage_profile::measure("record_layout_prepare", || {
                     records
                         .iter()
                         .map(|record| {
@@ -210,8 +216,8 @@ impl DeviceTrainingData {
                                 group.neighbor_chunk_size,
                             )
                         })
-                        .collect::<Result<Vec<_>, String>>()?,
-                )
+                        .collect::<Result<Vec<_>, String>>()
+                })?)
             };
         Ok(Self {
             groups,

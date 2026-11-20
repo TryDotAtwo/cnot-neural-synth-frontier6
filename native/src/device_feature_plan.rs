@@ -211,6 +211,52 @@ impl DeviceFeaturePlan {
         self.build_with_root_f08(states, None)
     }
 
+    /// Compute one selected feature without materializing the packet matrix.
+    /// This uses the same width applicability and provider status path as build().
+    pub(crate) fn build_feature_entry(
+        &self,
+        states: &DeviceStateBatch,
+        id: FeatureId,
+    ) -> Result<DeviceFeatureEntry, String> {
+        let _phase = crate::stage_profile::stage("single_feature_packet");
+        let spec = self
+            .specs
+            .iter()
+            .find(|spec| spec.id == id)
+            .ok_or_else(|| format!("{id} is not selected by the GPU feature plan"))?;
+        let device = Device::Cuda(self.device_index);
+        if states.tensor().device() != device {
+            return Err("GPU feature plan and state batch use different devices".into());
+        }
+        if self
+            .contexts
+            .as_ref()
+            .is_some_and(|contexts| contexts.dimension != states.dimension())
+        {
+            return Err("GPU contextual plan and state batch use different widths".into());
+        }
+        if self
+            .contexts
+            .as_ref()
+            .is_some_and(|contexts| contexts.unsupported_at_width.contains(&id))
+        {
+            return Ok(budget::unavailable(
+                spec,
+                states.batch_size(),
+                i64::from(states.dimension()),
+                device,
+                DeviceFeatureStatus::Unsupported,
+            ));
+        }
+        let _device_guard = crate::cuda::DeviceGuard::enter(self.device_index)?;
+        let (_, mut entries) =
+            self.compute_available(states, std::slice::from_ref(spec), None, false)?;
+        if entries.len() != 1 || entries[0].spec() != spec {
+            return Err(format!("{id} single-feature computation returned a different contract"));
+        }
+        Ok(entries.remove(0))
+    }
+
     pub(crate) fn build_with_root_f08(
         &self,
         states: &DeviceStateBatch,
@@ -258,19 +304,28 @@ impl DeviceFeaturePlan {
                 .iter()
                 .cloned()
                 .partition(|s| contexts.unsupported_at_width.contains(&s.id));
-            let (matrix, mut entries) = self.compute_available(states, &active, cached_f08)?;
+            let (matrix, mut entries) =
+                self.compute_available(states, &active, cached_f08, true)?;
+            let device = states.tensor().device();
             entries.extend(missing.iter().map(|s| {
                 budget::unavailable(
                     s,
                     states.batch_size(),
                     i64::from(states.dimension()),
-                    matrix.device(),
+                    device,
                     DeviceFeatureStatus::Unsupported,
                 )
             }));
-            Ok((matrix, entries))
+            Ok((
+                matrix.ok_or("feature packet matrix was not materialized")?,
+                entries,
+            ))
         } else {
-            self.compute_available(states, specs, cached_f08)
+            let (matrix, entries) = self.compute_available(states, specs, cached_f08, true)?;
+            Ok((
+                matrix.ok_or("feature packet matrix was not materialized")?,
+                entries,
+            ))
         }
     }
 
@@ -279,7 +334,8 @@ impl DeviceFeaturePlan {
         states: &DeviceStateBatch,
         specs: &[FeatureSpec],
         cached_f08: Option<&DeviceFeatureEntry>,
-    ) -> Result<(Tensor, Vec<DeviceFeatureEntry>), String> {
+        include_matrix: bool,
+    ) -> Result<(Option<Tensor>, Vec<DeviceFeatureEntry>), String> {
         let device = states.tensor().device();
         let status = Tensor::full(
             [states.batch_size()],
@@ -340,12 +396,21 @@ impl DeviceFeaturePlan {
                     entries.push(diffusion.project(states, &a, spec)?);
                 }
             }
-            a.feature(1)
-                .ok_or("A01 matrix tensor is missing")?
-                .squeeze_dim(-1)
+            Some(
+                a.feature(1)
+                    .ok_or("A01 matrix tensor is missing")?
+                    .squeeze_dim(-1),
+            )
+        } else if include_matrix {
+            Some(
+                crate::device_state::unpack_matrix(
+                    states.tensor(),
+                    i64::from(states.dimension()),
+                )
+                .to_kind(Kind::Float),
+            )
         } else {
-            crate::device_state::unpack_matrix(states.tensor(), i64::from(states.dimension()))
-                .to_kind(Kind::Float)
+            None
         };
         if let Some(contexts) = &self.contexts {
             contexts.append_entries(states, specs, &status, &mut entries, cached_f08)?;

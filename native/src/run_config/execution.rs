@@ -44,7 +44,7 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
     for &index in &devices {
         crate::torch_device::require_cuda_device(index)?;
     }
-    profile.device(manifest.training.cuda_device);
+    profile.devices(&devices);
     let replica_device = devices.get(1).copied();
     let pinned = artifacts::load(&manifest, &paths)?;
     let widths: std::collections::BTreeSet<u32> = pinned.dataset.train.records().iter().map(|r| r.state.dimension()).collect();
@@ -203,7 +203,7 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
         }
         Ok(())
     })?;
-    profile.device(manifest.training.cuda_device);
+    profile.devices(&devices);
     let replica_device = devices.get(1).copied();
     let pinned = artifacts::load(&manifest, &paths)?;
     let widths: std::collections::BTreeSet<u32> = pinned

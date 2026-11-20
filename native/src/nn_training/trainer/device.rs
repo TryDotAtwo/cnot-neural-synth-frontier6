@@ -67,7 +67,7 @@ impl NeuralTrainer {
         self.poisoned = true;
         let result = (|| {
             for _ in 0..attempts {
-                let indices = sampler.next(batch_size)?;
+                let indices = crate::stage_profile::measure("sampler", || sampler.next(batch_size))?;
                 let data = crate::stage_profile::measure("bellman_and_loss", || {
                     objective(state, &indices)
                 })
@@ -85,7 +85,9 @@ impl NeuralTrainer {
                     tch::no_grad(|| flat.update(&mut self.optimizer, &data, &grads))
                 })?;
             }
-            flat.finish(&mut self.optimizer, || commit_audit(state))
+            crate::stage_profile::measure("interval_audit_commit", || {
+                flat.finish(&mut self.optimizer, || commit_audit(state))
+            })
         })();
         match result {
             Ok((accepted, last)) => {

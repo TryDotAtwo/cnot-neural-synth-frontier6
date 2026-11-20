@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 struct Trace {
     device: Option<usize>,
+    devices: Vec<usize>,
     stack: Vec<Duration>,
     stages: BTreeMap<&'static str, (u64, Duration, Duration)>,
     chunk_limit: Option<u64>,
@@ -76,7 +77,22 @@ impl Session {
 
     pub(crate) fn device(&self, index: usize) {
         if self.0.is_some() {
-            TRACE.with(|t| t.borrow_mut().device = Some(index));
+            TRACE.with(|t| {
+                let mut trace = t.borrow_mut();
+                trace.device = Some(index);
+                trace.devices = vec![index];
+            });
+        }
+    }
+
+    /// Record all CUDA devices whose queued work must finish at stage boundaries.
+    pub(crate) fn devices(&self, indices: &[usize]) {
+        if self.0.is_some() {
+            TRACE.with(|t| {
+                let mut trace = t.borrow_mut();
+                trace.device = indices.first().copied();
+                trace.devices = indices.to_vec();
+            });
         }
     }
 
@@ -88,6 +104,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         if let Some(start) = self.0 {
+            synchronize_devices();
             ACTIVE.with(|a| a.set(false));
             TRACE.with(|trace| {
                 let trace = trace.take();
@@ -162,6 +179,13 @@ mod candidate_chunk_offset_tests {
     }
 }
 
+fn synchronize_devices() {
+    let devices = TRACE.with(|trace| trace.borrow().devices.clone());
+    for index in devices {
+        tch::Cuda::synchronize(index as i64);
+    }
+}
+
 /// Start an independent timing sample only for a bounded candidate probe.
 pub(crate) fn candidate_chunk_start() -> Option<Instant> {
     if !ACTIVE.with(Cell::get) {
@@ -223,13 +247,8 @@ pub(crate) fn stage(name: &'static str) -> Stage {
     if !ACTIVE.with(Cell::get) {
         return Stage(None);
     }
-    TRACE.with(|t| {
-        let mut trace = t.borrow_mut();
-        if let Some(i) = trace.device {
-            tch::Cuda::synchronize(i as i64);
-        }
-        trace.stack.push(Duration::ZERO);
-    });
+    synchronize_devices();
+    TRACE.with(|t| t.borrow_mut().stack.push(Duration::ZERO));
     progress("begin", name);
     Stage(Some((name, Instant::now())))
 }
@@ -237,11 +256,9 @@ pub(crate) fn stage(name: &'static str) -> Stage {
 impl Drop for Stage {
     fn drop(&mut self) {
         if let Some((name, start)) = self.0 {
+            synchronize_devices();
             TRACE.with(|t| {
                 let mut trace = t.borrow_mut();
-                if let Some(i) = trace.device {
-                    tch::Cuda::synchronize(i as i64);
-                }
                 let elapsed = start.elapsed();
                 let children = trace.stack.pop().expect("profiling scope");
                 if let Some(parent) = trace.stack.last_mut() {

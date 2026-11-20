@@ -30,13 +30,15 @@ impl<'a> FullGraphObjectiveRunner<'a> {
         if self.objective.config.prevalidated_device_closure {
             self.objective.closure_verified = false;
         }
-        let data = DeviceTrainingData::prepare(
-            self.objective,
-            self.records,
-            self.admission,
-            plans,
-            index,
-        )?;
+        let data = crate::stage_profile::measure("device_training_data_prepare", || {
+            DeviceTrainingData::prepare(
+                self.objective,
+                self.records,
+                self.admission,
+                plans,
+                index,
+            )
+        })?;
         // `prepare` has checked every record and every primitive successor;
         // the runner is bound to exactly those ordered records and alphabets.
         if self.objective.config.prevalidated_device_closure {
@@ -69,20 +71,24 @@ impl<'a> FullGraphObjectiveRunner<'a> {
         if self.objective.config.prevalidated_device_closure {
             self.objective.closure_verified = false;
         }
-        let primary = DeviceTrainingData::prepare(
-            self.objective,
-            self.records,
-            self.admission,
-            primary_plans,
-            primary_index,
-        )?;
-        let replica = DeviceTrainingData::prepare(
-            self.objective,
-            self.records,
-            self.admission,
-            replica_plans,
-            replica_index,
-        )?;
+        let primary = crate::stage_profile::measure("primary_training_data_prepare", || {
+            DeviceTrainingData::prepare(
+                self.objective,
+                self.records,
+                self.admission,
+                primary_plans,
+                primary_index,
+            )
+        })?;
+        let replica = crate::stage_profile::measure("replica_training_data_prepare", || {
+            DeviceTrainingData::prepare(
+                self.objective,
+                self.records,
+                self.admission,
+                replica_plans,
+                replica_index,
+            )
+        })?;
         if self.objective.config.prevalidated_device_closure {
             self.objective.closure_verified = true;
         }
