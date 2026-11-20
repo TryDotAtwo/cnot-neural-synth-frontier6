@@ -1,0 +1,34 @@
+name: Hugging Face feature-profile source check
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/scripts/validate_hf_feature_profile.py
+      - .github/scripts/test_validate_hf_feature_profile.py
+      - .github/workflows/validate-hf-feature-profile.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tqp-hf-feature-profile-check
+  cancel-in-progress: true
+
+jobs:
+  validate-profile:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test the redacted profile validator
+        run: python3 -m unittest discover -s .github/scripts -p 'test_validate_hf_feature_profile.py' -v
+      - name: Validate the public candidate without publishing it
+        run: python3 .github/scripts/validate_hf_feature_profile.py
