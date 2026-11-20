@@ -341,7 +341,7 @@ def create_once(offer_id: str, label: str) -> dict:
 def api_instance_id(instance: int, state: str, label: str | None = None) -> bool:
     payload = {"state": state}
     if label is not None:
-        if not isinstance(label, str) or not label or len(label) > 64 or "\\n" in label:
+        if not isinstance(label, str) or not label or len(label) > 64 or "\n" in label:
             raise GateError("instance control label is invalid")
         payload["label"] = label
     response = probe.api_json(
