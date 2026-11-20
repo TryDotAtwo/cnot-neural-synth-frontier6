@@ -49,6 +49,17 @@ class HFProfileValidationTests(unittest.TestCase):
         self.assertEqual(paths, ["profiles/feature_contexts.json"])
         self.assertEqual(len(calls), 2)
 
+    def test_inspect_profile_limits_candidate_json_count(self):
+        paths = [f"profiles/context_profile_{index}.json" for index in range(33)]
+
+        status = inspect_profile(
+            fetch_page=lambda _url: (paths, None),
+            fetch_file=lambda *_args: self.fail("candidate limit must stop before downloads"),
+            revision_getter=lambda: "b" * 40,
+        )
+
+        self.assertEqual(status, "candidate_limit_exceeded")
+
     def test_invalid_revision_and_repeated_pagination_fail(self):
         with self.assertRaises(ProfileCheckError):
             list_candidate_paths("main", fetch_page=lambda _: ([], None))
