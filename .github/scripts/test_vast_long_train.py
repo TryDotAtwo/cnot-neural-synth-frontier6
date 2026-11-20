@@ -164,5 +164,59 @@ class RunLockTests(unittest.TestCase):
             self.assertFalse(controller.may_launch_run(status))
 
 
+    def test_run_lock_state_transitions_keep_retries_read_only_and_terminal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(
+                controller.claim_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA
+                ),
+                "reserved",
+            )
+            self.assertEqual(
+                controller.transition_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA, "running"
+                ),
+                "updated",
+            )
+            self.assertEqual(
+                controller.claim_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA
+                ),
+                "already_running",
+            )
+            self.assertEqual(
+                controller.transition_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA, "succeeded"
+                ),
+                "updated",
+            )
+            self.assertEqual(
+                controller.claim_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA
+                ),
+                "already_succeeded",
+            )
+            self.assertEqual(
+                controller.transition_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA, "failed"
+                ),
+                "invalid_transition",
+            )
+
+    def test_run_lock_transition_rejects_manifest_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            controller.claim_run_lock(
+                root, self.RUN_KEY, self.SOURCE_SHA, self.MANIFEST_SHA
+            )
+            self.assertEqual(
+                controller.transition_run_lock(
+                    root, self.RUN_KEY, self.SOURCE_SHA, "d" * 64, "running"
+                ),
+                "identity_mismatch",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
