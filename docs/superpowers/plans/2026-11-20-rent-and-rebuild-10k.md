@@ -12,7 +12,7 @@
 
 ## Global Constraints
 - Vast control and SSH run only on GitHub-hosted runners.
-- Total project spend plus 51-hour forecast plus transfer reserve must stay at or below $20.
+- Total project spend plus the 51-hour forecast, seven days of stopped storage, and a $0.25 status-only transfer reserve must stay at or below $20.
 - Public outputs contain only time, query result, and allowlisted status.
 - Data, hashes, receipts, and private results stay on the retained Vast disk.
 - Cleanup stops only the exact stable-label instance and never destroys it.
