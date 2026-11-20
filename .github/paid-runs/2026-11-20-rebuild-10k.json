@@ -5,5 +5,10 @@
   "stopped_storage_reserve_hours": 168,
   "preserve_remote_disk": true,
   "attempt": 7,
-  "reason": "recheck the $20 cap with 51h compute, seven days stopped storage, and status-only transfer reserve"
+  "reason": "recheck the $20 cap with 51h compute, seven days stopped storage, and status-only transfer reserve",
+  "authorization": {
+    "approved": true,
+    "approved_at_utc": "2026-11-20",
+    "scope": "single 2x RTX 3060 dataset rebuild; total Vast cap USD 20"
+  }
 }
