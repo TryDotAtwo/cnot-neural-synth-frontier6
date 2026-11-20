@@ -66,10 +66,13 @@ fn test_device() -> Device {
     }
 }
 
-fn new_run() -> (VarStore, Tensor, NeuralTrainer) {
+fn new_run() -> (VarStore, Tensor, Tensor, NeuralTrainer) {
     let mut variables = VarStore::new(test_device());
     variables.set_kind(Kind::Double);
     let weight = variables.root().var("weight", &[1], nn::Init::Const(0.25));
+    let rare_group = variables
+        .root()
+        .var("rare_group", &[1], nn::Init::Const(0.75));
     let mut trainer = NeuralTrainer::new(
         &variables,
         Sampler::new(DATASET_SIZE, SEED).expect("create sampler"),
@@ -78,16 +81,29 @@ fn new_run() -> (VarStore, Tensor, NeuralTrainer) {
     .expect("create trainer");
     trainer.set_objective_state(b"objective-state-v1".to_vec());
     trainer.set_rng_state(b"caller-rng-state-v1".to_vec());
-    (variables, weight, trainer)
+    (variables, weight, rare_group, trainer)
 }
 
-fn run_updates(trainer: &mut NeuralTrainer, weight: &Tensor, count: usize) {
+fn run_updates(
+    trainer: &mut NeuralTrainer,
+    weight: &Tensor,
+    rare_group: &Tensor,
+    count: usize,
+) {
     for _ in 0..count {
+        let rare_group_active = trainer.progress().attempted % 2 == 0;
         let outcome = trainer
             .step(BATCH_SIZE, |indices| {
                 let target =
                     indices.iter().map(|index| *index as f64).sum::<f64>() / indices.len() as f64;
-                Ok((weight - target).pow_tensor_scalar(2.0).mean(Kind::Double))
+                let loss = (weight - target).pow_tensor_scalar(2.0).mean(Kind::Double);
+                if rare_group_active {
+                    loss + (rare_group - target * 0.1)
+                        .pow_tensor_scalar(2.0)
+                        .mean(Kind::Double)
+                } else {
+                    loss
+                }
             })
             .expect("training update");
         assert!(outcome.accepted);
@@ -95,9 +111,10 @@ fn run_updates(trainer: &mut NeuralTrainer, weight: &Tensor, count: usize) {
     }
 }
 
-fn summary(trainer: &NeuralTrainer, weight: &Tensor) -> Value {
+fn summary(trainer: &NeuralTrainer, weight: &Tensor, rare_group: &Tensor) -> Value {
     json!({
         "weight": weight.double_value(&[0]),
+        "rare_group": rare_group.double_value(&[0]),
         "progress": trainer.progress(),
         "optimizer_steps": trainer.optimizer_steps(),
         "sampler": trainer.sampler_snapshot(),
@@ -112,12 +129,18 @@ fn fresh_process_resume_matches_uninterrupted() {
     let store = CheckpointStore::new(temp.path().join("checkpoint"));
     let expected_contract = contract();
 
-    let (variables, weight, mut uninterrupted) = new_run();
-    run_updates(&mut uninterrupted, &weight, TOTAL_COUNT);
-    let expected = summary(&uninterrupted, &weight);
+    let (variables, weight, rare_group, mut uninterrupted) = new_run();
+    run_updates(&mut uninterrupted, &weight, &rare_group, TOTAL_COUNT);
+    let expected = summary(&uninterrupted, &weight, &rare_group);
 
-    let (variables_before_split, weight_before_split, mut split) = new_run();
-    run_updates(&mut split, &weight_before_split, SPLIT_COUNT);
+    let (variables_before_split, weight_before_split, rare_group_before_split, mut split) =
+        new_run();
+    run_updates(
+        &mut split,
+        &weight_before_split,
+        &rare_group_before_split,
+        SPLIT_COUNT,
+    );
     split
         .save_checkpoint(&variables_before_split, &store, expected_contract, false)
         .expect("save split checkpoint");
@@ -156,16 +179,16 @@ fn fresh_process_resume_child() {
         return;
     };
 
-    let (mut variables, weight, mut trainer) = new_run();
+    let (mut variables, weight, rare_group, mut trainer) = new_run();
     let store = CheckpointStore::new(store_path);
     trainer
         .restore_checkpoint(&mut variables, &store, &contract())
         .expect("restore checkpoint in fresh process");
-    run_updates(&mut trainer, &weight, TOTAL_COUNT - SPLIT_COUNT);
+    run_updates(&mut trainer, &weight, &rare_group, TOTAL_COUNT - SPLIT_COUNT);
 
     fs::write(
         output_path,
-        serde_json::to_vec(&summary(&trainer, &weight)).expect("encode summary"),
+        serde_json::to_vec(&summary(&trainer, &weight, &rare_group)).expect("encode summary"),
     )
     .expect("write fresh-process summary");
 }
@@ -176,7 +199,7 @@ fn finite_loss_with_overflowing_adam_moments_requires_restore() {
     let store = CheckpointStore::new(temp.path().join("checkpoint"));
     let expected_contract = contract();
 
-    let (mut variables, weight, mut trainer) = new_run();
+    let (mut variables, weight, _rare_group, mut trainer) = new_run();
     trainer
         .save_checkpoint(&variables, &store, expected_contract.clone(), false)
         .expect("save pre-failure checkpoint");
