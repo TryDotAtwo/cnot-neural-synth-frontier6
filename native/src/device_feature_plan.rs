@@ -241,7 +241,13 @@ impl DeviceFeaturePlan {
         let rows =
             usize::try_from(states.batch_size()).map_err(|_| "invalid GPU packet batch")?;
         if !self.fits_workspace(states.dimension(), rows)? {
-            return Err("single-feature cache exceeds the configured feature workspace".into());
+            return Ok(budget::unavailable(
+                spec,
+                states.batch_size(),
+                i64::from(states.dimension()),
+                device,
+                DeviceFeatureStatus::ResourceLimit,
+            ));
         }
         if self
             .contexts
