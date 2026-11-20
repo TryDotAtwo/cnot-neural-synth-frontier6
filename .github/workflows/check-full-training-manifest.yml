@@ -1,0 +1,29 @@
+name: CNOT full-training manifest checks
+
+on:
+  push:
+    branches:
+      - codex/full-feature-train-workflow
+    paths:
+      - .github/scripts/build_training_manifest.py
+      - .github/scripts/test_build_training_manifest.py
+      - .github/workflows/check-full-training-manifest.yml
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test the training manifest contract
+        run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py' -v
