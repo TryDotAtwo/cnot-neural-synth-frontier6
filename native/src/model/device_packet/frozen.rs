@@ -84,6 +84,18 @@ impl DeviceFeaturePacket {
     /// Keep just one winning row. The decision and every selected value, status,
     /// token mask and physical incidence stay on the device. No chunk is held
     /// alive by a view of its winning row.
+    /// Freeze the selected row before deriving optimizer participation. Rows that
+    /// lose this chunk's detached minimum must not activate their AdamW groups.
+    pub(crate) fn freeze_winner_with_activity(
+        &self,
+        local_index: &Tensor,
+        incumbent: Option<(&Self, &Tensor)>,
+    ) -> (Self, Tensor) {
+        let packet = self.freeze_winner(local_index, incumbent);
+        let activity = packet.group_activity();
+        (packet, activity)
+    }
+
     pub(crate) fn freeze_winner(
         &self,
         local_index: &Tensor,

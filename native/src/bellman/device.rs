@@ -314,21 +314,23 @@ impl DevicePrimitiveBellman {
                     } else {
                         &local + start as i64
                     };
-                    let activity = packet.group_activity();
                     winner = Some(match winner {
-                        None => Winner {
-                            score,
-                            index,
-                            packet: packet.freeze_winner(&local, None),
-                            group_activity: activity,
-                        },
+                        None => {
+                            let (packet, group_activity) =
+                                packet.freeze_winner_with_activity(&local, None);
+                            Winner { score, index, packet, group_activity }
+                        }
                         Some(old) => {
                             let replace = score.lt_tensor(&old.score);
+                            let (packet, group_activity) = packet.freeze_winner_with_activity(
+                                &local,
+                                Some((&old.packet, &replace)),
+                            );
                             Winner {
                                 score: score.where_self(&replace, &old.score),
                                 index: index.where_self(&replace, &old.index),
-                                packet: packet.freeze_winner(&local, Some((&old.packet, &replace))),
-                                group_activity: activity.where_self(&replace, &old.group_activity),
+                                packet,
+                                group_activity,
                             }
                         }
                     });
