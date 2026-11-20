@@ -146,8 +146,7 @@ fn explicit_context_bundle_parses_and_binds_multi_width_c10() {
     assert!(FeatureRegistry::with_all_model_input_providers(duplicate.build().unwrap()).is_err());
 }
 
-#[test]
-fn complete_manifest_parses_with_explicit_null_limits() {
+fn complete_manifest_value() -> Value {
     let contexts = explicit_test_contexts_json();
     let alphabet = contexts["alphabet"].clone();
     let value = json!({
@@ -181,31 +180,18 @@ fn complete_manifest_parses_with_explicit_null_limits() {
         "alphabets":[alphabet],
         "feature_contexts":contexts
     });
+    value
+}
+
+#[test]
+fn complete_manifest_parses_with_explicit_null_limits() {
+    let value = complete_manifest_value();
     let parsed = parse_run_manifest(&serde_json::to_vec(&value).unwrap())
         .expect("complete manifest must parse without opening its artifacts");
     assert_eq!(
         parsed.validate_feature_profile().unwrap(),
         crate::schema::MODEL_INPUT_COUNT
     );
-    let mut incompatible = value.clone();
-    let objective_gates: Vec<_> = (0..4)
-        .flat_map(|control| {
-            (0..4).filter_map(move |target| {
-                (control != target).then(|| json!({"control":control,"target":target}))
-            })
-        })
-        .collect();
-    incompatible["alphabets"] = json!([{
-        "dimension":4,
-        "id":"all_to_all_unit_cnot:4",
-        "gates":objective_gates,
-        "costs":vec![1; 12]
-    }]);
-    let parsed = parse_run_manifest(&serde_json::to_vec(&incompatible).unwrap()).unwrap();
-    let error = parsed
-        .validate_feature_profile()
-        .expect_err("feature contexts must use an objective alphabet");
-    assert!(error.contains("feature-context alphabet must exactly match an objective alphabet"));
     assert_eq!(parsed.training.attempts, 1);
     let mut zero_target = value.clone();
     zero_target["training"]["target_attempts"] = json!(0);
@@ -286,6 +272,29 @@ fn complete_manifest_parses_with_explicit_null_limits() {
         parsed.feature_policy.schema_id,
         crate::schema::MISSING_TOKEN_LAYOUT_ID
     );
+}
+
+#[test]
+fn feature_profile_rejects_context_alphabet_absent_from_objectives() {
+    let mut incompatible = complete_manifest_value();
+    let objective_gates: Vec<_> = (0..4)
+        .flat_map(|control| {
+            (0..4).filter_map(move |target| {
+                (control != target).then(|| json!({"control":control,"target":target}))
+            })
+        })
+        .collect();
+    incompatible["alphabets"] = json!([{
+        "dimension":4,
+        "id":"all_to_all_unit_cnot:4",
+        "gates":objective_gates,
+        "costs":vec![1; 12]
+    }]);
+    let parsed = parse_run_manifest(&serde_json::to_vec(&incompatible).unwrap()).unwrap();
+    let error = parsed
+        .validate_feature_profile()
+        .expect_err("feature contexts must use an objective alphabet");
+    assert!(error.contains("feature-context alphabet must exactly match an objective alphabet"));
 }
 
 #[test]
