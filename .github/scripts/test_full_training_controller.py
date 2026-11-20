@@ -233,5 +233,38 @@ class FullTrainingBudgetTests(unittest.TestCase):
 
         stop.assert_called_once_with(run_label, "123", "1")
 
+
+    def test_cleanup_stops_legacy_target_after_matching_run_owner_stamp(self):
+        old_label = "cnot103-r10k-44749514754-a1"
+        running = {
+            "id": 123,
+            "label": old_label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "running",
+            "dph_total": 0.20,
+            "storage_cost": 0.15,
+        }
+        stopped = {**running, "actual_status": "stopped"}
+        with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
+            patch.object(controller.base, "instance_rows", side_effect=[[running], [stopped]]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller, "RemoteSession") as session_factory,
+            patch.object(controller, "_read_remote_owner", return_value=True),
+            patch.object(controller, "_read_remote_status", return_value=("completed", "passed", 100.0, 1.0)),
+            patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "full_run_budget_allows", return_value=True),
+            patch.object(controller, "_summarize"),
+        ):
+            session_factory.return_value.close.return_value = "detached"
+            self.assertEqual(controller.cleanup(), 0)
+
+        stop.assert_called_once_with(old_label, "123", "1")
+
 if __name__ == "__main__":
     unittest.main()
