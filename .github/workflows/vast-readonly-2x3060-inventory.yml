@@ -93,14 +93,11 @@ jobs:
             printf 'vast_inventory=%s\n' "$INVENTORY"
             printf 'vast_volume_attachment=%s\n' "$VOLUME"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Resolve the prior rebuild run by commit
+      - name: Resolve the latest rebuild run
         if: always()
         uses: actions/github-script@v7
-        env:
-          TARGET_SHA: 0b2c15a33259e118a68e0ba64632cc935391b79d
         with:
           script: |
-            const targetSha = process.env.TARGET_SHA;
             const runsResponse = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -108,15 +105,17 @@ jobs:
               branch: "codex/2x3060-full-feature-training",
               per_page: 100,
             });
-            const run = (runsResponse.data.workflow_runs || []).find(item => item.head_sha === targetSha);
+            const run = (runsResponse.data.workflow_runs || [])[0] || null;
             let disposition = "not_found";
             let targetUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
             let state = "failure";
+            let targetSha = context.sha;
             if (run) {
+              targetSha = run.head_sha;
               targetUrl = run.html_url;
-              state = run.status === "completed" ? "success" : "pending";
               disposition = "running";
               if (run.status === "completed") {
+                state = run.conclusion === "success" ? "success" : "failure";
                 const jobsResponse = await github.rest.actions.listJobsForWorkflowRun({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -125,22 +124,23 @@ jobs:
                 });
                 const steps = (jobsResponse.data.jobs || []).flatMap(job => job.steps || []);
                 const preflight = steps.find(step => step.name === "Parse and test controller before Vast access");
-                const rent = steps.find(step => step.name === "Rent once and rebuild on the remote disk");
+                const rebuild = steps.find(step => step.name === "Resume exact stopped target and rebuild on its disk");
                 const cleanup = steps.find(step => step.name === "Stop only this run's instance and remove its temporary keys");
                 if (run.conclusion === "success") disposition = "completed";
-                else if (preflight?.conclusion === "failure") disposition = "preflight_failed";
-                else if (rent?.conclusion === "skipped") disposition = "rent_skipped";
                 else if (cleanup?.conclusion === "failure") disposition = "cleanup_failed";
-                else if (rent?.conclusion === "failure") disposition = "rent_failed";
+                else if (preflight?.conclusion === "failure") disposition = "preflight_failed";
+                else if (rebuild?.conclusion === "failure") disposition = "rebuild_failed";
                 else disposition = "failed";
+              } else {
+                state = "pending";
               }
             }
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: validSha ? targetSha : context.sha,
+              sha: targetSha,
               state,
-              context: "CNOT attempt 8 disposition",
+              context: "CNOT latest rebuild disposition",
               description: disposition,
               target_url: targetUrl,
             });
