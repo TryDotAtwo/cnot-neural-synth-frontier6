@@ -45,11 +45,12 @@ class OfferAndBudgetTests(unittest.TestCase):
         self.assertTrue(controller.budget_allows(5.0, 0.24, run_hours=50, reserve=3.0))
         self.assertFalse(controller.budget_allows(5.0, 0.241, run_hours=50, reserve=3.0))
 
-    def test_stopped_storage_is_in_budget_reserve(self):
+    def test_stopped_storage_and_48h_run_projection_fit_the_budget(self):
         reserve = controller.total_reserve(0.15)
         self.assertAlmostEqual(reserve, 4.24)
-        self.assertTrue(controller.budget_allows(0.0, 0.28, run_hours=55, reserve=reserve))
-        self.assertFalse(controller.budget_allows(0.0, 0.29, run_hours=55, reserve=reserve))
+        self.assertEqual(controller.RUN_HOURS, 51.0)
+        self.assertTrue(controller.budget_allows(0.0, 0.30, reserve=reserve))
+        self.assertFalse(controller.budget_allows(0.0, 0.31, reserve=reserve))
 
     def test_budget_gate_reports_whether_history_or_offer_price_blocks_rent(self):
         rows = [offer(10)]
