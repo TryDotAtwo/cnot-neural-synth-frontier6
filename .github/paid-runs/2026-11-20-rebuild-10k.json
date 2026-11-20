@@ -1,9 +1,9 @@
 {
   "action": "one-shot 2x RTX 3060 frozen 10k rebuild",
   "max_total_usd": 20,
-  "projected_active_hours": 55,
+  "projected_active_hours": 51,
   "stopped_storage_reserve_hours": 168,
   "preserve_remote_disk": true,
-  "attempt": 3,
-  "reason": "recheck user-authorized rebuild against fresh total spend and offer gate"
+  "attempt": 4,
+  "reason": "reserve the 48h training target plus the 175-minute rebuild workflow; recheck the $20 gate"
 }
