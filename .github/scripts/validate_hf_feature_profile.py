@@ -60,7 +60,7 @@ def is_candidate_path(path: str) -> bool:
         "feature" in basename and ("context" in basename or "profile" in basename)
     ) or ("context" in basename and "profile" in basename)
     profile_directory = bool(
-        parents & {"profile", "profiles", "feature_profiles", "feature_context_profiles"}
+        parents & {"profile", "profiles", "feature_profiles", "feature_context_profiles", "feature_contexts"}
     ) and ("context" in basename or "profile" in basename)
     return suffix in PROFILE_SUFFIXES and (named_profile or profile_directory)
 
