@@ -28,6 +28,7 @@ MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 MAX_STOP_SECONDS = 300
 MONITOR_SECONDS = 5 * 60 * 60 + 30 * 60
 POLL_SECONDS = 60
+STARTUP_WAIT_SECONDS = 3 * 60 * 60
 PROFILE_PATH = ".github/training-profiles/n10-test-support-v1.json"
 MARKER_PATH = pathlib.Path(__file__).resolve().parents[1] / "paid-runs" / "2026-11-20-full-training.json"
 
@@ -53,8 +54,6 @@ QUALITY_STATES = {"not_ready", "measured", "passed", "failed", "unavailable"}
 class GateError(RuntimeError):
     pass
 
-
-START_REQUESTED_LABEL: str | None = None
 
 
 def _finite(value: object) -> float | None:
@@ -213,18 +212,12 @@ def _launch_script(
     holdout_sha256: str,
     started_at_epoch: float,
     budget_baseline: float,
+    run_id: str,
+    attempt: str,
+    instance_id: int,
 ) -> str:
     q = shlex.quote
     source = root + "/source"
-    command = (
-        "nohup setsid python3 " + q(source + "/.github/scripts/run_full_training.py")
-        + " --root " + q(root)
-        + " --source-revision " + q(source_revision)
-        + " --holdout-revision " + q(holdout_revision)
-        + " --holdout-sha256 " + q(holdout_sha256)
-        + " --started-at-epoch " + q(str(started_at_epoch))
-        + " --budget-baseline " + q(str(budget_baseline))
-    )
     return f"""set -euo pipefail
 ROOT={q(root)}
 SOURCE={q(source)}
@@ -245,6 +238,25 @@ if ! git -C "$SOURCE" checkout --quiet --detach {q(source_revision)} >/dev/null 
   printf 'full_training=source_failed\\n'
   exit 11
 fi
+python3 - "$ROOT/owner.private.json" <<'PY'
+import json
+import os
+import sys
+value = {{
+    "schema": "cnot103_full_training_owner_v1",
+    "run_id": {run_id!r},
+    "attempt": {attempt!r},
+    "source_revision": {source_revision!r},
+    "instance_id": {instance_id},
+    "workspace": {root!r},
+}}
+descriptor = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(value, output, sort_keys=True, separators=(",", ":"))
+    output.write("\\n")
+    output.flush()
+    os.fsync(output.fileno())
+PY
 nohup setsid python3 {q(source + "/.github/scripts/run_full_training.py")} \\
   --root {q(root)} \\
   --source-revision {q(source_revision)} \\
@@ -259,7 +271,6 @@ sleep 3
 kill -0 "$PID" 2>/dev/null || {{ printf 'full_training=launch_failed\\n'; exit 12; }}
 printf 'full_training=launched\\n'
 """
-
 
 def _attach_and_remote(
     row: dict, run_id: str, attempt: str, script: str, timeout_seconds: int
@@ -323,35 +334,94 @@ class RemoteSession:
         return result
 
 
+def _wait_for_exact_instance(ident: int, label: str, deadline: float) -> dict:
+    """Poll GET inventory for one exact ID without starting or stopping it."""
+    while True:
+        rows = base.instance_rows()
+        labeled = base.resolve_label(rows, label)
+        if labeled is not None and base.instance_id(labeled) != ident:
+            raise GateError("target instance id changed while waiting")
+        row = next((item for item in rows if base.instance_id(item) == ident), None)
+        if row is not None:
+            if row.get("label") != label:
+                raise GateError("target label changed while waiting")
+            state = base.probe.observed_state(row)
+            if state in {"running", "stopped", "exited"}:
+                if not base.is_2x3060(row):
+                    raise GateError("target GPU inventory does not match")
+                return row
+            if state in {"error", "offline"}:
+                raise GateError("target entered an unusable state")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise GateError("target startup wait reached its three-hour deadline")
+        time.sleep(min(POLL_SECONDS, remaining))
+
+
+def _activate_stopped_target(
+    target: dict,
+    current_label: str,
+    fresh_label: str,
+    deadline: float,
+) -> tuple[dict, str]:
+    ident = base.instance_id(target)
+    if ident is None:
+        raise GateError("exact target id is invalid")
+    rows = base.instance_rows()
+    current = base.resolve_label(rows, current_label)
+    if current is None or base.instance_id(current) != ident:
+        raise GateError("exact target identity changed before start")
+    if current.get("label") != current_label or not base.is_2x3060(current):
+        raise GateError("exact target label or GPU inventory changed before start")
+    state = base.probe.observed_state(current)
+    if state not in {"running", "stopped", "exited"}:
+        current = _wait_for_exact_instance(ident, current_label, deadline)
+        state = base.probe.observed_state(current)
+    if state == "running":
+        return current, current_label
+    if state not in {"stopped", "exited"}:
+        raise GateError("target did not reach a startable state")
+    if current_label != fresh_label and base.resolve_label(rows, fresh_label) is not None:
+        raise GateError("run-specific start label is already occupied")
+    spend = base.project_charges()
+    if not _validate_running_budget(current, spend, rows, ident):
+        raise GateError("the full-run budget gate is closed before start")
+    # Vast accepts state and label in one instance update. That label is the
+    # recoverable proof that this run requested the start, even if Actions dies
+    # before Python can publish any step output.
+    if not base.api_instance_id(ident, "running", label=fresh_label):
+        raise GateError("exact target start was not confirmed")
+    started = _wait_for_exact_instance(ident, fresh_label, deadline)
+    if base.probe.observed_state(started) != "running":
+        raise GateError("target did not reach running after its one start request")
+    return started, fresh_label
+
+
 def _start_target(
     rows: list[dict], marker: dict, run_id: str, attempt: str
 ) -> tuple[dict, str, bool, float]:
+    deadline = time.monotonic() + STARTUP_WAIT_SECONDS
     fresh_label = _fresh_label(run_id, attempt)
     old_label = marker["resume_existing_label"]
     target, label = _labels_for_run(rows, old_label, fresh_label)
     spent = base.project_charges()
-    global START_REQUESTED_LABEL
     if target is not None:
-        if not base.is_2x3060(target):
-            raise GateError("target GPU inventory does not match")
-        state = base.probe.observed_state(target)
-        if state not in {"stopped", "exited"}:
-            raise GateError("exact target is not safely stopped")
         ident = base.instance_id(target)
-        if ident is None:
-            raise GateError("exact target id is invalid")
-        extra_storage = _other_storage_reserve(rows, ident)
-        rate = _finite(target.get("dph_total"))
-        storage_cost = target.get("storage_cost")
-        if extra_storage is None or not full_run_budget_allows(
-            spent, rate, storage_cost, extra_storage_reserve=extra_storage
-        ):
+        if ident is None or not base.is_2x3060(target):
+            raise GateError("target GPU inventory does not match")
+        if not _validate_running_budget(target, spent, rows, ident):
             raise GateError("the full-run budget gate is closed")
-        START_REQUESTED_LABEL = label or old_label
-        if not base.api_instance_id(ident, "running"):
-            raise GateError("exact target start was not confirmed")
-        running = base.wait_until_running(label or old_label)
-        return running, label or old_label, False, spent
+        state = base.probe.observed_state(target)
+        if state not in {"running", "stopped", "exited"}:
+            target = _wait_for_exact_instance(ident, label, deadline)
+            state = base.probe.observed_state(target)
+        if state in {"stopped", "exited"}:
+            target, label = _activate_stopped_target(
+                target, label, fresh_label, deadline
+            )
+        elif state != "running":
+            raise GateError("exact target did not reach a usable state")
+        return target, label, False, spent
 
     transitions = [
         row for row in rows
@@ -381,12 +451,21 @@ def _start_target(
     offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id") or "")
     if not re.fullmatch(r"[0-9]{1,20}", offer_id):
         raise GateError("selected offer identity is invalid")
-    START_REQUESTED_LABEL = fresh_label
-    base.CREATE_ATTEMPTED = False
-    row = base.create_once(offer_id, fresh_label)
-    running = base.wait_until_running(fresh_label)
-    return running, fresh_label, True, spent
-
+    target = base.create_once(offer_id, fresh_label)
+    ident = base.instance_id(target)
+    if ident is None or target.get("label") != fresh_label or not base.is_2x3060(target):
+        raise GateError("new target identity or GPU inventory is invalid")
+    state = base.probe.observed_state(target)
+    if state not in {"running", "stopped", "exited"}:
+        target = _wait_for_exact_instance(ident, fresh_label, deadline)
+        state = base.probe.observed_state(target)
+    if state in {"stopped", "exited"}:
+        target, _label = _activate_stopped_target(
+            target, fresh_label, fresh_label, deadline
+        )
+    elif state != "running":
+        raise GateError("new target did not reach a usable state")
+    return target, fresh_label, True, spent
 
 def _validate_running_budget(
     row: dict, spend: float, rows: list[dict], exclude_id: int | None = None
@@ -403,11 +482,7 @@ def _validate_running_budget(
 def start() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome, status = "controller_failed", "unavailable"
-    label = None
     run_id = attempt = ""
-    global START_REQUESTED_LABEL
-    START_REQUESTED_LABEL = None
-    attached_target_id = None
     try:
         started_at_epoch = time.time()
         revision, run_id, attempt, root = _run_identity()
@@ -419,8 +494,15 @@ def start() -> int:
         if ident is None or not base.is_2x3060(row):
             outcome, status = "target_gpu_mismatch", "failed"
             raise GateError("running target identity or GPU differs")
-        attached_target_id = ident
         running_rows = base.instance_rows()
+        current = base.resolve_label(running_rows, label)
+        if (
+            current is None or base.instance_id(current) != ident
+            or base.probe.observed_state(current) != "running"
+        ):
+            outcome, status = "target_busy", "failed"
+            raise GateError("exact target changed before remote launch")
+        row = current
         spend_now = base.project_charges()
         if not _validate_running_budget(row, spend_now, running_rows, ident):
             outcome, status = "budget_gate", "budget_gate"
@@ -432,6 +514,9 @@ def start() -> int:
             holdout_sha256,
             started_at_epoch,
             spend_now,
+            run_id,
+            attempt,
+            ident,
         )
         proc, key_cleanup, _ = _attach_and_remote(row, run_id, attempt, script, 180)
         if (
@@ -451,7 +536,7 @@ def start() -> int:
                 outcome, status = "budget_gate", "budget_gate"
             elif "GPU" in message or "3060" in message:
                 outcome, status = "target_gpu_mismatch", "failed"
-            elif "stopped" in message or "active" in message or "transition" in message:
+            elif "stopped" in message or "active" in message or "transition" in message or "wait" in message:
                 outcome, status = "target_busy", "failed"
             elif "pin" in message or "holdout" in message:
                 outcome, status = "source_pin_invalid", "failed"
@@ -461,29 +546,11 @@ def start() -> int:
                 outcome, status = "target_unavailable", "failed"
     except Exception:
         outcome, status = "controller_failed", "failed"
-    finally:
-        cleanup_label = START_REQUESTED_LABEL or label
-        if outcome != "accepted" and cleanup_label and run_id and attempt:
-            try:
-                base.stop_exact_label(cleanup_label, run_id, attempt)
-            except Exception:
-                pass
     try:
-        _summarize(
-            checked,
-            outcome,
-            status,
-            cleanup_needed=bool(START_REQUESTED_LABEL),
-        )
+        _summarize(checked, outcome, status)
     except Exception:
-        if START_REQUESTED_LABEL and run_id and attempt:
-            try:
-                base.stop_exact_label(START_REQUESTED_LABEL, run_id, attempt)
-            except Exception:
-                pass
         return 1
     return 0 if outcome == "accepted" else 1
-
 
 def _read_remote_status(
     row: dict, run_id: str, attempt: str, root: str,
@@ -549,6 +616,57 @@ PY
             parsed.append(None)
     return state, quality, parsed[0], parsed[1]
 
+
+
+def _read_remote_owner(
+    row: dict,
+    run_id: str,
+    attempt: str,
+    root: str,
+    source_revision: str,
+    session: RemoteSession | None = None,
+) -> bool:
+    ident = base.instance_id(row)
+    if ident is None:
+        return False
+    q = shlex.quote
+    remote = f"""set -euo pipefail
+FILE={q(root + "/owner.private.json")}
+python3 - "$FILE" <<'PY'
+import json
+import sys
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    value = {{}}
+expected = {{
+    "schema": "cnot103_full_training_owner_v1",
+    "run_id": {run_id!r},
+    "attempt": {attempt!r},
+    "source_revision": {source_revision!r},
+    "instance_id": {ident},
+    "workspace": {root!r},
+}}
+print("owner_verified=" + str(all(value.get(key) == item for key, item in expected.items())).lower())
+PY
+"""
+    try:
+        if session is None:
+            proc, key_cleanup, exact_id = _attach_and_remote(
+                row, run_id, attempt, remote, 30
+            )
+            if (
+                proc is None or proc.returncode != 0 or exact_id != ident
+                or key_cleanup not in {"detached", "not_found"}
+            ):
+                return False
+        else:
+            proc = session.run(remote, 30)
+            if proc is None or proc.returncode != 0:
+                return False
+        return "owner_verified=true" in proc.stdout.splitlines()
+    except Exception:
+        return False
 
 def _find_run_target(rows: list[dict], marker: dict, run_id: str, attempt: str) -> tuple[dict | None, str | None]:
     old_label = marker["resume_existing_label"]
@@ -623,7 +741,7 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     session = None
     result_code = 1
     try:
-        _revision, run_id, attempt, root = _run_identity()
+        revision, run_id, attempt, root = _run_identity()
         marker = _marker()
         rows = base.instance_rows()
         row, label = _find_run_target(rows, marker, run_id, attempt)
@@ -638,6 +756,11 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
             outcome, status = "target_unavailable", "unavailable"
             raise GateError("target identity is unavailable")
         session = RemoteSession(row, run_id, attempt)
+        if not _read_remote_owner(
+            row, run_id, attempt, root, revision, session=session
+        ):
+            outcome, status = "target_unavailable", "unavailable"
+            raise GateError("remote workspace ownership is not verified")
         result_code, outcome, status = _monitor_window(
             row, label, ident, run_id, attempt, root, window_seconds, session
         )
@@ -656,75 +779,108 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     _summarize(checked, outcome, status)
     return result_code
 
-
 def cleanup() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome, status = "controller_failed", "unverified"
     state, quality = "unavailable", "unavailable"
+    session = None
     try:
-        _revision, run_id, attempt, root = _run_identity()
+        revision, run_id, attempt, root = _run_identity()
         marker = _marker()
         rows = base.instance_rows()
         row, label = _find_run_target(rows, marker, run_id, attempt)
         if row is None or label is None:
             outcome, status = "not_needed", "not_needed"
-            _summarize(checked, outcome, status)
-            return 1
-        if not base.is_2x3060(row):
+        elif not base.is_2x3060(row):
             outcome, status = "target_gpu_mismatch", "unverified"
-            _summarize(checked, outcome, status)
-            return 1
-        started_at = None
-        budget_baseline = None
-        rate = _finite(row.get("dph_total"))
-        if base.probe.observed_state(row) == "running":
-            try:
-                state, quality, started_at, budget_baseline = _read_remote_status(
-                    row, run_id, attempt, root
-                )
-            except Exception:
-                state, quality = "unavailable", "unavailable"
-        stop_status, _key_status = base.stop_exact_label(label, run_id, attempt)
-        if stop_status not in {"verified", "not_needed"}:
-            outcome, status = "unverified", "unverified"
-            _summarize(checked, outcome, status)
-            return 1
-        final_rows = base.instance_rows()
-        final_row = base.resolve_label(final_rows, label)
-        if final_row is not None and base.probe.observed_state(final_row) not in {"stopped", "exited"}:
-            outcome, status = "unverified", "unverified"
-            _summarize(checked, outcome, status)
-            return 1
-        spend = base.project_charges()
-        if final_row is not None:
-            extra = _other_storage_reserve(final_rows, base.instance_id(final_row))
-            elapsed_hours = max(0.0, (time.time() - started_at) / 3600.0) if started_at else 0.0
-            baseline = budget_baseline if budget_baseline is not None else spend
-            projected_spend = max(spend, baseline + (rate or 0.0) * elapsed_hours)
-            if rate is None or extra is None or not full_run_budget_allows(
-                projected_spend,
-                rate,
-                final_row.get("storage_cost"),
-                active_hours=0.0,
-                extra_storage_reserve=extra,
-            ):
-                outcome, status = "budget_gate", "budget_gate"
-                _summarize(checked, outcome, status)
-                return 1
-        if state != "completed" or quality != "passed":
-            outcome, status = ("time_limit" if state == "time_limit" else "failed"), "failed"
-            _summarize(checked, outcome, status)
-            return 1
-        outcome, status = "accepted", "stopped"
+        else:
+            ident = base.instance_id(row)
+            if ident is None:
+                outcome, status = "unverified", "unverified"
+            else:
+                old_label = marker["resume_existing_label"]
+                run_claimed_label = _fresh_label(run_id, attempt)
+                actual_state = base.probe.observed_state(row)
+                owned = label == run_claimed_label
+                if label == old_label:
+                    # A shared historical label proves no ownership. Only the
+                    # run-specific private owner stamp proves this run launched
+                    # work on an already-running resumable target.
+                    if actual_state == "running":
+                        session = RemoteSession(row, run_id, attempt)
+                        owned = _read_remote_owner(
+                            row, run_id, attempt, root, revision, session=session
+                        )
+                        if owned:
+                            state, quality, started_at, budget_baseline = _read_remote_status(
+                                row, run_id, attempt, root, session=session
+                            )
+                        else:
+                            outcome, status = "not_needed", "not_needed"
+                    else:
+                        outcome, status = "not_needed", "not_needed"
+                elif actual_state == "running":
+                    state, quality, started_at, budget_baseline = _read_remote_status(
+                        row, run_id, attempt, root
+                    )
+                else:
+                    started_at = None
+                    budget_baseline = None
+                if session is not None:
+                    key_cleanup = session.close()
+                    session = None
+                    if key_cleanup not in {"detached", "not_found"}:
+                        state, quality = "unavailable", "unavailable"
+                if owned:
+                    rate = _finite(row.get("dph_total"))
+                    stop_status, _key_status = base.stop_exact_label(
+                        label, run_id, attempt
+                    )
+                    if stop_status not in {"verified", "not_needed"}:
+                        outcome, status = "unverified", "unverified"
+                    else:
+                        final_rows = base.instance_rows()
+                        final_row = base.resolve_label(final_rows, label)
+                        if (
+                            final_row is None
+                            or base.instance_id(final_row) != ident
+                            or base.probe.observed_state(final_row) not in {"stopped", "exited"}
+                        ):
+                            outcome, status = "unverified", "unverified"
+                        else:
+                            spend = base.project_charges()
+                            extra = _other_storage_reserve(final_rows, ident)
+                            elapsed_hours = (
+                                max(0.0, (time.time() - started_at) / 3600.0)
+                                if started_at is not None else 0.0
+                            )
+                            baseline = budget_baseline if budget_baseline is not None else spend
+                            projected_spend = max(spend, baseline + (rate or 0.0) * elapsed_hours)
+                            if rate is None or extra is None or not full_run_budget_allows(
+                                projected_spend,
+                                rate,
+                                final_row.get("storage_cost"),
+                                active_hours=0.0,
+                                extra_storage_reserve=extra,
+                            ):
+                                outcome, status = "budget_gate", "budget_gate"
+                            elif state != "completed" or quality != "passed":
+                                outcome, status = (
+                                    "time_limit" if state == "time_limit" else "failed"
+                                ), "failed"
+                            else:
+                                outcome, status = "accepted", "stopped"
     except base.probe.ApiFailure:
         outcome, status = "api_failed", "unverified"
-    except GateError:
+    except (GateError, base.GateError):
         outcome, status = "unverified", "unverified"
     except Exception:
         outcome, status = "controller_failed", "unverified"
+    finally:
+        if session is not None:
+            session.close()
     _summarize(checked, outcome, status)
     return 0 if outcome == "accepted" else 1
-
 
 def _summarize(
     checked: str,
