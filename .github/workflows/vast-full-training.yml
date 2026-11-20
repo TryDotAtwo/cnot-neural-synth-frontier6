@@ -54,9 +54,7 @@ jobs:
   start:
     needs: source_preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 50
-    outputs:
-      cleanup_needed: ${{ steps.start_training.outputs.cleanup_needed }}
+    timeout-minutes: 300
     steps:
       - name: Check out the source pinned to this run
         uses: actions/checkout@v4
@@ -151,7 +149,7 @@ jobs:
     secrets: inherit
 
   finalize:
-    if: always() && needs.start.outputs.cleanup_needed == 'yes'
+    if: always()
     needs:
       - source_preflight
       - start
