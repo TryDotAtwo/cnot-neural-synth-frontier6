@@ -65,7 +65,7 @@ def is_candidate_path(path: str) -> bool:
     )
     feature_context_directory = (
         bool(parents & {"feature_contexts", "feature_context_profiles"})
-        and basename in {"profile.json", "train.json", "training.json", "contexts.json"}
+        and basename in {"profile.json", "training.json", "contexts.json"}
     )
     return suffix in PROFILE_SUFFIXES and (
         named_profile or profile_directory or feature_context_directory
