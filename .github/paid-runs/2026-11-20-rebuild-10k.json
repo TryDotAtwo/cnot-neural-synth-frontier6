@@ -1,11 +1,11 @@
 {
   "action": "one-shot 2x RTX 3060 frozen 10k rebuild",
   "max_total_usd": 20,
-  "projected_active_hours": 51,
+  "projected_active_hours": 3,
   "stopped_storage_reserve_hours": 168,
   "preserve_remote_disk": true,
-  "attempt": 7,
-  "reason": "recheck the $20 cap with 51h compute, seven days stopped storage, and status-only transfer reserve",
+  "attempt": 8,
+  "reason": "dataset rebuild only: reserve 3 active hours, seven days stopped storage, and status-only transfer; preserve the existing disk and enforce the $20 total cap",
   "authorization": {
     "approved": true,
     "approved_at_utc": "2026-11-20",
