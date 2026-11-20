@@ -126,6 +126,73 @@ class OfferAndBudgetTests(unittest.TestCase):
 
 
 
+class ResumeExistingTargetTests(unittest.TestCase):
+    def _environment(self, label):
+        return {
+            "GITHUB_SHA": "c" * 40,
+            "GITHUB_RUN_ID": "99",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "CNOT103_HOLDOUT_REVISION": "a" * 40,
+            "CNOT103_HOLDOUT_SHA256": "b" * 64,
+            "CNOT103_RESUME_LABEL": label,
+        }
+
+    def test_resume_exact_stopped_target_without_renting_another(self):
+        import io
+        import os
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        label = "cnot103-r10k-prior-run-a1"
+        row = offer(40, id=42, label=label, actual_status="stopped")
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, self._environment(label), clear=True),
+            patch.object(controller, "instance_rows", return_value=[row]),
+            patch.object(controller, "project_charges", return_value=1.0),
+            patch.object(controller, "wait_until_running", return_value=row) as start,
+            patch.object(controller, "install_remote_cargo", return_value="ready"),
+            patch.object(controller, "scoped_dataset_rebuild", return_value=0) as rebuild,
+            patch.object(controller, "create_once") as create,
+            patch.object(controller, "offer_inventory") as offers,
+            redirect_stdout(output),
+        ):
+            result = controller.run()
+
+        self.assertEqual(result, 0)
+        start.assert_called_once_with(label)
+        rebuild.assert_called_once_with(label)
+        create.assert_not_called()
+        offers.assert_not_called()
+        self.assertIn("query_outcome=accepted", output.getvalue())
+
+    def test_resume_target_checks_full_budget_before_starting(self):
+        import io
+        import os
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        label = "cnot103-r10k-prior-run-a1"
+        row = offer(41, id=43, label=label, actual_status="stopped")
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, self._environment(label), clear=True),
+            patch.object(controller, "instance_rows", return_value=[row]),
+            patch.object(controller, "project_charges", return_value=17.0),
+            patch.object(controller, "wait_until_running") as start,
+            patch.object(controller, "create_once") as create,
+            patch.object(controller, "offer_inventory") as offers,
+            redirect_stdout(output),
+        ):
+            result = controller.run()
+
+        self.assertEqual(result, 1)
+        self.assertIn("query_outcome=budget_gate_prior_spend", output.getvalue())
+        start.assert_not_called()
+        create.assert_not_called()
+        offers.assert_not_called()
+
+
 class HoldoutSourcePinTests(unittest.TestCase):
     def test_missing_or_malformed_pins_fail_closed(self):
         self.assertEqual(controller.holdout_pin_status(None, None), "missing")
