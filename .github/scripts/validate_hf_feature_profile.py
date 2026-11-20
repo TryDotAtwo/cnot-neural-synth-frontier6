@@ -56,13 +56,20 @@ def is_candidate_path(path: str) -> bool:
     suffix = parsed.suffix.casefold()
     basename = parsed.name.casefold().replace("-", "_")
     parents = {part.casefold().replace("-", "_") for part in parsed.parts[:-1]}
-    named_profile = (
-        "feature" in basename and ("context" in basename or "profile" in basename)
-    ) or ("context" in basename and "profile" in basename)
-    profile_directory = bool(
-        parents & {"profile", "profiles", "feature_profiles", "feature_context_profiles", "feature_contexts"}
-    ) and ("context" in basename or "profile" in basename)
-    return suffix in PROFILE_SUFFIXES and (named_profile or profile_directory)
+    named_profile = "profile" in basename or (
+        "feature" in basename and "context" in basename
+    )
+    profile_directory = (
+        any("profile" in part for part in parents)
+        and basename in {"train.json", "training.json", "contexts.json", "metadata.json"}
+    )
+    feature_context_directory = (
+        bool(parents & {"feature_contexts", "feature_context_profiles"})
+        and basename in {"profile.json", "train.json", "training.json", "contexts.json"}
+    )
+    return suffix in PROFILE_SUFFIXES and (
+        named_profile or profile_directory or feature_context_directory
+    )
 
 
 def _next_page_url(link_header: str | None, current_url: str) -> str | None:
