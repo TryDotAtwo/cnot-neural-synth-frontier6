@@ -258,6 +258,19 @@ class HFProfileValidationTests(unittest.TestCase):
             "unavailable_source_request_failed",
         )
 
+    def test_schema_rejection_reports_presence_of_context_payload_safely(self):
+        profile = _self_test_profile()
+        profile["schema"] = "wrong"
+        status = inspect_profile(
+            fetch_page=lambda _url: (
+                ["profiles/feature_context_profile.json"], None
+            ),
+            fetch_file=lambda *_args: json.dumps(profile).encode(),
+            source_exists=lambda *_args: self.fail("schema-invalid payload must not reach source checks"),
+            revision_getter=lambda: "b" * 40,
+        )
+        self.assertEqual(status, "candidate_rejected_profile_schema_with_contexts")
+
     def test_profile_reports_objective_alphabet_mismatch_as_safe_status(self):
         profile = _self_test_profile()
         n = 3
