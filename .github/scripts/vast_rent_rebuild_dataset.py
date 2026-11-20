@@ -213,7 +213,7 @@ def project_charges() -> float:
         if not isinstance(row, dict):
             raise GateError("Vast billing row has an invalid shape")
         description = str(row.get("description") or "")
-        match = re.match(r"^Instance ([0-9]+) Charges(?:\s|$)", description)
+        match = re.match(r"^Instance ([0-9]+)(?:\s|$)", description)
         metadata = row.get("metadata")
         label = str(metadata.get("label") or "").lower() if isinstance(metadata, dict) else ""
         if not ((match and int(match.group(1)) in OWNED_INSTANCE_IDS) or label.startswith("cnot103")):
