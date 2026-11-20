@@ -207,7 +207,7 @@ def validate_profile_bytes(payload: bytes) -> dict:
     try:
         profile = json.loads(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ProfileCheckError("candidate JSON is invalid") from None
+        raise ProfileCheckError("candidate profile rejected json") from None
     try:
         contexts = validate_profile(profile)
     except (ValueError, TypeError, KeyError) as error:
@@ -216,7 +216,20 @@ def validate_profile_bytes(payload: bytes) -> dict:
             "feature context alphabet must exactly match an objective alphabet",
         }:
             raise ProfileCheckError("candidate objective alphabet mismatch") from None
-        raise ProfileCheckError("candidate does not match the training profile schema") from None
+        rejection = {
+            "profile schema": "profile_schema",
+            "profile identity": "profile_identity",
+            "profile source": "profile_source",
+            "profile source revision": "profile_source_revision",
+            "profile source path": "profile_source_path",
+            "feature context fields": "feature_context_fields",
+            "feature context maximum width": "feature_context_max_width",
+            "feature context alphabet": "feature_context_alphabet",
+            "additional selected-residual contexts": "additional_contexts",
+            "additional selected-residual context fields": "additional_context_fields",
+            "additional selected-residual gates": "additional_context_gates",
+        }.get(str(error), "other")
+        raise ProfileCheckError(f"candidate profile rejected {rejection}") from None
     return {
         "profile": profile,
         "contexts": contexts,
@@ -370,6 +383,7 @@ def inspect_profile(
 
     saw_schema_valid = False
     saw_objective_alphabet_mismatch = False
+    schema_rejections = set()
     for priority in sorted({_candidate_priority(path) for path in json_candidates}):
         tier = [
             path for path in json_candidates
@@ -390,8 +404,11 @@ def inspect_profile(
             try:
                 profile = validate_profile_bytes(raw)
             except ProfileCheckError as error:
-                if str(error) == "candidate objective alphabet mismatch":
+                message = str(error)
+                if message == "candidate objective alphabet mismatch":
                     saw_objective_alphabet_mismatch = True
+                elif message.startswith("candidate profile rejected "):
+                    schema_rejections.add(message.removeprefix("candidate profile rejected "))
                 continue
             saw_schema_valid = True
             try:
@@ -409,28 +426,36 @@ def inspect_profile(
         return "candidate_source_unverified"
     if saw_objective_alphabet_mismatch:
         return "candidate_objective_alphabet_incompatible"
+    if len(schema_rejections) == 1:
+        return "candidate_rejected_" + next(iter(schema_rejections))
     return "candidate_schema_unverified"
 
 
 if __name__ == "__main__":
     status = inspect_profile()
-    if status not in {
+    allowed_statuses = {
         "candidate_ambiguous", "candidate_contexts_incomparable",
-        "candidate_objective_alphabet_incompatible",
         "candidate_limit_exceeded", "candidate_schema_unverified",
+        "candidate_objective_alphabet_incompatible",
         "candidate_source_ambiguous", "candidate_source_unverified",
         "candidate_unverified", "not_found",
         "schema_source_pinned", "unavailable",
-        "unavailable_profile_not_found",
-        "unavailable_profile_redirect_rejected",
-        "unavailable_profile_request_failed",
-        "unavailable_profile_size_limit",
-        "unavailable_revision",
-        "unavailable_tree",
-        "unavailable_source_not_found",
-        "unavailable_source_redirect_rejected",
-        "unavailable_source_request_failed",
-        "unavailable_source_size_limit",
-    }:
+        "unavailable_profile_not_found", "unavailable_profile_redirect_rejected",
+        "unavailable_profile_request_failed", "unavailable_profile_size_limit",
+        "unavailable_revision", "unavailable_tree",
+        "unavailable_source_not_found", "unavailable_source_redirect_rejected",
+        "unavailable_source_request_failed", "unavailable_source_size_limit",
+    }
+    allowed_statuses.update(
+        f"candidate_rejected_{code}"
+        for code in (
+            "json", "profile_schema", "profile_identity", "profile_source",
+            "profile_source_revision", "profile_source_path", "feature_context_fields",
+            "feature_context_max_width", "feature_context_alphabet",
+            "additional_contexts", "additional_context_fields",
+            "additional_context_gates", "other",
+        )
+    )
+    if status not in allowed_statuses:
         status = "unavailable"
     print(f"profile_validation={status}")
