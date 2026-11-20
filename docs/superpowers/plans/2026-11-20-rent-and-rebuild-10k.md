@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild and validate a new 10k training dataset on one 2x RTX 3060 host without exceeding the authorized $20 Vast cap.
 
-**Architecture:** A pure decision layer selects one strict 2x3060 offer using current project charges and a 50-hour projection. A paid Actions workflow is armed only by a dedicated marker commit, creates one stable-label target, runs the existing remote dataset builder, then stops and verifies the instance while retaining its disk.
+**Architecture:** A pure decision layer selects one strict 2x3060 offer using current project charges and a 51-hour projection. A paid Actions workflow is armed only by a dedicated marker commit, creates one stable-label target, runs the existing remote dataset builder, then stops and verifies the instance while retaining its disk.
 
 **Tech Stack:** Python 3, Vast CLI/API, GitHub Actions, existing Rust dataset validator.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 - Vast control and SSH run only on GitHub-hosted runners.
-- Total project spend plus 50-hour forecast plus transfer reserve must stay at or below $20.
+- Total project spend plus 51-hour forecast plus transfer reserve must stay at or below $20.
 - Public outputs contain only time, query result, and allowlisted status.
 - Data, hashes, receipts, and private results stay on the retained Vast disk.
 - Cleanup stops only the exact stable-label instance and never destroys it.
@@ -47,7 +47,7 @@
 
 ### Task 3: Redacted source and paid workflows
 1. Add .github/workflows/vast-rent-rebuild-dataset-check.yml for syntax and unit checks, triggered by controller/test/workflow source changes and never given a Vast secret.
-2. Add .github/workflows/vast-rent-rebuild-dataset.yml, triggered only by .github/paid-runs/2026-11-20-rebuild-10k.json or explicit workflow dispatch; set a 350-minute job timeout and a concurrency guard.
+2. Add .github/workflows/vast-rent-rebuild-dataset.yml, triggered only by .github/paid-runs/2026-11-20-rebuild-10k.json or explicit workflow dispatch; set a 175-minute job timeout and a concurrency guard.
 3. Add the inert marker file only after Task 1 and Task 2 checks pass.
 4. Run the workflow. Acceptance requires dataset_build=accepted, target_stop=verified, and temporary_ssh_key=detached; no SHA or private artifacts appear in logs.
 5. Read the run/job status and stop after the dataset phase. Preserve the stopped instance for the separately measured benchmark/quality phase.
