@@ -39,7 +39,13 @@ class FullTrainingBudgetTests(unittest.TestCase):
 
     def test_full_run_clock_starts_before_instance_activation(self):
         events = []
-        row = {"id": 123}
+        row = {
+            "id": 123,
+            "label": "cnot103-test",
+            "actual_status": "running",
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+        }
 
         def fake_clock():
             events.append("clock")
