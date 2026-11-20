@@ -237,6 +237,8 @@ def _validate_run_inputs(
     dataset_sha256: object,
     checkpoint_dir: object,
     resume: object,
+    attempts: object,
+    target_attempts: object,
 ) -> None:
     if not isinstance(dataset_path, str) or not dataset_path or "\x00" in dataset_path:
         raise ValueError("dataset path")
@@ -246,6 +248,13 @@ def _validate_run_inputs(
         raise ValueError("checkpoint directory")
     if type(resume) is not bool:
         raise ValueError("resume flag")
+    if type(target_attempts) is not int or not 1 <= target_attempts <= TARGET_ATTEMPTS:
+        raise ValueError("target attempts")
+    if type(attempts) is not int or not 1 <= attempts <= target_attempts:
+        raise ValueError("invocation attempts")
+    checkpoint_count = (target_attempts + CHECKPOINT_EVERY - 1) // CHECKPOINT_EVERY
+    if checkpoint_count > 10:
+        raise ValueError("checkpoint storage bound")
 
 
 def build_manifest(
@@ -255,9 +264,13 @@ def build_manifest(
     dataset_sha256: str,
     checkpoint_dir: str,
     resume: bool,
+    attempts: int = INVOCATION_ATTEMPTS,
+    target_attempts: int = TARGET_ATTEMPTS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     contexts = validate_profile(profile)
-    _validate_run_inputs(dataset_path, dataset_sha256, checkpoint_dir, resume)
+    _validate_run_inputs(
+        dataset_path, dataset_sha256, checkpoint_dir, resume, attempts, target_attempts
+    )
     manifest: dict[str, Any] = {
         "schema": RUN_SCHEMA,
         "dataset": {"path": dataset_path, "sha256": dataset_sha256},
@@ -267,8 +280,8 @@ def build_manifest(
             "seed": 202611200001,
             "cuda_device": 0,
             "cuda_devices": [0, 1],
-            "attempts": INVOCATION_ATTEMPTS,
-            "target_attempts": TARGET_ATTEMPTS,
+            "attempts": attempts,
+            "target_attempts": target_attempts,
             "batch_size": BATCH_SIZE,
             "checkpoint_every_attempts": CHECKPOINT_EVERY,
         },
@@ -325,7 +338,8 @@ def build_manifest(
         "dataset_sha256": dataset_sha256,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "model_input_slots": MODEL_INPUT_COUNT,
-        "target_attempts": TARGET_ATTEMPTS,
+        "invocation_attempts": attempts,
+        "target_attempts": target_attempts,
     }
     return manifest, provenance
 
@@ -456,6 +470,8 @@ def main() -> int:
     parser.add_argument("--dataset-path")
     parser.add_argument("--dataset-sha256")
     parser.add_argument("--checkpoint-dir")
+    parser.add_argument("--attempts", type=int, default=INVOCATION_ATTEMPTS)
+    parser.add_argument("--target-attempts", type=int, default=TARGET_ATTEMPTS)
     parser.add_argument("--output", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--self-test", action="store_true")
@@ -465,6 +481,8 @@ def main() -> int:
         if args.self_test:
             if any((args.profile, args.dataset_path, args.dataset_sha256, args.checkpoint_dir, args.resume)):
                 raise ValueError("self-test arguments")
+            if args.attempts != INVOCATION_ATTEMPTS or args.target_attempts != TARGET_ATTEMPTS:
+                raise ValueError("self-test attempt arguments")
             profile = _self_test_profile()
             profile_bytes = json.dumps(profile, sort_keys=True).encode("utf-8")
             dataset_path = "/workspace/self-test/frozen_train_10k.json"
@@ -497,6 +515,8 @@ def main() -> int:
             dataset_sha,
             checkpoint_dir,
             resume,
+            args.attempts,
+            args.target_attempts,
         )
         output_path = pathlib.Path(args.output)
         provenance_path = output_path.with_suffix(output_path.suffix + ".provenance.json")
