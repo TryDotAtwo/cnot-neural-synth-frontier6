@@ -242,6 +242,24 @@ class HoldoutSourcePinTests(unittest.TestCase):
         inventory.assert_not_called()
 
 
+class InstanceControlPayloadTests(unittest.TestCase):
+    def test_run_start_claims_unique_label_in_the_same_put(self):
+        from unittest.mock import patch
+
+        label = "cnot103-fulltrain-123-a1"
+        with (
+            patch.object(controller, "api_key", return_value="secret"),
+            patch.object(controller.probe, "api_json", return_value={"success": True}) as api,
+        ):
+            self.assertTrue(controller.api_instance_id(123, "running", label=label))
+
+        api.assert_called_once_with(
+            "secret",
+            "/instances/123/",
+            "PUT",
+            {"state": "running", "label": label},
+        )
+
 class ObservedStopStateTests(unittest.TestCase):
     def test_requested_transition_is_separate_from_observed_state(self):
         row = {"actual_status": "running", "next_state": "stopped"}
@@ -279,6 +297,30 @@ class ObservedStopStateTests(unittest.TestCase):
         self.assertEqual(key_status, "not_found")
         stop_request.assert_called_once_with(123, "stopped")
 
+
+    def test_stop_checks_actual_state_once_more_after_its_deadline(self):
+        from unittest.mock import patch
+
+        label = "cnot103-r10k-12-a1"
+        running = {
+            "id": 123,
+            "label": label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "running",
+        }
+        stopped = {**running, "actual_status": "stopped"}
+        with (
+            patch.object(controller, "instance_rows", side_effect=[[running], [running], [stopped]]),
+            patch.object(controller, "remove_run_keys", return_value="not_found"),
+            patch.object(controller, "api_instance_id", return_value=True) as stop_request,
+            patch.object(controller.time, "monotonic", side_effect=[0.0, 0.0, 301.0]),
+            patch.object(controller.time, "sleep"),
+        ):
+            status, key_status = controller.stop_exact_label(label, "12", "1")
+
+        self.assertEqual((status, key_status), ("verified", "not_found"))
+        stop_request.assert_called_once_with(123, "stopped")
 
 if __name__ == "__main__":
     unittest.main()
