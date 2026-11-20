@@ -6,6 +6,10 @@ on:
       window_seconds:
         required: true
         type: number
+    outputs:
+      status:
+        description: Allowlisted monitor state
+        value: ${{ jobs.monitor.outputs.status }}
 
 permissions:
   actions: read
@@ -15,6 +19,8 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    outputs:
+      status: ${{ steps.monitor.outputs.status }}
     steps:
       - name: Check out the pinned controller source
         uses: actions/checkout@v4
@@ -29,6 +35,7 @@ jobs:
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
       - name: Monitor one bounded window
+        id: monitor
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
         run: python3 .github/scripts/vast_full_training_controller.py monitor --window-seconds "${{ inputs.window_seconds }}"
