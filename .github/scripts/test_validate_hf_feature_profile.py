@@ -79,10 +79,36 @@ class HFProfileValidationTests(unittest.TestCase):
 
         self.assertEqual(status, "schema_source_pinned")
 
-    def test_inspect_profile_rejects_multiple_pinned_profiles(self):
+    def test_inspect_profile_accepts_equivalent_pinned_profiles(self):
         first = _self_test_profile()
         second = _self_test_profile()
         second["profile_id"] = "alternate-self-test"
+        profiles = {
+            "profiles/first_context_profile.json": json.dumps(first).encode(),
+            "profiles/second_feature_profile.json": json.dumps(second).encode(),
+        }
+        paths = list(profiles)
+
+        def fetch_file(url, _limit, _allowed_host):
+            for path, payload in profiles.items():
+                if url.endswith(path):
+                    return payload
+            self.fail("unexpected candidate URL")
+
+        status = inspect_profile(
+            fetch_page=lambda _url: (paths, None),
+            fetch_file=fetch_file,
+            source_exists=lambda _revision, _path: True,
+            revision_getter=lambda: "b" * 40,
+        )
+
+        self.assertEqual(status, "schema_source_pinned")
+
+    def test_inspect_profile_rejects_distinct_pinned_profiles(self):
+        first = _self_test_profile()
+        second = _self_test_profile()
+        second["profile_id"] = "alternate-self-test"
+        second["feature_contexts"]["max_parity_patterns"] += 1
         profiles = {
             "profiles/first_context_profile.json": json.dumps(first).encode(),
             "profiles/second_feature_profile.json": json.dumps(second).encode(),
