@@ -8,6 +8,8 @@ on:
       - codex/f08-loader-stage-profile
     paths:
       - .github/scripts/rebuild_frozen_dataset.py
+      - .github/scripts/vast_rebuild_remote_dataset.py
+      - .github/scripts/test_rebuild_frozen_dataset.py
       - .github/scripts/build_training_manifest.py
       - .github/scripts/test_build_training_manifest.py
       - .github/scripts/vast_store_private_diagnostic.py
@@ -44,6 +46,9 @@ jobs:
       - name: Verify deterministic record and matrix routines
         run: python .github/scripts/rebuild_frozen_dataset.py --self-test
 
+      - name: Test frozen dataset admission and receipt lifecycle
+        run: python3 -m unittest discover -s .github/scripts -p 'test_rebuild_frozen_dataset.py' -v
+
       - name: Check the pinned training manifest builder
         run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py'
 
@@ -68,6 +73,10 @@ jobs:
         run: cargo check --no-default-features --bin cnot103-validate-data
 
   cuda-feature-build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(join(github.event.head_commit.modified, ','), 'native/') ||
+      contains(join(github.event.head_commit.modified, ','), '.github/scripts/build_training_manifest.py')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
