@@ -210,7 +210,12 @@ def validate_profile_bytes(payload: bytes) -> dict:
         raise ProfileCheckError("candidate JSON is invalid") from None
     try:
         contexts = validate_profile(profile)
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError) as error:
+        if isinstance(error, ValueError) and str(error) in {
+            "feature context alphabet dimension is not an objective width",
+            "feature context alphabet must exactly match an objective alphabet",
+        }:
+            raise ProfileCheckError("candidate objective alphabet mismatch") from None
         raise ProfileCheckError("candidate does not match the training profile schema") from None
     return {
         "profile": profile,
@@ -364,6 +369,7 @@ def inspect_profile(
         return "candidate_unverified"
 
     saw_schema_valid = False
+    saw_objective_alphabet_mismatch = False
     for priority in sorted({_candidate_priority(path) for path in json_candidates}):
         tier = [
             path for path in json_candidates
@@ -383,7 +389,9 @@ def inspect_profile(
                 return _safe_download_failure("profile", error)
             try:
                 profile = validate_profile_bytes(raw)
-            except ProfileCheckError:
+            except ProfileCheckError as error:
+                if str(error) == "candidate objective alphabet mismatch":
+                    saw_objective_alphabet_mismatch = True
                 continue
             saw_schema_valid = True
             try:
@@ -397,13 +405,18 @@ def inspect_profile(
         if pinned_profiles:
             return _profile_selection_status(pinned_profiles)
 
-    return "candidate_source_unverified" if saw_schema_valid else "candidate_schema_unverified"
+    if saw_schema_valid:
+        return "candidate_source_unverified"
+    if saw_objective_alphabet_mismatch:
+        return "candidate_objective_alphabet_incompatible"
+    return "candidate_schema_unverified"
 
 
 if __name__ == "__main__":
     status = inspect_profile()
     if status not in {
         "candidate_ambiguous", "candidate_contexts_incomparable",
+        "candidate_objective_alphabet_incompatible",
         "candidate_limit_exceeded", "candidate_schema_unverified",
         "candidate_source_ambiguous", "candidate_source_unverified",
         "candidate_unverified", "not_found",
