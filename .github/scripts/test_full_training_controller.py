@@ -72,64 +72,159 @@ class FullTrainingBudgetTests(unittest.TestCase):
 
         self.assertLess(events.index("clock"), events.index("activate"))
 
-    def test_existing_loading_target_waits_without_treating_it_as_stopped(self):
-        label = "cnot103-r10k-44749514754-a1"
-        row = {
+    def test_loading_to_running_is_read_only_and_keeps_the_stable_label(self):
+        old_label = "cnot103-r10k-44749514754-a1"
+        loading = {
             "id": 123,
-            "label": label,
+            "label": old_label,
             "gpu_name": "RTX 3060",
             "num_gpus": 2,
             "actual_status": "loading",
             "dph_total": 0.20,
             "storage_cost": 0.15,
         }
-        running = {**row, "actual_status": "running"}
-
-        def wait_for_running(received_label, timeout_seconds):
-            self.assertEqual(received_label, label)
-            self.assertEqual(timeout_seconds, 10_800)
-            self.assertEqual(controller.START_REQUESTED_LABEL, label)
-            return running
+        running = {**loading, "actual_status": "running"}
 
         with (
             patch.object(controller.base, "project_charges", return_value=1.0),
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller.base, "instance_id", return_value=123),
             patch.object(controller, "_other_storage_reserve", return_value=0.0),
-            patch.object(controller.base, "wait_until_running", side_effect=wait_for_running) as wait,
+            patch.object(controller.base, "instance_rows", return_value=[running]),
             patch.object(controller.base, "api_instance_id") as activate,
             patch.object(controller.base, "offer_inventory") as offers,
             patch.object(controller.base, "create_once") as create,
-            patch.object(controller, "START_REQUESTED_LABEL", None),
         ):
             result = controller._start_target(
-                [row], {"resume_existing_label": label}, "123", "1"
+                [loading], {"resume_existing_label": old_label}, "123", "1"
             )
 
-        self.assertEqual(result, (running, label, False, 1.0))
-        wait.assert_called_once_with(label, timeout_seconds=10_800)
+        self.assertEqual(result, (running, old_label, False, 1.0))
         activate.assert_not_called()
         offers.assert_not_called()
         create.assert_not_called()
 
-    def test_running_wait_accepts_an_explicit_slow_start_timeout(self):
-        label = "cnot103-r10k-44749514754-a1"
+    def test_loading_to_stopped_rechecks_budget_and_claims_start_atomically(self):
+        old_label = "cnot103-r10k-44749514754-a1"
+        run_label = "cnot103-fulltrain-123-a1"
+        loading = {
+            "id": 123,
+            "label": old_label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "loading",
+            "dph_total": 0.20,
+            "storage_cost": 0.15,
+        }
+        stopped = {**loading, "actual_status": "stopped"}
+        running = {**stopped, "label": run_label, "actual_status": "running"}
+
+        with (
+            patch.object(controller.base, "project_charges", side_effect=[1.0, 1.0]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller.base, "instance_id", return_value=123),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(
+                controller.base, "instance_rows",
+                side_effect=[[stopped], [stopped], [running]],
+            ),
+            patch.object(controller, "full_run_budget_allows", return_value=True) as budget_gate,
+            patch.object(controller.base, "api_instance_id", return_value=True) as activate,
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "create_once") as create,
+        ):
+            result = controller._start_target(
+                [loading], {"resume_existing_label": old_label}, "123", "1"
+            )
+
+        self.assertEqual(result, (running, run_label, False, 1.0))
+        self.assertEqual(activate.call_args.args, (123, "running", run_label))
+        self.assertEqual(activate.call_count, 1)
+        self.assertEqual(budget_gate.call_count, 2)
+        offers.assert_not_called()
+        create.assert_not_called()
+
+    def test_wait_fails_closed_if_the_label_moves_to_a_different_instance_id(self):
+        old_label = "cnot103-r10k-44749514754-a1"
+        loading = {
+            "id": 123,
+            "label": old_label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "loading",
+            "dph_total": 0.20,
+            "storage_cost": 0.15,
+        }
+        replacement = {**loading, "id": 124, "actual_status": "running"}
+
+        with (
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller.base, "instance_id", side_effect=lambda row: row["id"]),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller.base, "instance_rows", return_value=[replacement]),
+            patch.object(controller.base, "api_instance_id") as activate,
+        ):
+            with self.assertRaises(controller.GateError):
+                controller._start_target(
+                    [loading], {"resume_existing_label": old_label}, "123", "1"
+                )
+
+        activate.assert_not_called()
+
+    def test_cleanup_does_not_stop_a_legacy_target_without_this_run_owner_stamp(self):
+        old_label = "cnot103-r10k-44749514754-a1"
         row = {
             "id": 123,
-            "label": label,
+            "label": old_label,
             "gpu_name": "RTX 3060",
             "num_gpus": 2,
             "actual_status": "running",
+            "dph_total": 0.20,
+            "storage_cost": 0.15,
         }
         with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
             patch.object(controller.base, "instance_rows", return_value=[row]),
-            patch.object(controller.base.time, "monotonic", side_effect=[0.0, 1.0]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller, "_read_remote_owner", return_value=False),
+            patch.object(controller.base, "stop_exact_label") as stop,
+            patch.object(controller, "_summarize"),
         ):
-            self.assertEqual(
-                controller.base.wait_until_running(label, timeout_seconds=10_800),
-                row,
-            )
+            controller.cleanup()
 
+        stop.assert_not_called()
+
+    def test_cleanup_stops_run_claimed_target_without_a_late_step_output(self):
+        run_label = "cnot103-fulltrain-123-a1"
+        running = {
+            "id": 123,
+            "label": run_label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "running",
+            "dph_total": 0.20,
+            "storage_cost": 0.15,
+        }
+        stopped = {**running, "actual_status": "stopped"}
+        with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": "cnot103-r10k-44749514754-a1"}),
+            patch.object(controller.base, "instance_rows", side_effect=[[running], [stopped]]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller, "_read_remote_status", return_value=("completed", "passed", 100.0, 1.0)),
+            patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "full_run_budget_allows", return_value=True),
+            patch.object(controller, "_summarize"),
+        ):
+            self.assertEqual(controller.cleanup(), 0)
+
+        stop.assert_called_once_with(run_label, "123", "1")
 
 if __name__ == "__main__":
     unittest.main()
