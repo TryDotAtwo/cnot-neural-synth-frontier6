@@ -49,9 +49,18 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
     let pinned = artifacts::load(&manifest, &paths)?;
     let widths: std::collections::BTreeSet<u32> = pinned.dataset.train.records().iter().map(|r| r.state.dimension()).collect();
     let BoundField { dataset, registry, plans, selected_count, mut objective, model, variables, mut replica } =
-        BoundField::build(pinned, manifest.feature_contexts, manifest.feature_policy,
-                          manifest.model, manifest.objective, &manifest.training, widths,
-                          replica_device)?;
+        crate::stage_profile::measure("model_and_plans_setup", || {
+            BoundField::build(
+                pinned,
+                manifest.feature_contexts,
+                manifest.feature_policy,
+                manifest.model,
+                manifest.objective,
+                &manifest.training,
+                widths,
+                replica_device,
+            )
+        })?;
     let (quality_before, quality_before_seconds) = if let Some(spec) = quality.as_ref() {
         let timer = Instant::now();
         let report = quality::evaluate(spec, &dataset, &model, &plans, &variables, selected_count)?;
@@ -62,8 +71,11 @@ pub fn execute_benchmark_manifest(path: &Path) -> Result<Value, String> {
     } else {
         (None, 0.0)
     };
-    let sampler = Sampler::new(dataset.train.len(), manifest.training.seed).map_err(|e| e.to_string())?;
-    let mut trainer = NeuralTrainer::new(&variables, sampler, manifest.optimizer).map_err(|e| e.to_string())?;
+    let mut trainer = crate::stage_profile::measure("training_state_initialize", || {
+        let sampler =
+            Sampler::new(dataset.train.len(), manifest.training.seed).map_err(|e| e.to_string())?;
+        NeuralTrainer::new(&variables, sampler, manifest.optimizer).map_err(|e| e.to_string())
+    })?;
     objective.bind_frozen_dataset(&dataset)?;
     let (last, evaluation_plans, prepared_seconds, update_seconds) =
         if let Some(replica) = replica.as_mut() {
@@ -234,10 +246,11 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
             replica_device,
         )
     })?;
-    let sampler =
-        Sampler::new(dataset.train.len(), manifest.training.seed).map_err(|e| e.to_string())?;
-    let mut trainer =
-        NeuralTrainer::new(&variables, sampler, manifest.optimizer).map_err(|e| e.to_string())?;
+    let mut trainer = crate::stage_profile::measure("training_state_initialize", || {
+        let sampler =
+            Sampler::new(dataset.train.len(), manifest.training.seed).map_err(|e| e.to_string())?;
+        NeuralTrainer::new(&variables, sampler, manifest.optimizer).map_err(|e| e.to_string())
+    })?;
     let store = CheckpointStore::new(&paths.checkpoint_dir);
     let session_config = TrainingSessionConfig {
         batch_size: manifest.training.batch_size,
@@ -254,13 +267,15 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
         admission: None,
     };
     let report = {
-        let mut session = if manifest.resume {
-            FullGraphTrainingSession::resume_latest(resources, session_config)
-                .map_err(|e| format!("checkpoint resume failed: {e}"))?
-        } else {
-            FullGraphTrainingSession::new(resources, session_config)
-                .map_err(|e| format!("new training session failed: {e}"))?
-        };
+        let mut session = crate::stage_profile::measure("training_session_initialize", || {
+            if manifest.resume {
+                FullGraphTrainingSession::resume_latest(resources, session_config)
+                    .map_err(|e| format!("checkpoint resume failed: {e}"))
+            } else {
+                FullGraphTrainingSession::new(resources, session_config)
+                    .map_err(|e| format!("new training session failed: {e}"))
+            }
+        })?;
         if let Some(replica) = replica.as_mut() {
             session
                 .run_device_data_parallel_attempts(
