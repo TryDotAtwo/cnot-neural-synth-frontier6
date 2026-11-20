@@ -143,7 +143,7 @@ class ResumeExistingTargetTests(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest.mock import patch
 
-        label = "cnot103-r10k-prior-run-a1"
+        label = "cnot103-r10k-44749514754-a1"
         row = offer(40, id=42, label=label, actual_status="stopped")
         output = io.StringIO()
         with (
@@ -172,7 +172,7 @@ class ResumeExistingTargetTests(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest.mock import patch
 
-        label = "cnot103-r10k-prior-run-a1"
+        label = "cnot103-r10k-44749514754-a1"
         row = offer(41, id=43, label=label, actual_status="stopped")
         output = io.StringIO()
         with (
