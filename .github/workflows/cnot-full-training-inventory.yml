@@ -1,0 +1,78 @@
+name: CNOT GET-only Vast state check
+
+on:
+  push:
+    branches:
+      - codex/full-feature-train-workflow
+    paths:
+      - .github/diagnostics/cnot-full-training-inventory.json
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out the pinned inventory source
+        uses: actions/checkout@v4
+
+      - name: Query Vast without changing resources
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(python3 .github/scripts/vast_readonly_inventory.py)"
+          query_status=$?
+          set -e
+
+          raw_inventory="$(printf '%s\n' "$output" | sed -n 's/^vast_inventory=//p' | tail -n 1)"
+          raw_volume="$(printf '%s\n' "$output" | sed -n 's/^vast_volume_attachment=//p' | tail -n 1)"
+          checked="$(printf '%s\n' "$output" | sed -n 's/^checked_at_utc=//p' | tail -n 1)"
+
+          case "$raw_inventory" in
+            no_existing_target|no_project_target) inventory=none ;;
+            existing_target_running) inventory=running ;;
+            existing_target_stopped) inventory=stopped ;;
+            existing_target_starting) inventory=starting ;;
+            existing_target_stopping) inventory=stopping ;;
+            existing_target_scheduling) inventory=scheduling ;;
+            existing_target_loading) inventory=loading ;;
+            existing_target_created) inventory=created ;;
+            existing_target_offline) inventory=offline ;;
+            existing_target_exited) inventory=exited ;;
+            existing_target_error) inventory=error ;;
+            multiple_targets_*) inventory=multiple ;;
+            *) inventory=unavailable ;;
+          esac
+
+          case "$raw_volume" in
+            running_attached|running_and_exited_attached|exited_attached|other_3060_state_attached|other_instances_attached|detached_volumes_present|no_volumes)
+              volume="$raw_volume"
+              ;;
+            *) volume=unavailable ;;
+          esac
+
+          if [[ ! "$checked" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$ ]]; then
+            checked=unavailable
+          fi
+
+          if [[ "$query_status" -eq 0 && "$inventory" != unavailable && "$volume" != unavailable && "$checked" != unavailable ]]; then
+            query_outcome=success
+          else
+            query_outcome=failed
+          fi
+
+          printf 'checked_at_utc=%s\nquery_outcome=%s\nvast_inventory=%s\nvast_volume_attachment=%s\n' \
+            "$checked" "$query_outcome" "$inventory" "$volume"
+          {
+            printf '## GET-only Vast inventory\n'
+            printf -- '- checked_at_utc: %s\n' "$checked"
+            printf -- '- query_outcome: %s\n' "$query_outcome"
+            printf -- '- vast_inventory: %s\n' "$inventory"
+            printf -- '- vast_volume_attachment: %s\n' "$volume"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [[ "$query_outcome" == success ]]
