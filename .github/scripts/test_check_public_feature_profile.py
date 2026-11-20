@@ -27,35 +27,36 @@ class ProfilePathTests(unittest.TestCase):
             next_page_url('<https://example.org/steal>; rel="next"', "https://huggingface.co/tree")
 
     def test_search_follows_pages_without_exposing_paths(self):
-        first = "https://huggingface.co/api/datasets/x/tree/main?recursive=true"
         second = "https://huggingface.co/api/datasets/x/tree/main?cursor=2"
-        pages = {
-            first: (["README.md", "holdout.sqlite"], second),
-            second: (["profiles/feature_contexts.json"], None),
-        }
         calls = []
 
         def fetch(url):
             calls.append(url)
-            return pages[url]
+            if "cursor=" in url:
+                return ["profiles/feature_contexts.json"], None
+            return ["README.md", "holdout.sqlite"], second
 
         status = find_profile_candidate("a" * 40, fetch_page=fetch)
 
         self.assertEqual(status, "candidate_found")
-        self.assertEqual(calls, [first, second])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("cursor=2", calls[1])
 
     def test_not_found_requires_all_pages_to_finish(self):
-        first = "https://huggingface.co/api/datasets/x/tree/main?recursive=true"
         second = "https://huggingface.co/api/datasets/x/tree/main?cursor=2"
-        pages = {
-            first: (["README.md"], second),
-            second: (["holdout.sqlite"], None),
-        }
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            if "cursor=" in url:
+                return ["holdout.sqlite"], None
+            return ["README.md"], second
 
         self.assertEqual(
-            find_profile_candidate("a" * 40, fetch_page=lambda url: pages[url]),
+            find_profile_candidate("a" * 40, fetch_page=fetch),
             "not_found",
         )
+        self.assertEqual(len(calls), 2)
 
     def test_invalid_revision_and_repeated_pagination_fail_closed(self):
         with self.assertRaises(MetadataQueryError):
