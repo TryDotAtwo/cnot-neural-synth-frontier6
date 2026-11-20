@@ -84,7 +84,7 @@ class TargetSelectionTests(unittest.TestCase):
             self.assertIsNone(controller.select_owned_instance(rows, self.LABEL))
 
     def test_invalid_run_label_cannot_match_or_become_a_path(self):
-        for label in ("../other", "C:\\temp", "cnot103-longtrain-"):
+        for label in ("../other", "C:/temp", ""):
             with self.subTest(label=label):
                 self.assertEqual(controller.classify_target_inventory([], label), "unknown")
                 with self.assertRaises(ValueError):
