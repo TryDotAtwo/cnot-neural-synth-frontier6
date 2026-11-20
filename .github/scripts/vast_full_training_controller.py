@@ -469,6 +469,35 @@ def _start_target(
         raise GateError("new target did not reach a usable state")
     return target, fresh_label, True, spent
 
+def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
+    """Classify the pinned full-run budget without exposing financial values."""
+    if not isinstance(row, dict):
+        return "target_missing"
+    if not base.is_2x3060(row):
+        return "target_mismatch"
+    ident = base.instance_id(row)
+    spend_value = _finite(spent)
+    rate = _finite(row.get("dph_total"))
+    storage_monthly = _finite(row.get("storage_cost"))
+    extra = _other_storage_reserve(rows, ident) if isinstance(rows, list) and ident else None
+    if (
+        ident is None or spend_value is None or rate is None or storage_monthly is None
+        or extra is None or spend_value < 0 or rate < 0
+        or storage_monthly < 0 or extra < 0
+    ):
+        return "inputs_unknown"
+    if full_run_budget_allows(
+        spend_value, rate, storage_monthly, extra_storage_reserve=extra
+    ):
+        return "within_cap"
+    if full_run_budget_allows(
+        0.0, rate, storage_monthly, extra_storage_reserve=extra
+    ):
+        return "prior_spend_exceeds_cap"
+    return "run_projection_exceeds_cap"
+
+
+
 def _validate_running_budget(
     row: dict, spend: float, rows: list[dict], exclude_id: int | None = None
 ) -> bool:
@@ -807,6 +836,30 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     _summarize(checked, outcome, status)
     return result_code
 
+def budget_check() -> int:
+    """Read-only, redacted classification for the pinned full-training target."""
+    checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    outcome = "failed"
+    budget_status = "unavailable"
+    try:
+        marker = _marker()
+        rows = base.instance_rows()
+        targets = base.target_rows_for_label(rows, marker["resume_existing_label"])
+        if not targets:
+            budget_status = "target_missing"
+        elif len(targets) != 1:
+            budget_status = "target_ambiguous"
+        else:
+            spend = base.project_charges()
+            budget_status = classify_full_run_budget(targets[0], rows, spend)
+        outcome = "success"
+    except Exception:
+        outcome, budget_status = "failed", "unavailable"
+    _summarize_budget(checked, outcome, budget_status)
+    return 0 if outcome == "success" else 1
+
+
+
 def cleanup() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome, status = "controller_failed", "unverified"
@@ -948,16 +1001,46 @@ def _summarize(
             pass
 
 
+def _summarize_budget(checked: str, outcome: str, budget_status: str) -> None:
+    allowed_statuses = {
+        "within_cap", "prior_spend_exceeds_cap", "run_projection_exceeds_cap",
+        "inputs_unknown", "target_missing", "target_ambiguous", "target_mismatch",
+        "unavailable",
+    }
+    if outcome not in {"success", "failed"}:
+        outcome = "failed"
+    if budget_status not in allowed_statuses:
+        budget_status = "unavailable"
+    print(f"checked_at={checked}")
+    print(f"query_outcome={outcome}")
+    print(f"training_budget={budget_status}")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(
+                    "## GET-only full-training budget check\n"
+                    f"- checked_at: {checked}\n"
+                    f"- query_outcome: {outcome}\n"
+                    f"- training_budget: {budget_status}\n"
+                )
+        except OSError:
+            pass
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("start", "monitor", "cleanup"))
+    parser.add_argument("mode", choices=("start", "monitor", "cleanup", "budget-check"))
     parser.add_argument("--window-seconds", type=int, default=MONITOR_SECONDS)
     args = parser.parse_args()
     if args.mode == "start":
         return start()
     if args.mode == "monitor":
         return monitor(args.window_seconds)
-    return cleanup()
+    if args.mode == "cleanup":
+        return cleanup()
+    return budget_check()
 
 
 if __name__ == "__main__":
