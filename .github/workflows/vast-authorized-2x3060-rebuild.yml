@@ -1,5 +1,5 @@
 name: Authorized 2x3060 frozen 10k rebuild
-run-name: One-shot 2x3060 dataset rebuild (wait for stop)
+run-name: Resume existing 2x3060 target for dataset rebuild (wait for stop)
 
 on:
   push:
@@ -33,6 +33,7 @@ jobs:
               state: "pending",
               context: "CNOT 2x3060 dataset rebuild",
               description: "running",
+              target_url: "https://github.com/" + context.repo.owner + "/" + context.repo.repo + "/actions/runs/" + context.runId,
             });
 
       - name: Check out source pinned to this run
@@ -71,11 +72,12 @@ jobs:
           "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
-      - name: Rent once and rebuild on the remote disk
+      - name: Resume exact stopped target and rebuild on its disk
         id: rent_dataset
         timeout-minutes: 160
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          CNOT103_RESUME_LABEL: cnot103-r10k-44749514754-a1
         run: python3 .github/scripts/vast_rent_rebuild_dataset.py run
 
       - name: Stop only this run's instance and remove its temporary keys
@@ -83,6 +85,7 @@ jobs:
         timeout-minutes: 10
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          CNOT103_RESUME_LABEL: cnot103-r10k-44749514754-a1
         run: python3 .github/scripts/vast_rent_rebuild_dataset.py cleanup
 
       - name: Publish redacted final status
@@ -100,4 +103,5 @@ jobs:
               state: completed ? "success" : "failure",
               context: "CNOT 2x3060 dataset rebuild",
               description: completed ? "completed" : "failed",
+              target_url: "https://github.com/" + context.repo.owner + "/" + context.repo.repo + "/actions/runs/" + context.runId,
             });
