@@ -97,13 +97,13 @@ fn run_updates(
                 let target =
                     indices.iter().map(|index| *index as f64).sum::<f64>() / indices.len() as f64;
                 let loss = (weight - target).pow_tensor_scalar(2.0).mean(Kind::Double);
-                if rare_group_active {
+                Ok(if rare_group_active {
                     loss + (rare_group - target * 0.1)
                         .pow_tensor_scalar(2.0)
                         .mean(Kind::Double)
                 } else {
                     loss
-                }
+                })
             })
             .expect("training update");
         assert!(outcome.accepted);
