@@ -1,4 +1,5 @@
-name: Read-only Vast 2x3060 inventory
+name: Read-only Vast inventory and source-check status
+run-name: Read-only Vast inventory and source-check status
 
 on:
   workflow_dispatch:
