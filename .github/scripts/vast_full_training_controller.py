@@ -409,6 +409,7 @@ def start() -> int:
     START_REQUESTED_LABEL = None
     attached_target_id = None
     try:
+        started_at_epoch = time.time()
         revision, run_id, attempt, root = _run_identity()
         holdout_revision, holdout_sha256 = _pin_status()
         marker = _marker()
@@ -420,7 +421,6 @@ def start() -> int:
             raise GateError("running target identity or GPU differs")
         attached_target_id = ident
         running_rows = base.instance_rows()
-        started_at_epoch = time.time()
         spend_now = base.project_charges()
         if not _validate_running_budget(row, spend_now, running_rows, ident):
             outcome, status = "budget_gate", "budget_gate"
@@ -468,7 +468,20 @@ def start() -> int:
                 base.stop_exact_label(cleanup_label, run_id, attempt)
             except Exception:
                 pass
-    _summarize(checked, outcome, status)
+    try:
+        _summarize(
+            checked,
+            outcome,
+            status,
+            cleanup_needed=bool(START_REQUESTED_LABEL),
+        )
+    except Exception:
+        if START_REQUESTED_LABEL and run_id and attempt:
+            try:
+                base.stop_exact_label(START_REQUESTED_LABEL, run_id, attempt)
+            except Exception:
+                pass
+        return 1
     return 0 if outcome == "accepted" else 1
 
 
@@ -713,14 +726,31 @@ def cleanup() -> int:
     return 0 if outcome == "accepted" else 1
 
 
-def _summarize(checked: str, outcome: str, status: str) -> None:
+def _summarize(
+    checked: str,
+    outcome: str,
+    status: str,
+    cleanup_needed: bool | None = None,
+) -> None:
     if outcome not in OUTCOMES:
         outcome = "controller_failed"
     if status not in STATUSES:
         status = "unavailable"
+    if cleanup_needed is not None and type(cleanup_needed) is not bool:
+        raise GateError("cleanup output flag is invalid")
     print(f"checked_at={checked}")
     print(f"query_outcome={outcome}")
     print(f"status={status}")
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        try:
+            with open(output_path, "a", encoding="utf-8") as output:
+                output.write(f"status={status}\\n")
+                if cleanup_needed is not None:
+                    value = "yes" if cleanup_needed else "no"
+                    output.write(f"cleanup_needed={value}\\n")
+        except OSError:
+            raise GateError("controller step output could not be written") from None
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
