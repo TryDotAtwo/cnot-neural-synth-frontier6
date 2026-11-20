@@ -1,14 +1,15 @@
 {
-  "action": "one-shot 2x RTX 3060 frozen 10k rebuild",
+  "action": "resume existing stopped 2x RTX 3060 target for frozen 10k rebuild",
   "max_total_usd": 20,
   "projected_active_hours": 3,
   "stopped_storage_reserve_hours": 168,
   "preserve_remote_disk": true,
-  "attempt": 8,
-  "reason": "dataset rebuild only: reserve 3 active hours, seven days stopped storage, and status-only transfer; preserve the existing disk and enforce the $20 total cap",
+  "attempt": 9,
+  "reason": "reuse the exact existing stopped target; no new rental; reserve 3 active rebuild hours, seven days stopped storage, and status-only transfer; preserve its disk and enforce the $20 total cap",
   "authorization": {
     "approved": true,
     "approved_at_utc": "2026-11-20",
-    "scope": "single 2x RTX 3060 dataset rebuild; total Vast cap USD 20"
-  }
+    "scope": "single frozen 10k dataset rebuild on the existing 2x RTX 3060 target; no new rental; total Vast cap USD 20"
+  },
+  "resume_existing_label": "cnot103-r10k-44749514754-a1"
 }
