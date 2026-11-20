@@ -1,0 +1,185 @@
+name: CNOT full 100-epoch training
+
+on:
+  push:
+    branches:
+      - codex/full-feature-train-workflow
+    paths:
+      - .github/paid-runs/2026-11-20-full-training.json
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  source_preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Wait for source checks on this exact revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1200))
+          while (( SECONDS < deadline )); do
+            if ! run_info="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/check-full-training-manifest.yml/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f branch="$TARGET_BRANCH" \
+              -F per_page=10 \
+              --jq '[.workflow_runs[]? | select(.head_sha == env.TARGET_SHA) | {status, conclusion}] | first // empty' \
+              2>/dev/null)"; then
+              echo "source_validation=unavailable"
+              exit 1
+            fi
+            if [[ -n "$run_info" ]]; then
+              run_status="$(jq -r '.status // empty' <<<"$run_info")"
+              conclusion="$(jq -r '.conclusion // empty' <<<"$run_info")"
+              if [[ "$run_status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "source_validation=passed"
+                  exit 0
+                fi
+                echo "source_validation=failed"
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          echo "source_validation=timeout"
+          exit 1
+
+  start:
+    needs: source_preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    outputs:
+      cleanup_needed: ${{ steps.start_training.outputs.cleanup_needed }}
+    steps:
+      - name: Check out the source pinned to this run
+        uses: actions/checkout@v4
+
+      - name: Discover and mask the pinned holdout metadata
+        run: python3 .github/scripts/fetch_public_holdout.py --discover-current-pin
+
+      - name: Install Vast CLI
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          cli_venv="$RUNNER_TEMP/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Start the budget-gated full training run
+        id: start_training
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_full_training_controller.py start
+
+  monitor_1:
+    needs: start
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_2:
+    needs: monitor_1
+    if: needs.monitor_1.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_3:
+    needs: monitor_2
+    if: needs.monitor_2.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_4:
+    needs: monitor_3
+    if: needs.monitor_3.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_5:
+    needs: monitor_4
+    if: needs.monitor_4.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_6:
+    needs: monitor_5
+    if: needs.monitor_5.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_7:
+    needs: monitor_6
+    if: needs.monitor_6.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_8:
+    needs: monitor_7
+    if: needs.monitor_7.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  monitor_9:
+    needs: monitor_8
+    if: needs.monitor_8.outputs.status == 'running'
+    uses: ./.github/workflows/cnot-full-training-monitor.yml
+    with:
+      window_seconds: 19800
+    secrets: inherit
+
+  finalize:
+    if: always() && needs.start.outputs.cleanup_needed == 'yes'
+    needs:
+      - source_preflight
+      - start
+      - monitor_1
+      - monitor_2
+      - monitor_3
+      - monitor_4
+      - monitor_5
+      - monitor_6
+      - monitor_7
+      - monitor_8
+      - monitor_9
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the pinned controller source
+        uses: actions/checkout@v4
+
+      - name: Install Vast CLI
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          cli_venv="$RUNNER_TEMP/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Verify quality state and stop only the exact run target
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_full_training_controller.py cleanup
