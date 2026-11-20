@@ -16,7 +16,7 @@ import re
 import sqlite3
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 
 
 WIDTHS = (8, 10, 13, 25, 26, 34, 45, 50, 58, 72, 90, 108, 122, 144)
@@ -27,6 +27,9 @@ SCHEMA = "own_frozen_panels_v1"
 SYMMETRIES = "identity,inverse,transpose,inverse_transpose and wire reversal; not full orbit"
 MASK64 = (1 << 64) - 1
 GOLDEN64 = 0x9E3779B97F4A7C15
+WALK_LENGTH_STREAM = 0xD1B54A32D192ED03
+HOLDOUT_REPOSITORY = "TryDotAtwo/quantum-generator"
+HOLDOUT_FILENAME = "full_shared_native_holdout_20261001.sqlite"
 
 
 class BuildError(RuntimeError):
@@ -275,7 +278,8 @@ def generate_record(position: int, seed_base: int, attempt: int = 0) -> dict:
     rng = SplitMix64(seed ^ (width_index * GOLDEN64))
     rows = identity(n)
     if family == "walk":
-        length = n * (1 + seed % 3)
+        length_rng = SplitMix64(seed ^ WALK_LENGTH_STREAM)
+        length = n * (1 + length_rng.below(3))
         gates = walk_component(rng, n, rows, length)
     elif family == "shear":
         wires = list(range(n))
@@ -341,6 +345,49 @@ def key_wire(key: tuple[int, str, tuple[int, ...]]) -> list:
     return [n, alphabet_id, list(rows)]
 
 
+def single_gate_neighbor(root_rows: tuple[int, ...], other_rows: tuple[int, ...]) -> bool:
+    """Match MatrixState::gate_to_rows for one all-to-all CNOT."""
+    if len(root_rows) != len(other_rows):
+        return False
+    target = None
+    for index, (before, after) in enumerate(zip(root_rows, other_rows)):
+        if before == after:
+            continue
+        if target is not None:
+            return False
+        target = index
+    if target is None:
+        return False
+    difference = root_rows[target] ^ other_rows[target]
+    return any(
+        source != target and root_rows[source] == difference
+        for source in range(len(root_rows))
+    )
+
+
+def has_one_gate_overlap(
+    root_rows: tuple[int, ...],
+    forbidden_rows: set[tuple[int, ...]],
+) -> bool:
+    """Match the direct-row and full-alphabet branches in the Rust loader."""
+    if not forbidden_rows:
+        return False
+    n = len(root_rows)
+    gate_count = n * (n - 1)
+    if len(forbidden_rows) < gate_count:
+        return any(single_gate_neighbor(root_rows, other) for other in forbidden_rows)
+
+    for control in range(n):
+        for target in range(n):
+            if control == target:
+                continue
+            neighbor = list(root_rows)
+            neighbor[target] ^= neighbor[control]
+            if tuple(neighbor) in forbidden_rows:
+                return True
+    return False
+
+
 def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict, dict]:
     dev_views: set[tuple[int, str, tuple[int, ...]]] = set()
     test_views: set[tuple[int, str, tuple[int, ...]]] = set()
@@ -363,6 +410,9 @@ def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict,
     if dev_views & test_views:
         raise BuildError("dev/test finite-symmetry views overlap")
     forbidden = dev_views | test_views
+    forbidden_by_context: dict[tuple[int, str], set[tuple[int, ...]]] = defaultdict(set)
+    for n, alphabet_id, rows in forbidden:
+        forbidden_by_context[(n, alphabet_id)].add(rows)
 
     if len(forbidden) < DEV_COUNT + TEST_COUNT:
         raise BuildError("heldout finite-symmetry view set is incomplete")
@@ -373,12 +423,18 @@ def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict,
     train_lineages = set(heldout_lineages)
     widths = Counter()
     families = Counter()
+    width_families = Counter()
     for position in range(TRAIN_COUNT):
         for attempt in range(1_000):
             record = generate_record(position, seed_base, attempt)
             state = record["state"]
             key = (state["n"], state["alphabet_id"], tuple(state["packed_rows"]))
             if key in seen or any(view in forbidden for view in finite_views(state)):
+                continue
+            context = (state["n"], state["alphabet_id"])
+            if has_one_gate_overlap(
+                key[2], forbidden_by_context.get(context, set())
+            ):
                 continue
             unit = (record["source"], record["seed"])
             if unit in train_units or record["lineage_id"] in train_lineages:
@@ -388,6 +444,7 @@ def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict,
             train_lineages.add(record["lineage_id"])
             widths[state["n"]] += 1
             families[record["source"]] += 1
+            width_families[f"{state['n']}:{record['source']}"] += 1
             train.append(record)
             break
         else:
@@ -397,7 +454,7 @@ def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict,
         "schema": SCHEMA,
         "provenance": {
             "builder": "rebuild_frozen_dataset.py",
-            "builder_schema": "deterministic_walk_shear_composition_v1",
+            "builder_schema": "deterministic_walk_shear_composition_v2",
             "seed_base": seed_base,
             "heldout_source": "TryDotAtwo/quantum-generator",
             "heldout_source_revision": None,
@@ -416,6 +473,7 @@ def build_body(dev: list[dict], test: list[dict], seed_base: int) -> tuple[dict,
         "forbidden_key_count": len(forbidden),
         "train_width_counts": dict(sorted(widths.items())),
         "train_family_counts": dict(sorted(families.items())),
+        "train_width_family_counts": dict(sorted(width_families.items())),
     }
     return body, stats
 
@@ -500,11 +558,46 @@ def self_test() -> None:
     assert reverse_wire_order(state["packed_rows"], 8) == identity(8)
 
 
+def read_holdout_source_receipt(
+    root: pathlib.Path, holdout_path: pathlib.Path, holdout_sha: str
+) -> dict:
+    receipt_path = require_under(
+        root / "input" / "holdout-source.receipt.json", root
+    )
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise BuildError("pinned holdout source receipt is missing or invalid") from None
+    if not isinstance(receipt, dict):
+        raise BuildError("pinned holdout source receipt has an invalid shape")
+    revision = receipt.get("revision")
+    size = holdout_path.stat().st_size
+    if (
+        receipt.get("schema") != "cnot103_public_holdout_source_v1"
+        or receipt.get("repository") != HOLDOUT_REPOSITORY
+        or receipt.get("filename") != HOLDOUT_FILENAME
+        or holdout_path.name != HOLDOUT_FILENAME
+        or not isinstance(revision, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", revision)
+        or receipt.get("sha256") != holdout_sha
+        or receipt.get("expected_sha256") != holdout_sha
+        or not isinstance(receipt.get("bytes"), int)
+        or isinstance(receipt.get("bytes"), bool)
+        or receipt.get("bytes") != size
+        or not isinstance(receipt.get("expected_bytes"), int)
+        or isinstance(receipt.get("expected_bytes"), bool)
+        or receipt.get("expected_bytes") != size
+    ):
+        raise BuildError("pinned holdout source receipt does not match the SQLite file")
+    return receipt
+
+
+
 def run(args: argparse.Namespace) -> None:
     root = pathlib.Path(args.experiment_root).resolve()
     if not root.is_dir():
         raise BuildError("run directory does not exist")
-    holdout_path = pathlib.Path(args.holdout_sqlite).resolve()
+    holdout_path = require_under(pathlib.Path(args.holdout_sqlite), root)
     output_path = require_under(pathlib.Path(args.output), root)
     receipt_path = require_under(pathlib.Path(args.receipt), root)
     if output_path == receipt_path or output_path.suffix != ".json":
@@ -512,11 +605,15 @@ def run(args: argparse.Namespace) -> None:
     if receipt_path.exists() or output_path.with_suffix(".sha256").exists():
         raise BuildError("preserving an existing dataset or receipt")
 
+    if not re.fullmatch(r"[0-9a-f]{40}", args.builder_source_revision):
+        raise BuildError("builder source revision must be a lowercase commit SHA")
     holdout_sha = sha256_file(holdout_path)
+    source_receipt = read_holdout_source_receipt(root, holdout_path, holdout_sha)
     dev, test = read_holdout(holdout_path)
     body, stats = build_body(dev, test, args.seed)
-    body["provenance"]["heldout_source_revision"] = args.source_revision
+    body["provenance"]["heldout_source_revision"] = source_receipt["revision"]
     body["provenance"]["heldout_sqlite_sha256"] = holdout_sha
+    body["provenance"]["builder_source_revision"] = args.builder_source_revision
     raw = write_json_new(output_path, body)
     dataset_sha = hashlib.sha256(raw).hexdigest()
     sidecar = output_path.with_suffix(".sha256")
@@ -526,39 +623,119 @@ def run(args: argparse.Namespace) -> None:
         os.fsync(stream.fileno())
     receipt = {
         "schema": "cnot103_dataset_rebuild_receipt_v1",
-        "complete": True,
+        "complete": False,
+        "validation_status": "pending",
         "created_unix_seconds": int(time.time()),
         "dataset_sha256": dataset_sha,
         "dataset_bytes": len(raw),
         "holdout_sqlite_sha256": holdout_sha,
-        "holdout_source_revision": args.source_revision,
+        "heldout_source_revision": source_receipt["revision"],
+        "builder_source_revision": args.builder_source_revision,
         "seed_base": args.seed,
         **stats,
     }
     write_json_new(receipt_path, receipt)
 
 
+def replace_json_atomic(path: pathlib.Path, value: dict) -> None:
+    if not path.is_file():
+        raise BuildError("refusing to replace a missing receipt")
+    temporary = path.with_name(path.name + ".partial")
+    if temporary.exists():
+        raise BuildError("preserving an existing partial receipt")
+    raw = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    with temporary.open("xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def finalize_dataset(
+    root_arg: pathlib.Path,
+    output_arg: pathlib.Path,
+    receipt_arg: pathlib.Path,
+    expected_dataset_sha256: str,
+) -> None:
+    root = pathlib.Path(root_arg).resolve()
+    output_path = require_under(pathlib.Path(output_arg), root)
+    receipt_path = require_under(pathlib.Path(receipt_arg), root)
+    if (
+        output_path == receipt_path
+        or output_path.suffix != ".json"
+        or not isinstance(expected_dataset_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_dataset_sha256)
+    ):
+        raise BuildError("dataset finalization arguments are invalid")
+    if not output_path.is_file() or not receipt_path.is_file():
+        raise BuildError("dataset or pending receipt is missing")
+
+    actual_sha = sha256_file(output_path)
+    sidecar = output_path.with_suffix(".sha256")
+    try:
+        sidecar_value = sidecar.read_text(encoding="ascii")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise BuildError("dataset sidecar or receipt is invalid") from None
+    if (
+        actual_sha != expected_dataset_sha256
+        or sidecar_value != expected_dataset_sha256 + "\n"
+        or not isinstance(receipt, dict)
+        or receipt.get("schema") != "cnot103_dataset_rebuild_receipt_v1"
+        or receipt.get("complete") is not False
+        or receipt.get("validation_status") != "pending"
+        or receipt.get("dataset_sha256") != actual_sha
+        or receipt.get("dataset_bytes") != output_path.stat().st_size
+    ):
+        raise BuildError("pending receipt does not match the Rust-validated dataset")
+
+    receipt["complete"] = True
+    receipt["validation_status"] = "rust_loader_accepted"
+    receipt["validated_unix_seconds"] = int(time.time())
+    replace_json_atomic(receipt_path, receipt)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--finalize-dataset", action="store_true")
     parser.add_argument("--experiment-root")
     parser.add_argument("--holdout-sqlite")
     parser.add_argument("--output")
     parser.add_argument("--receipt")
-    parser.add_argument("--source-revision")
+    parser.add_argument("--builder-source-revision")
+    parser.add_argument("--expected-dataset-sha256")
     parser.add_argument("--seed", type=int, default=202611190001)
     args = parser.parse_args()
+
     try:
         if args.self_test:
             self_test()
             print("dataset_builder_selftest=pass")
             return 0
-        if not all((args.experiment_root, args.holdout_sqlite, args.output, args.receipt, args.source_revision)):
+        if args.finalize_dataset:
+            if not all((
+                args.experiment_root, args.output, args.receipt,
+                args.expected_dataset_sha256,
+            )):
+                raise BuildError("dataset finalization arguments are incomplete")
+            finalize_dataset(
+                pathlib.Path(args.experiment_root),
+                pathlib.Path(args.output),
+                pathlib.Path(args.receipt),
+                args.expected_dataset_sha256,
+            )
+            print("dataset_validation=accepted")
+            return 0
+        if not all((
+            args.experiment_root, args.holdout_sqlite, args.output,
+            args.receipt, args.builder_source_revision,
+        )):
             raise BuildError("remote rebuild arguments are incomplete")
         if not 0 <= args.seed <= MASK64:
             raise BuildError("seed must fit an unsigned 64-bit integer")
-        if not re.fullmatch(r"[0-9a-f]{40}", args.source_revision):
-            raise BuildError("holdout source revision must be a lowercase commit SHA")
+        if not re.fullmatch(r"[0-9a-f]{40}", args.builder_source_revision):
+            raise BuildError("builder source revision must be a lowercase commit SHA")
         run(args)
         print("dataset_build=accepted")
         return 0

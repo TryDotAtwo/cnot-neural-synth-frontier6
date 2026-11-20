@@ -116,6 +116,34 @@ class FrozenDatasetBuilderTests(unittest.TestCase):
             self.assertFalse(build_receipt["complete"])
             self.assertEqual(build_receipt["validation_status"], "pending")
 
+    def test_rejects_holdout_receipt_that_does_not_match_sqlite_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_dir = root / "input"
+            data_dir = root / "data"
+            input_dir.mkdir()
+            data_dir.mkdir()
+            holdout = input_dir / "full_shared_native_holdout_20261001.sqlite"
+            holdout.write_bytes(b"synthetic holdout bytes")
+            source_receipt = make_source_receipt(holdout, "a" * 40)
+            source_receipt["sha256"] = "0" * 64
+            (input_dir / "holdout-source.receipt.json").write_text(
+                json.dumps(source_receipt), encoding="utf-8"
+            )
+            args = type("Args", (), {
+                "experiment_root": str(root),
+                "holdout_sqlite": str(holdout),
+                "output": str(data_dir / "frozen_train_10k.json"),
+                "receipt": str(data_dir / "build.receipt.json"),
+                "source_revision": "b" * 40,
+                "builder_source_revision": "b" * 40,
+                "seed": 202611190001,
+            })()
+
+            with self.assertRaises(builder.BuildError):
+                builder.run(args)
+
+
     def test_finalizer_requires_matching_dataset_sha_and_records_loader_acceptance(self):
         self.assertTrue(
             hasattr(builder, "finalize_dataset"),

@@ -179,7 +179,7 @@ python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
   --holdout-sqlite "$ROOT/input/full_shared_native_holdout_20261001.sqlite" \\
   --output "$DATA" \\
   --receipt "$ROOT/data/build.receipt.json" \\
-  --source-revision '{source_revision}' \\
+  --builder-source-revision '{source_revision}' \\
   --seed 202611190001
 DATA_SHA="$(tr -d '\\r\\n' <"$ROOT/data/frozen_train_10k.sha256")"
 case "$DATA_SHA" in
@@ -189,6 +189,12 @@ if [ "$(expr length "$DATA_SHA")" -ne 64 ]; then exit 21; fi
 CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
   --manifest-path "$SOURCE/native/Cargo.toml" \\
   --no-default-features --bin cnot103-validate-data -- "$DATA" "$DATA_SHA"
+python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
+  --finalize-dataset \\
+  --experiment-root "$ROOT" \\
+  --output "$DATA" \\
+  --receipt "$ROOT/data/build.receipt.json" \\
+  --expected-dataset-sha256 "$DATA_SHA"
 """
         proc = remote_bash(host, port, key_path, known_hosts, remote)
         if proc is None:
