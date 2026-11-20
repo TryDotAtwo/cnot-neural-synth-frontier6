@@ -235,6 +235,14 @@ impl DeviceFeaturePlan {
         {
             return Err("GPU contextual plan and state batch use different widths".into());
         }
+        if self.evaluations.is_some() {
+            return Err("single-feature caching requires unlimited deterministic evaluations".into());
+        }
+        let rows =
+            usize::try_from(states.batch_size()).map_err(|_| "invalid GPU packet batch")?;
+        if !self.fits_workspace(states.dimension(), rows)? {
+            return Err("single-feature cache exceeds the configured feature workspace".into());
+        }
         if self
             .contexts
             .as_ref()
