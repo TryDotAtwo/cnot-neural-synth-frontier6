@@ -290,6 +290,18 @@ def _select_pinned_profile(candidates: list[tuple[str, dict]]) -> tuple[str, dic
     return dominators[0] if len(dominators) == 1 else None
 
 
+def _profile_selection_status(candidates: list[tuple[str, dict]]) -> str:
+    if _select_pinned_profile(candidates) is not None:
+        return "schema_source_pinned"
+    sources = {
+        (profile["source_revision"], profile["source_path"])
+        for _path, profile in candidates
+    }
+    if len(sources) > 1:
+        return "candidate_source_ambiguous"
+    return "candidate_contexts_incomparable"
+
+
 def inspect_profile(
     fetch_page=_fetch_tree_page,
     fetch_file=_fetch_limited,
@@ -325,11 +337,7 @@ def inspect_profile(
 
         if not pinned_profiles:
             return "candidate_unverified"
-        return (
-            "schema_source_pinned"
-            if _select_pinned_profile(pinned_profiles) is not None
-            else "candidate_ambiguous"
-        )
+        return _profile_selection_status(pinned_profiles)
     except ProfileCheckError:
         return "unavailable"
 
@@ -337,7 +345,8 @@ def inspect_profile(
 if __name__ == "__main__":
     status = inspect_profile()
     if status not in {
-        "candidate_ambiguous", "candidate_unverified", "not_found",
+        "candidate_ambiguous", "candidate_contexts_incomparable",
+        "candidate_source_ambiguous", "candidate_unverified", "not_found",
         "schema_source_pinned", "unavailable",
     }:
         status = "unavailable"
