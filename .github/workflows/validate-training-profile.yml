@@ -20,7 +20,7 @@ jobs:
   validate-profile:
     if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -34,3 +34,23 @@ jobs:
             --dataset-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             --checkpoint-dir /workspace/profile-check/checkpoints \
             --output "$RUNNER_TEMP/cnot103-training-profile-manifest.json"
+
+      - name: Set up Rust for CPU-only manifest validation
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate the profile with the Rust manifest parser
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-profile-target
+        run: |
+          set +e
+          cargo run --quiet --manifest-path native/Cargo.toml --no-default-features \
+            --bin cnot103-validate-manifest -- "$RUNNER_TEMP/cnot103-training-profile-manifest.json" \
+            >"$RUNNER_TEMP/cnot103-profile-validator.stdout" \
+            2>"$RUNNER_TEMP/cnot103-profile-validator.stderr"
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ] || ! grep -qx 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-profile-validator.stdout" || ! grep -qx 'model_input_slots=102' "$RUNNER_TEMP/cnot103-profile-validator.stdout"; then
+            printf 'manifest_profile=invalid\\n'
+            exit 1
+          fi
+          printf 'manifest_profile=valid\\nmodel_input_slots=102\\n'
