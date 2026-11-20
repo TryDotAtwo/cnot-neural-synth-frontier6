@@ -47,6 +47,23 @@ class ProfileCheckError(RuntimeError):
     pass
 
 
+def _candidate_priority(path: str) -> int:
+    from pathlib import PurePosixPath
+
+    parsed = PurePosixPath(path)
+    basename = parsed.name.casefold().replace("-", "_")
+    parents = {part.casefold().replace("-", "_") for part in parsed.parts[:-1]}
+    if "profile" in basename:
+        return 0
+    if "feature" in basename and "context" in basename:
+        return 1
+    if any("profile" in part for part in parents):
+        return 2
+    if any("feature" in part and ("context" in part or "profile" in part) for part in parents):
+        return 3
+    return 4
+
+
 def is_candidate_path(path: str) -> bool:
     if not isinstance(path, str) or "\\x00" in path:
         return False
@@ -329,30 +346,33 @@ def inspect_profile(
             return "not_found"
         if not json_candidates:
             return "candidate_unverified"
-        if len(json_candidates) > MAX_PROFILE_CANDIDATES:
-            return "candidate_limit_exceeded"
 
-        pinned_profiles = []
-        schema_valid_count = 0
-        for path in json_candidates:
-            raw = fetch_file(
-                _candidate_url(revision, path),
-                MAX_PROFILE_BYTES,
-                _allowed_hub_download_host,
-            )
-            try:
-                profile = validate_profile_bytes(raw)
-            except ProfileCheckError:
-                continue
-            schema_valid_count += 1
-            if source_exists(profile["source_revision"], profile["source_path"]):
-                pinned_profiles.append((path, profile))
+        saw_schema_valid = False
+        for priority in sorted({_candidate_priority(path) for path in json_candidates}):
+            tier = [
+                path for path in json_candidates
+                if _candidate_priority(path) == priority
+            ]
+            if len(tier) > MAX_PROFILE_CANDIDATES:
+                return "candidate_limit_exceeded"
+            pinned_profiles = []
+            for path in tier:
+                raw = fetch_file(
+                    _candidate_url(revision, path),
+                    MAX_PROFILE_BYTES,
+                    _allowed_hub_download_host,
+                )
+                try:
+                    profile = validate_profile_bytes(raw)
+                except ProfileCheckError:
+                    continue
+                saw_schema_valid = True
+                if source_exists(profile["source_revision"], profile["source_path"]):
+                    pinned_profiles.append((path, profile))
+            if pinned_profiles:
+                return _profile_selection_status(pinned_profiles)
 
-        if not schema_valid_count:
-            return "candidate_schema_unverified"
-        if not pinned_profiles:
-            return "candidate_source_unverified"
-        return _profile_selection_status(pinned_profiles)
+        return "candidate_source_unverified" if saw_schema_valid else "candidate_schema_unverified"
     except ProfileCheckError:
         return "unavailable"
 
