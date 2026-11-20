@@ -21,7 +21,7 @@ USER_AGENT = "TheQuantumProject-ProfileMetadata/1.0"
 HUB_HOSTS = {"huggingface.co", "hf.co"}
 PROFILE_SUFFIXES = {".json", ".jsonl", ".yaml", ".yml", ".toml"}
 MAX_PAGE_BYTES = 4 * 1024 * 1024
-MAX_PROFILE_BYTES = 1 * 1024 * 1024
+MAX_PROFILE_BYTES = 8 * 1024 * 1024
 MAX_PROFILE_CANDIDATES = 32
 ROW_CONTEXT_KEYS = {
     "labeled_cuts",
