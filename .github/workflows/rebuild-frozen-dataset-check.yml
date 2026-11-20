@@ -31,6 +31,7 @@ on:
       - native/src/bin/cnot103_validate_data.rs
       - native/src/bin/cnot103_validate_manifest.rs
       - native/src/run_config/manifest/**
+      - native/tests/tch_training_resume.rs
 
 permissions:
   contents: read
