@@ -41,6 +41,10 @@ class TrainingManifestTests(unittest.TestCase):
         self.assertEqual(manifest["training"]["attempts"], 250_000)
         self.assertEqual(manifest["training"]["cuda_devices"], [0, 1])
         self.assertEqual(manifest["training"]["batch_size"], 4)
+        interval = manifest["training"]["checkpoint_every_attempts"]
+        self.assertGreater(interval, 0)
+        checkpoint_count = (250_000 + interval - 1) // interval
+        self.assertLessEqual(checkpoint_count, 10)
         self.assertEqual(
             manifest["model"],
             {
