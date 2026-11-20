@@ -59,13 +59,10 @@ def is_candidate_path(path: str) -> bool:
     named_profile = "profile" in basename or (
         "feature" in basename and "context" in basename
     )
-    profile_directory = (
-        any("profile" in part for part in parents)
-        and basename in {"train.json", "training.json", "contexts.json", "metadata.json"}
-    )
-    feature_context_directory = (
-        bool(parents & {"feature_contexts", "feature_context_profiles"})
-        and basename in {"profile.json", "training.json", "contexts.json"}
+    profile_directory = any("profile" in part for part in parents)
+    feature_context_directory = any(
+        "feature" in part and ("context" in part or "profile" in part)
+        for part in parents
     )
     return suffix in PROFILE_SUFFIXES and (
         named_profile or profile_directory or feature_context_directory
@@ -336,6 +333,7 @@ def inspect_profile(
             return "candidate_limit_exceeded"
 
         pinned_profiles = []
+        schema_valid_count = 0
         for path in json_candidates:
             raw = fetch_file(
                 _candidate_url(revision, path),
@@ -346,11 +344,14 @@ def inspect_profile(
                 profile = validate_profile_bytes(raw)
             except ProfileCheckError:
                 continue
+            schema_valid_count += 1
             if source_exists(profile["source_revision"], profile["source_path"]):
                 pinned_profiles.append((path, profile))
 
+        if not schema_valid_count:
+            return "candidate_schema_unverified"
         if not pinned_profiles:
-            return "candidate_unverified"
+            return "candidate_source_unverified"
         return _profile_selection_status(pinned_profiles)
     except ProfileCheckError:
         return "unavailable"
@@ -360,7 +361,8 @@ if __name__ == "__main__":
     status = inspect_profile()
     if status not in {
         "candidate_ambiguous", "candidate_contexts_incomparable",
-        "candidate_limit_exceeded", "candidate_source_ambiguous",
+        "candidate_limit_exceeded", "candidate_schema_unverified",
+        "candidate_source_ambiguous", "candidate_source_unverified",
         "candidate_unverified", "not_found",
         "schema_source_pinned", "unavailable",
     }:
