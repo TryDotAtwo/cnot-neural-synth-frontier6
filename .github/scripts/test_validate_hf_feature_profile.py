@@ -17,7 +17,7 @@ from validate_hf_feature_profile import (
 class HFProfileValidationTests(unittest.TestCase):
     def test_candidate_path_filter(self):
         self.assertTrue(is_candidate_path("feature_context_profile.json"))
-        self.assertTrue(is_candidate_path("profiles/contexts.yaml"))
+        self.assertTrue(is_candidate_path("profiles/contexts.json"))
         self.assertTrue(is_candidate_path("profiles/train.json"))
         self.assertTrue(is_candidate_path("feature_contexts/profile.json"))
         self.assertFalse(is_candidate_path("feature_contexts/train.json"))
