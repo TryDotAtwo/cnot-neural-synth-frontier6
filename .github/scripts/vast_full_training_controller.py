@@ -285,6 +285,44 @@ def _attach_and_remote(
     return proc, key_cleanup, ident
 
 
+
+
+class RemoteSession:
+    def __init__(self, row: dict, run_id: str, attempt: str):
+        self.ident = base.instance_id(row)
+        if self.ident is None:
+            raise GateError("target id is invalid")
+        self.host, self.port = base.endpoint(row)
+        self.temp_root, self.key_path, self.known_hosts, self.public_key = _new_private_key(run_id, attempt)
+        self.attached = False
+        self.closed = False
+        try:
+            if base.probe.find_attached_key_id(base.api_key(), self.ident, self.public_key) is not None:
+                raise GateError("temporary SSH key collision")
+            base.attach_key(self.ident, self.public_key)
+            self.attached = True
+        except Exception:
+            _remove_local_key(self.temp_root, self.key_path)
+            raise
+
+    def run(self, script: str, timeout_seconds: int) -> subprocess.CompletedProcess[str] | None:
+        if self.closed:
+            raise GateError("remote session is closed")
+        return base.remote_script(
+            self.host, self.port, self.key_path, script, timeout_seconds
+        )
+
+    def close(self) -> str:
+        if self.closed:
+            return "not_found"
+        self.closed = True
+        result = "not_found"
+        if self.attached:
+            result = base.detach_key(self.ident, self.public_key)
+        _remove_local_key(self.temp_root, self.key_path)
+        return result
+
+
 def _start_target(
     rows: list[dict], marker: dict, run_id: str, attempt: str
 ) -> tuple[dict, str, bool, float]:
@@ -435,7 +473,8 @@ def start() -> int:
 
 
 def _read_remote_status(
-    row: dict, run_id: str, attempt: str, root: str
+    row: dict, run_id: str, attempt: str, root: str,
+    session: RemoteSession | None = None,
 ) -> tuple[str, str, float | None, float | None]:
     q = shlex.quote
     remote = f"""set -euo pipefail
@@ -471,9 +510,14 @@ for name in ("started_at_epoch", "budget_baseline", "instance_rate", "storage_co
         print(name + "=" + str(item))
 PY
 """
-    proc, key_cleanup, _ident = _attach_and_remote(row, run_id, attempt, remote, 30)
-    if proc is None or proc.returncode != 0 or key_cleanup not in {"detached", "not_found"}:
-        return "unavailable", "unavailable", None, None
+    if session is None:
+        proc, key_cleanup, _ident = _attach_and_remote(row, run_id, attempt, remote, 30)
+        if proc is None or proc.returncode != 0 or key_cleanup not in {"detached", "not_found"}:
+            return "unavailable", "unavailable", None, None
+    else:
+        proc = session.run(remote, 30)
+        if proc is None or proc.returncode != 0:
+            return "unavailable", "unavailable", None, None
     values = {}
     for line in proc.stdout.splitlines():
         key, separator, value = line.partition("=")
@@ -499,11 +543,74 @@ def _find_run_target(rows: list[dict], marker: dict, run_id: str, attempt: str) 
     return _labels_for_run(rows, old_label, fresh_label)
 
 
+def _monitor_window(
+    row: dict,
+    label: str,
+    ident: int,
+    run_id: str,
+    attempt: str,
+    root: str,
+    window_seconds: int,
+    session: RemoteSession,
+) -> tuple[int, str, str]:
+    host_deadline = time.monotonic() + max(1, min(int(window_seconds), MONITOR_SECONDS))
+    next_budget_check = 0.0
+    while True:
+        state, quality, started_at, budget_baseline = _read_remote_status(
+            row, run_id, attempt, root, session=session
+        )
+        if state == "completed":
+            if quality == "passed":
+                return 0, "completed", "completed"
+            return 1, "failed", "failed"
+        if state == "budget_gate":
+            return 1, "budget_gate", "budget_gate"
+        if state == "time_limit":
+            return 1, "time_limit", "time_limit"
+        if state == "failed":
+            return 1, "failed", "failed"
+        if state == "unavailable":
+            return 1, "remote_state_unavailable", "unavailable"
+        if time.monotonic() >= next_budget_check:
+            current_rows = base.instance_rows()
+            current = base.resolve_label(current_rows, label)
+            if current is None or base.instance_id(current) != ident:
+                return 1, "unverified", "unverified"
+            spend_now = base.project_charges()
+            rate = _finite(current.get("dph_total"))
+            extra_storage = _other_storage_reserve(current_rows, ident)
+            if rate is None or extra_storage is None or started_at is None:
+                base.stop_exact_label(label, run_id, attempt)
+                return 1, "budget_gate", "budget_gate"
+            elapsed_hours = max(0.0, (time.time() - started_at) / 3600.0)
+            baseline = budget_baseline if budget_baseline is not None else spend_now
+            projected_spend = max(spend_now, baseline + rate * elapsed_hours)
+            remaining_hours = max(
+                0.0, (MAX_RUNTIME_SECONDS / 3600.0) - elapsed_hours
+            )
+            if not full_run_budget_allows(
+                projected_spend,
+                rate,
+                current.get("storage_cost"),
+                active_hours=remaining_hours + 0.25,
+                extra_storage_reserve=extra_storage,
+            ):
+                base.stop_exact_label(label, run_id, attempt)
+                return 1, "budget_gate", "budget_gate"
+            row = current
+            next_budget_check = time.monotonic() + 15 * 60
+        if time.monotonic() >= host_deadline:
+            return 0, "running", "running"
+        time.sleep(min(POLL_SECONDS, max(1.0, host_deadline - time.monotonic())))
+
+
 def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome, status = "controller_failed", "unavailable"
+    session = None
+    result_code = 1
     try:
-        revision, run_id, attempt, root = _run_identity()
+        _revision, run_id, attempt, root = _run_identity()
         marker = _marker()
         rows = base.instance_rows()
         row, label = _find_run_target(rows, marker, run_id, attempt)
@@ -517,70 +624,24 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
         if ident is None:
             outcome, status = "target_unavailable", "unavailable"
             raise GateError("target identity is unavailable")
-        host_deadline = time.monotonic() + max(1, min(int(window_seconds), MONITOR_SECONDS))
-        while True:
-            state, quality, started_at, budget_baseline = _read_remote_status(
-                row, run_id, attempt, root
-            )
-            if state == "completed":
-                outcome, status = "completed", "completed"
-                _summarize(checked, outcome, status)
-                return 0
-            if state == "budget_gate":
-                outcome, status = "budget_gate", "budget_gate"
-                _summarize(checked, outcome, status)
-                return 1
-            if state == "time_limit":
-                outcome, status = "time_limit", "time_limit"
-                _summarize(checked, outcome, status)
-                return 1
-            if state in {"failed", "unavailable"}:
-                outcome, status = "remote_state_unavailable", "failed"
-                if state == "failed":
-                    outcome = "failed"
-                _summarize(checked, outcome, status)
-                return 1
-
-            current_rows = base.instance_rows()
-            current = base.resolve_label(current_rows, label)
-            if current is None or base.instance_id(current) != ident:
-                outcome, status = "unverified", "unverified"
-                return 1
-            spend_now = base.project_charges()
-            elapsed_hours = (
-                max(0.0, (time.time() - started_at) / 3600.0)
-                if started_at is not None else 0.0
-            )
-            baseline = budget_baseline if budget_baseline is not None else spend_now
-            rate = _finite(current.get("dph_total"))
-            projected_spend = max(spend_now, baseline + (rate or 0.0) * elapsed_hours)
-            remaining_hours = max(0.0, (MAX_RUNTIME_SECONDS / 3600.0) - elapsed_hours)
-            extra_storage = _other_storage_reserve(current_rows, ident)
-            if rate is None or extra_storage is None or not full_run_budget_allows(
-                projected_spend,
-                rate,
-                current.get("storage_cost"),
-                active_hours=remaining_hours + 0.25,
-                extra_storage_reserve=extra_storage,
-            ):
-                base.stop_exact_label(label, run_id, attempt)
-                outcome, status = "budget_gate", "budget_gate"
-                _summarize(checked, outcome, status)
-                return 1
-            if time.monotonic() >= host_deadline:
-                outcome, status = "running", "running"
-                _summarize(checked, outcome, status)
-                return 0
-            time.sleep(min(POLL_SECONDS, max(1.0, host_deadline - time.monotonic())))
+        session = RemoteSession(row, run_id, attempt)
+        result_code, outcome, status = _monitor_window(
+            row, label, ident, run_id, attempt, root, window_seconds, session
+        )
     except base.probe.ApiFailure:
         outcome, status = "api_failed", "unverified"
-    except GateError:
+    except (GateError, base.GateError):
         if outcome == "controller_failed":
             outcome, status = "target_unavailable", "unavailable"
     except Exception:
         outcome, status = "controller_failed", "unavailable"
+    finally:
+        if session is not None:
+            key_cleanup = session.close()
+            if key_cleanup not in {"detached", "not_found"} and result_code == 0:
+                outcome, status, result_code = "api_failed", "unverified", 1
     _summarize(checked, outcome, status)
-    return 1
+    return result_code
 
 
 def cleanup() -> int:
