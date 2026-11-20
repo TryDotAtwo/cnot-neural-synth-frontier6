@@ -45,10 +45,6 @@ jobs:
       - name: Check the pinned training manifest builder
         run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py'
 
-      - name: Create a non-sensitive profile-validation manifest
-        run: |
-          python3 .github/scripts/build_training_manifest.py --self-test --output "$RUNNER_TEMP/candidate-training-manifest.json"
-          chmod 644 "$RUNNER_TEMP/candidate-training-manifest.json"
 
       - name: Parse the remote holdout fetcher without network access
         run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/fetch_public_holdout.py').read_text(encoding='utf-8'))"
@@ -120,6 +116,11 @@ jobs:
               exit 1
             fi
           fi
+      - name: Create manifest for in-job Rust validation
+        run: |
+          python3 .github/scripts/build_training_manifest.py --self-test --output "$RUNNER_TEMP/candidate-training-manifest.json"
+          chmod 644 "$RUNNER_TEMP/candidate-training-manifest.json"
+
       - name: Build full CUDA training and benchmark binaries
         shell: bash
         run: |
