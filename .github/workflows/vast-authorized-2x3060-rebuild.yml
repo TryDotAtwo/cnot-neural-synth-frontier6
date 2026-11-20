@@ -63,6 +63,23 @@ jobs:
           python3 -m unittest discover -s .github/scripts -p 'test_rebuild_frozen_dataset.py' -v
           python3 .github/scripts/fetch_public_holdout.py --metadata-check --expected-revision "$CNOT103_HOLDOUT_REVISION" --expected-sha256 "$CNOT103_HOLDOUT_SHA256"
 
+      - name: Validate the approved existing target
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          spec = json.loads(Path(".github/paid-runs/2026-11-20-rebuild-10k.json").read_text(encoding="utf-8"))
+          label = spec.get("resume_existing_label")
+          if not isinstance(label, str) or not re.fullmatch(r"cnot103-r10k-[0-9]{1,20}-a[0-9]{1,10}", label):
+              raise SystemExit("approved resume target is invalid")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
+              stream.write(f"CNOT103_RESUME_LABEL={label}\n")
+          print("resume_target=validated")
+          PY
+
       - name: Install Vast CLI
         timeout-minutes: 5
         run: |
@@ -77,7 +94,6 @@ jobs:
         timeout-minutes: 160
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-          CNOT103_RESUME_LABEL: cnot103-r10k-44749514754-a1
         run: python3 .github/scripts/vast_rent_rebuild_dataset.py run
 
       - name: Stop only this run's instance and remove its temporary keys
@@ -85,7 +101,6 @@ jobs:
         timeout-minutes: 10
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-          CNOT103_RESUME_LABEL: cnot103-r10k-44749514754-a1
         run: python3 .github/scripts/vast_rent_rebuild_dataset.py cleanup
 
       - name: Publish redacted final status
