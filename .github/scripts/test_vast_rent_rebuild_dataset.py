@@ -126,6 +126,32 @@ class OfferAndBudgetTests(unittest.TestCase):
 
 
 
+    def test_project_charges_include_owned_storage_rows_without_metadata_labels(self):
+        from unittest.mock import patch
+
+        owned_id = next(iter(controller.OWNED_INSTANCE_IDS))
+        unowned_id = 1
+        while unowned_id in controller.OWNED_INSTANCE_IDS:
+            unowned_id += 1
+        records = [
+            {
+                "description": f"Instance {owned_id} storage charge",
+                "amount": 0.25,
+            },
+            {
+                "description": f"Instance {unowned_id} storage charge",
+                "amount": 3.0,
+                "metadata": {"label": "another-project"},
+            },
+        ]
+        with patch.object(
+            controller,
+            "vast_cli",
+            return_value={"results": records, "next_token": None},
+        ):
+            self.assertAlmostEqual(controller.project_charges(), 0.25)
+
+
 class ResumeExistingTargetTests(unittest.TestCase):
     def _environment(self, label):
         return {
