@@ -13,6 +13,20 @@ from typing import Any
 
 BUDGET_CAP = 20.0
 REMOTE_RUN_ROOT = pathlib.Path("/workspace/tqp_long_training")
+ORIGINAL_MODEL_CONFIG = {
+    "wire_dim": 744,
+    "pair_dim": 186,
+    "structural_blocks": 8,
+    "attention_heads": 8,
+    "feedforward_dim": 1488,
+    "fusion_blocks": 2,
+    "basis_proposal_hidden_dim": 256,
+}
+ORIGINAL_PARAMETER_COUNT = 136_421_807
+TRAIN_ROWS_PER_EPOCH = 10_000
+TARGET_EPOCHS = 100
+TRAIN_BATCH_SIZE = 4
+BELLMAN_SAMPLED_NEIGHBORS = 4
 _ALLOWED_STATES = frozenset({"not_started", "running", "succeeded", "failed", "unknown"})
 _VAST_STATES = frozenset({
     "running", "stopped", "starting", "stopping", "scheduling",
@@ -73,6 +87,33 @@ def redacted_report(state: object, checked_at: object) -> str:
     safe_state = state if isinstance(state, str) and state in _ALLOWED_STATES else "unknown"
     safe_time = checked_at if isinstance(checked_at, str) and _UTC_TIMESTAMP.fullmatch(checked_at) else "unavailable"
     return f"checked_at_utc={safe_time}\ntraining_status={safe_state}"
+
+
+def is_original_model(model_config: object, parameter_count: object) -> bool:
+    """Require the pinned eight-block architecture and its verified parameter count."""
+    if (
+        not isinstance(model_config, dict)
+        or any(type(value) is not int for value in model_config.values())
+        or model_config != ORIGINAL_MODEL_CONFIG
+        or type(parameter_count) is not int
+    ):
+        return False
+    return parameter_count == ORIGINAL_PARAMETER_COUNT
+
+
+def required_attempts_for_epochs(
+    dataset_size: object,
+    batch_size: object,
+    epochs: object,
+) -> int | None:
+    """Return update count only when it covers exactly whole dataset epochs."""
+    values = (dataset_size, batch_size, epochs)
+    if any(type(value) is not int or value <= 0 for value in values):
+        return None
+    examples = dataset_size * epochs
+    if examples % batch_size != 0:
+        return None
+    return examples // batch_size
 
 
 def _is_exact_2x3060(row: dict[str, Any]) -> bool:
