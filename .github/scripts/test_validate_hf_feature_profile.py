@@ -20,7 +20,7 @@ class HFProfileValidationTests(unittest.TestCase):
         self.assertTrue(is_candidate_path("profiles/contexts.json"))
         self.assertTrue(is_candidate_path("profiles/train.json"))
         self.assertTrue(is_candidate_path("feature_contexts/profile.json"))
-        self.assertFalse(is_candidate_path("feature_contexts/train.json"))
+        self.assertTrue(is_candidate_path("feature_contexts/train.json"))
         self.assertFalse(is_candidate_path("contexts/records/example.json"))
         self.assertFalse(is_candidate_path("README.md"))
         self.assertFalse(is_candidate_path("holdout.sqlite"))
@@ -190,6 +190,27 @@ class HFProfileValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(status, "candidate_source_ambiguous")
+
+
+    def test_inspect_profile_classifies_invalid_candidate_schema(self):
+        status = inspect_profile(
+            fetch_page=lambda _url: (["profiles/candidate_profile.json"], None),
+            fetch_file=lambda *_args: b'{"schema":"wrong"}',
+            revision_getter=lambda: "b" * 40,
+        )
+
+        self.assertEqual(status, "candidate_schema_unverified")
+
+    def test_inspect_profile_classifies_missing_pinned_source(self):
+        profile = _self_test_profile()
+        status = inspect_profile(
+            fetch_page=lambda _url: (["profiles/candidate_profile.json"], None),
+            fetch_file=lambda *_args: json.dumps(profile).encode(),
+            source_exists=lambda _revision, _path: False,
+            revision_getter=lambda: "b" * 40,
+        )
+
+        self.assertEqual(status, "candidate_source_unverified")
 
     def test_missing_pinned_source_is_unverified_not_unavailable(self):
         def missing_source(*_args):
