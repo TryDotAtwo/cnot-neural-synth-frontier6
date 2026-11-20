@@ -216,9 +216,17 @@ def validate_profile_bytes(payload: bytes) -> dict:
             "feature context alphabet must exactly match an objective alphabet",
         }:
             raise ProfileCheckError("candidate objective alphabet mismatch") from None
-        rejection = {
-            "profile schema": "profile_schema",
-            "profile identity": "profile_identity",
+        if (
+            isinstance(error, ValueError)
+            and str(error) == "profile schema"
+            and isinstance(profile, dict)
+            and isinstance(profile.get("feature_contexts"), dict)
+        ):
+            rejection = "profile_schema_with_contexts"
+        else:
+            rejection = {
+                "profile schema": "profile_schema",
+                "profile identity": "profile_identity",
             "profile source": "profile_source",
             "profile source revision": "profile_source_revision",
             "profile source path": "profile_source_path",
@@ -227,8 +235,8 @@ def validate_profile_bytes(payload: bytes) -> dict:
             "feature context alphabet": "feature_context_alphabet",
             "additional selected-residual contexts": "additional_contexts",
             "additional selected-residual context fields": "additional_context_fields",
-            "additional selected-residual gates": "additional_context_gates",
-        }.get(str(error), "other")
+                "additional selected-residual gates": "additional_context_gates",
+            }.get(str(error), "other")
         raise ProfileCheckError(f"candidate profile rejected {rejection}") from None
     return {
         "profile": profile,
@@ -449,7 +457,7 @@ if __name__ == "__main__":
     allowed_statuses.update(
         f"candidate_rejected_{code}"
         for code in (
-            "json", "profile_schema", "profile_identity", "profile_source",
+            "json", "profile_schema", "profile_schema_with_contexts", "profile_identity", "profile_source",
             "profile_source_revision", "profile_source_path", "feature_context_fields",
             "feature_context_max_width", "feature_context_alphabet",
             "additional_contexts", "additional_context_fields",
