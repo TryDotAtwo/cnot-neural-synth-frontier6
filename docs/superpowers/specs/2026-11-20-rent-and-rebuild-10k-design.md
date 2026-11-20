@@ -4,7 +4,7 @@
 Rebuild a fresh, reproducible 10,000-row training panel on a newly rented 2x RTX 3060 host so the next benchmark can use a pinned dataset SHA. The Windows workspace remains source-only; generated data and receipts stay on the Vast container disk.
 
 ## Goals
-- Rent at most one verified, reliable 2x RTX 3060 target only when current project charges plus a 50-hour compute/storage projection and a transfer reserve fit the existing $20 cap.
+- Rent at most one verified, reliable 2x RTX 3060 target only when current project charges plus a 51-hour projection (48h training plus up to 3h rebuild), seven days of stopped storage, and a $0.25 reserve for redacted status traffic fit the existing $20 cap. Dataset, checkpoint, log, and quality-result files stay on Vast and are not exported.
 - Rebuild and validate the frozen dataset at the exact source revision.
 - Emit only redacted status values in public Actions logs.
 - Stop the target on every exit path and preserve its container disk for follow-up benchmark and quality work.
