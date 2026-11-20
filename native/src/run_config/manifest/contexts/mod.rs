@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 mod builder;
 
-pub(super) fn validate_feature_context_alphabets(
+pub(in crate::run_config) fn validate_feature_context_alphabets(
     contexts: &FeatureProviderContexts,
     objective_alphabets: &[CnotAlphabet],
 ) -> Result<(), String> {
