@@ -58,13 +58,14 @@ jobs:
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
       - name: Rent once and rebuild on the remote disk
+        id: rent_dataset
         timeout-minutes: 160
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
         run: python3 .github/scripts/vast_rent_rebuild_dataset.py run
 
       - name: Stop only this run's instance and remove its temporary keys
-        if: always()
+        if: always() && steps.rent_dataset.outcome != 'skipped'
         timeout-minutes: 10
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
