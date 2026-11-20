@@ -196,6 +196,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             patch.object(controller.base, "instance_rows", return_value=[row]),
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller, "_read_remote_owner", return_value=False),
+            patch.object(controller, "RemoteSession"),
             patch.object(controller.base, "stop_exact_label") as stop,
             patch.object(controller, "_summarize"),
         ):
