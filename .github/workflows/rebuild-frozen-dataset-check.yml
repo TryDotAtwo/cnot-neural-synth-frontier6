@@ -124,11 +124,9 @@ jobs:
             --env CNOT103_CUDA_ARCHITECTURES=86 \
             --env CUDA_HOME=/usr/local/cuda \
             --env LIBTORCH_USE_PYTORCH=1 \
+            --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
             pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc 'set -e
-export LD_LIBRARY_PATH="/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
-/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark > /runner_temp/cuda-feature-build.jsonl 2>&1
-/root/.cargo/bin/cargo test --features cuda --lib run_config::manifest::tests'; then
+            bash -euc '/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark > /runner_temp/cuda-feature-build.jsonl 2>&1; /root/.cargo/bin/cargo test --features cuda --lib run_config::manifest::tests'; then
             printf 'cuda_feature_build=pass\n'
             printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else
