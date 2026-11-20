@@ -42,35 +42,48 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-profile-target
         run: |
-          set -euo pipefail
-          if ! command -v cargo >/dev/null 2>&1; then
-            printf '%s\\n' 'manifest_profile=invalid' 'manifest_failure_class=cargo_unavailable'
-            exit 1
-          fi
-          set +e
-          cargo run --quiet --manifest-path native/Cargo.toml --no-default-features \
-            --bin cnot103-validate-manifest -- "$RUNNER_TEMP/cnot103-training-profile-manifest.json" \
-            >"$RUNNER_TEMP/cnot103-profile-validator.stdout" \
-            2>"$RUNNER_TEMP/cnot103-profile-validator.stderr"
-          result=$?
-          set -e
-          if [ "$result" -ne 0 ]; then
-            if grep -Fq 'manifest validation failed: invalid run manifest' "$RUNNER_TEMP/cnot103-profile-validator.stderr"; then
-              failure_class=manifest_parse_rejected
-            elif grep -Fq 'manifest validation failed: feature profile incomplete or invalid' "$RUNNER_TEMP/cnot103-profile-validator.stderr"; then
-              failure_class=feature_profile_rejected
-            elif [ -x "$CARGO_TARGET_DIR/debug/cnot103-validate-manifest" ]; then
-              failure_class=validator_failed
-            else
-              failure_class=rust_build_failed
-            fi
-            printf '%s\\n' 'manifest_profile=invalid'
-            printf '%s\\n' "manifest_failure_class=$failure_class"
-            exit 1
-          fi
-          if ! grep -qx 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-profile-validator.stdout" || ! grep -qx 'model_input_slots=102' "$RUNNER_TEMP/cnot103-profile-validator.stdout"; then
-            printf '%s\\n' 'manifest_profile=invalid'
-            printf '%s\\n' 'manifest_failure_class=validator_output_mismatch'
-            exit 1
-          fi
-          printf '%s\\n' 'manifest_profile=valid' 'model_input_slots=102'
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          output = pathlib.Path(os.environ["RUNNER_TEMP"]) / "cnot103-training-profile-manifest.json"
+          validator = pathlib.Path(os.environ["CARGO_TARGET_DIR"]) / "debug" / "cnot103-validate-manifest"
+          command = [
+              "cargo", "run", "--quiet", "--manifest-path", "native/Cargo.toml",
+              "--no-default-features", "--bin", "cnot103-validate-manifest", "--", str(output),
+          ]
+          try:
+              result = subprocess.run(command, capture_output=True, text=True, timeout=480, check=False)
+          except FileNotFoundError:
+              print("manifest_profile=invalid")
+              print("manifest_failure_class=cargo_unavailable")
+              raise SystemExit(1)
+          except subprocess.TimeoutExpired:
+              print("manifest_profile=invalid")
+              print("manifest_failure_class=rust_build_timeout")
+              raise SystemExit(1)
+
+          if result.returncode != 0:
+              if "manifest validation failed: invalid run manifest" in result.stderr:
+                  failure = "manifest_parse_rejected"
+              elif "manifest validation failed: feature profile incomplete or invalid" in result.stderr:
+                  failure = "feature_profile_rejected"
+              elif not validator.is_file():
+                  failure = "rust_build_failed"
+              else:
+                  failure = "validator_failed"
+              print("manifest_profile=invalid")
+              print(f"manifest_failure_class={failure}")
+              raise SystemExit(1)
+
+          values = set(result.stdout.splitlines())
+          if not {"manifest_profile=valid", "model_input_slots=102"}.issubset(values):
+              print("manifest_profile=invalid")
+              print("manifest_failure_class=validator_output_mismatch")
+              raise SystemExit(1)
+
+          print("manifest_profile=valid")
+          print("model_input_slots=102")
+          PY
