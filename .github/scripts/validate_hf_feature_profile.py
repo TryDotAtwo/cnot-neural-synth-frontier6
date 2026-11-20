@@ -23,6 +23,20 @@ PROFILE_SUFFIXES = {".json", ".jsonl", ".yaml", ".yml", ".toml"}
 MAX_PAGE_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_BYTES = 1 * 1024 * 1024
 MAX_PROFILE_CANDIDATES = 32
+ROW_CONTEXT_KEYS = {
+    "labeled_cuts",
+    "restricted_intersections",
+    "rank_increment_probes",
+    "block_parity_contexts",
+    "matrix_boundaries",
+    "paid_basis_contexts",
+    "bilinear_contexts",
+    "shared_relation_contexts",
+    "frequency_contexts",
+    "positive_packet_contexts",
+    "i09_contexts",
+    "selected_residual_additional_contexts",
+}
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_TREE_PAGES = 20
 MAX_TREE_ENTRIES = 20_000
@@ -204,6 +218,78 @@ def _source_exists(
     return bool(body)
 
 
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _same_source(left: dict, right: dict) -> bool:
+    return (
+        left["source_revision"] == right["source_revision"]
+        and left["source_path"] == right["source_path"]
+    )
+
+
+def _context_extends(left: dict, right: dict) -> bool:
+    for key in set(left) | set(right):
+        if key in ROW_CONTEXT_KEYS:
+            left_rows = left.get(key, [])
+            right_rows = right.get(key, [])
+            if not isinstance(left_rows, list) or not isinstance(right_rows, list):
+                return False
+            left_counts = {}
+            for row in left_rows:
+                signature = _canonical_json(row)
+                left_counts[signature] = left_counts.get(signature, 0) + 1
+            right_counts = {}
+            for row in right_rows:
+                signature = _canonical_json(row)
+                right_counts[signature] = right_counts.get(signature, 0) + 1
+            if any(left_counts.get(signature, 0) < count
+                   for signature, count in right_counts.items()):
+                return False
+        else:
+            if key not in left or key not in right:
+                if key not in left and key not in right:
+                    continue
+                return False
+            if _canonical_json(left[key]) != _canonical_json(right[key]):
+                return False
+    return True
+
+
+def _profile_semantic_signature(profile: dict) -> str:
+    return _canonical_json(
+        {
+            "contexts": profile["contexts"],
+            "source_revision": profile["source_revision"],
+            "source_path": profile["source_path"],
+        }
+    )
+
+
+def _select_pinned_profile(candidates: list[tuple[str, dict]]) -> tuple[str, dict] | None:
+    unique = {}
+    for path, profile in candidates:
+        signature = _profile_semantic_signature(profile)
+        unique.setdefault(signature, (path, profile))
+    profiles = list(unique.values())
+    if not profiles:
+        return None
+    if len(profiles) == 1:
+        return profiles[0]
+
+    dominators = []
+    for candidate in profiles:
+        _path, profile = candidate
+        if all(
+            _same_source(profile, other_profile)
+            and _context_extends(profile["contexts"], other_profile["contexts"])
+            for _other_path, other_profile in profiles
+        ):
+            dominators.append(candidate)
+    return dominators[0] if len(dominators) == 1 else None
+
+
 def inspect_profile(
     fetch_page=_fetch_tree_page,
     fetch_file=_fetch_limited,
@@ -223,7 +309,7 @@ def inspect_profile(
         if len(json_candidates) > MAX_PROFILE_CANDIDATES:
             return "candidate_ambiguous"
 
-        pinned_signatures = set()
+        pinned_profiles = []
         for path in json_candidates:
             raw = fetch_file(
                 _candidate_url(revision, path),
@@ -235,21 +321,15 @@ def inspect_profile(
             except ProfileCheckError:
                 continue
             if source_exists(profile["source_revision"], profile["source_path"]):
-                signature = json.dumps(
-                    {
-                        "contexts": profile["contexts"],
-                        "source_revision": profile["source_revision"],
-                        "source_path": profile["source_path"],
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                )
-                pinned_signatures.add(signature)
-                if len(pinned_signatures) > 1:
-                    return "candidate_ambiguous"
+                pinned_profiles.append((path, profile))
 
-        return "schema_source_pinned" if pinned_signatures else "candidate_unverified"
+        if not pinned_profiles:
+            return "candidate_unverified"
+        return (
+            "schema_source_pinned"
+            if _select_pinned_profile(pinned_profiles) is not None
+            else "candidate_ambiguous"
+        )
     except ProfileCheckError:
         return "unavailable"
 
