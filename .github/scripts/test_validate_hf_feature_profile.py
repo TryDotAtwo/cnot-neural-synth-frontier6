@@ -258,6 +258,31 @@ class HFProfileValidationTests(unittest.TestCase):
             "unavailable_source_request_failed",
         )
 
+    def test_profile_reports_objective_alphabet_mismatch_as_safe_status(self):
+        profile = _self_test_profile()
+        n = 3
+        gates = [
+            {"control": control, "target": target}
+            for control in range(n)
+            for target in range(n)
+            if control != target
+        ]
+        profile["feature_contexts"]["alphabet"] = {
+            "dimension": n,
+            "id": f"all_to_all_unit_cnot:{n}",
+            "gates": gates,
+            "costs": [1] * len(gates),
+        }
+        status = inspect_profile(
+            fetch_page=lambda _url: (
+                ["profiles/feature_context_profile.json"], None
+            ),
+            fetch_file=lambda *_args: json.dumps(profile).encode(),
+            source_exists=lambda *_args: self.fail("invalid profile must not reach source checks"),
+            revision_getter=lambda: "b" * 40,
+        )
+        self.assertEqual(status, "candidate_objective_alphabet_incompatible")
+
     def test_inspect_profile_classifies_invalid_candidate_schema(self):
         status = inspect_profile(
             fetch_page=lambda _url: (["profiles/candidate_profile.json"], None),
