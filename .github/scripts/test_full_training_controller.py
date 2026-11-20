@@ -52,7 +52,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             return row, "cnot103-test", False, 1.0
 
         def fake_attach(_row, _run_id, _attempt, _script, _timeout):
-            return subprocess.CompletedProcess([], 0, "full_training=launched\\n", ""), "detached", 123
+            return subprocess.CompletedProcess([], 0, "full_training=launched\n", ""), "detached", 123
 
         with (
             patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}),
