@@ -229,22 +229,33 @@ class HFProfileValidationTests(unittest.TestCase):
             ),
             "unavailable_tree",
         )
+        for message, expected in (
+            ("download request failed", "unavailable_profile_request_failed"),
+            ("source file was not found", "unavailable_profile_not_found"),
+            ("download size limit exceeded", "unavailable_profile_size_limit"),
+            ("download redirect host is invalid", "unavailable_profile_redirect_rejected"),
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    inspect_profile(
+                        revision_getter=lambda: "b" * 40,
+                        fetch_page=lambda _url: (
+                            ["profiles/feature_context_profile.json"], None
+                        ),
+                        fetch_file=lambda *_args: fail(message),
+                    ),
+                    expected,
+                )
         self.assertEqual(
             inspect_profile(
                 revision_getter=lambda: "b" * 40,
-                fetch_page=lambda _url: (["profiles/feature_context_profile.json"], None),
-                fetch_file=lambda *_args: fail("download request failed"),
-            ),
-            "unavailable_profile_download",
-        )
-        self.assertEqual(
-            inspect_profile(
-                revision_getter=lambda: "b" * 40,
-                fetch_page=lambda _url: (["profiles/feature_context_profile.json"], None),
+                fetch_page=lambda _url: (
+                    ["profiles/feature_context_profile.json"], None
+                ),
                 fetch_file=lambda *_args: json.dumps(_self_test_profile()).encode(),
                 source_exists=lambda *_args: fail("download request failed"),
             ),
-            "unavailable_source_check",
+            "unavailable_source_request_failed",
         )
 
     def test_inspect_profile_classifies_invalid_candidate_schema(self):
