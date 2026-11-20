@@ -1,0 +1,36 @@
+name: Validate pinned CNOT training feature profile
+run-name: Validate the pinned CNOT feature-context profile
+
+on:
+  push:
+    branches:
+      - codex/2x3060-full-feature-training
+    paths:
+      - .github/training-profiles/*.json
+      - .github/workflows/validate-training-profile.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tqp-training-profile-validation
+  cancel-in-progress: true
+
+jobs:
+  validate-profile:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate pinned profile and build a non-published manifest
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/build_training_manifest.py \
+            --profile .github/training-profiles/n10-test-support-v1.json \
+            --dataset-path /workspace/profile-check/frozen_train_10k.json \
+            --dataset-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            --checkpoint-dir /workspace/profile-check/checkpoints \
+            --output "$RUNNER_TEMP/cnot103-training-profile-manifest.json"
