@@ -4,6 +4,6 @@
   "projected_active_hours": 51,
   "stopped_storage_reserve_hours": 168,
   "preserve_remote_disk": true,
-  "attempt": 6,
+  "attempt": 7,
   "reason": "recheck the $20 cap with 51h compute, seven days stopped storage, and status-only transfer reserve"
 }
