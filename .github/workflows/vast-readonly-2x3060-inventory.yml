@@ -138,6 +138,45 @@ jobs:
               description: disposition,
               target_url: targetUrl,
             });
+      - name: Resolve source-check run by commit
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: 556a10ff02ec072b2e6f3ade5e1616113e91e8b7
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "rebuild-frozen-dataset-check.yml",
+              branch: "codex/2x3060-full-feature-training",
+              per_page: 100,
+            });
+            const run = (response.data.workflow_runs || []).find(item => item.head_sha === targetSha);
+            let description = "not_found";
+            let state = "failure";
+            let targetUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
+            if (run) {
+              targetUrl = run.html_url;
+              if (run.status === "completed") {
+                state = run.conclusion === "success" ? "success" : "failure";
+                description = state === "success" ? "passed" : "failed";
+              } else {
+                state = "pending";
+                description = "running";
+              }
+            }
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: targetSha,
+              state,
+              context: "CNOT source-check diagnostics",
+              description,
+              target_url: targetUrl,
+            });
+
       - name: Publish redacted read-only inventory status
         if: always()
         uses: actions/github-script@v7
