@@ -23,7 +23,7 @@ DISK_GB = "64"
 BUDGET_CAP = 20.0
 # Reserve 48h for the training target plus the 175-minute rebuild workflow, rounded to 3h.
 RUN_HOURS = 51.0
-TRANSFER_RESERVE = 2.0
+TRANSFER_RESERVE = 0.25  # only redacted status traffic; artifacts stay on Vast
 STOPPED_STORAGE_HOURS = 168.0
 MIN_RELIABILITY = 0.95
 MIN_GPU_MEMORY_MB = 12_000
