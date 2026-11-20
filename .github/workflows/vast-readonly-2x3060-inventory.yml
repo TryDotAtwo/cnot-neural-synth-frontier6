@@ -132,7 +132,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: targetSha,
+              sha: targetSha || context.sha,
               state,
               context: "CNOT attempt 8 disposition",
               description: disposition,
@@ -141,11 +141,9 @@ jobs:
       - name: Resolve source-check run by commit
         if: always()
         uses: actions/github-script@v7
-        env:
-          TARGET_SHA: 556a10ff02ec072b2e6f3ade5e1616113e91e8b7
         with:
           script: |
-            const targetSha = process.env.TARGET_SHA;
+            const targetSha = typeof context.payload.before === "string" ? context.payload.before : "";
             const response = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -153,7 +151,7 @@ jobs:
               branch: "codex/2x3060-full-feature-training",
               per_page: 100,
             });
-            const run = (response.data.workflow_runs || []).find(item => item.head_sha === targetSha);
+            const run = targetSha ? (response.data.workflow_runs || []).find(item => item.head_sha === targetSha) : null;
             let description = "not_found";
             let state = "failure";
             let targetUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
