@@ -3,6 +3,11 @@ run-name: Read-only Vast inventory and source-check status
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Optional source commit SHA to inspect
+        required: false
+        type: string
   push:
     branches:
       - codex/2x3060-full-feature-training
@@ -133,7 +138,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: targetSha || context.sha,
+              sha: validSha ? targetSha : context.sha,
               state,
               context: "CNOT attempt 8 disposition",
               description: disposition,
@@ -144,7 +149,11 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const targetSha = typeof context.payload.before === "string" ? context.payload.before : "";
+            const requestedSha = context.payload.inputs?.source_sha;
+            const targetSha = typeof requestedSha === "string" && requestedSha.trim()
+              ? requestedSha.trim()
+              : (typeof context.payload.before === "string" ? context.payload.before : "");
+            const validSha = /^[0-9a-f]{40}$/.test(targetSha);
             const response = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -152,7 +161,7 @@ jobs:
               branch: "codex/2x3060-full-feature-training",
               per_page: 100,
             });
-            const run = targetSha ? (response.data.workflow_runs || []).find(item => item.head_sha === targetSha) : null;
+            const run = validSha ? (response.data.workflow_runs || []).find(item => item.head_sha === targetSha) : null;
             let description = "not_found";
             let state = "failure";
             let targetUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
