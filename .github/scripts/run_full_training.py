@@ -31,6 +31,7 @@ MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 FORECAST_SAFETY_SECONDS = 15 * 60
 CHECKPOINT_WRITE_RESERVE_SECONDS = 30 * 60
 PROFILE_RELATIVE = ".github/training-profiles/n10-test-support-v1.json"
+PROFILE_ID = "n10-test-support-v1"
 DATA_RELATIVE = "data/frozen_train_10k.json"
 DATA_SHA_RELATIVE = "data/frozen_train_10k.sha256"
 DATA_RECEIPT_RELATIVE = "data/build.receipt.json"
@@ -180,6 +181,134 @@ def validate_benchmark(report: object, attempts: int = PILOT_ATTEMPTS) -> tuple[
     return float(update_seconds), float(setup_seconds)
 
 
+def validate_feature_coverage(
+    report: object,
+    *,
+    expected_manifest_sha256: str,
+    expected_dataset_sha256: str,
+    expected_panel: str,
+    expected_rows_by_width: dict[int, int],
+    expected_feature_count: int,
+    profile_id: str,
+    profile_sha256: str,
+    profile_context_widths: dict[str, list[int]],
+) -> dict[str, Any]:
+    """Validate all selected v25 specs and preserve their actual status by width."""
+    if expected_feature_count != MODEL_INPUTS:
+        raise RunError("coverage must account for all 102 model input slots")
+    if profile_id != PROFILE_ID:
+        raise RunError("coverage profile identity differs")
+    if not isinstance(report, dict) or report.get("schema") != "cnot103_feature_coverage_v1":
+        raise RunError("feature coverage report schema is invalid")
+    if (
+        report.get("input_schema") != "runtime_packet_layout_v25"
+        or not isinstance(report.get("policy_id"), str)
+        or not report.get("policy_id")
+        or report.get("manifest_sha256") != expected_manifest_sha256
+        or report.get("dataset_sha256") != expected_dataset_sha256
+        or report.get("panel") != expected_panel
+        or report.get("batch_size") != 1
+    ):
+        raise RunError("feature coverage source, schema, or split pin differs")
+    if (
+        not isinstance(profile_sha256, str) or len(profile_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in profile_sha256)
+        or not isinstance(profile_context_widths, dict)
+    ):
+        raise RunError("feature coverage profile provenance is malformed")
+    if (
+        expected_panel not in {"train", "dev"}
+        or not isinstance(expected_rows_by_width, dict)
+        or not expected_rows_by_width
+        or any(
+            type(width) is not int or width < 1
+            or type(count) is not int or count < 1
+            for width, count in expected_rows_by_width.items()
+        )
+    ):
+        raise RunError("feature coverage expected width inventory is malformed")
+
+    raw_widths = report.get("widths")
+    if not isinstance(raw_widths, list):
+        raise RunError("feature coverage widths are malformed")
+    normalized_widths: list[dict[str, Any]] = []
+    seen_widths: set[int] = set()
+    expected_feature_ids: list[str] | None = None
+    status_names = (
+        "not_requested", "computed", "inapplicable", "unsupported", "resource_limit"
+    )
+    for width_row in raw_widths:
+        if not isinstance(width_row, dict):
+            raise RunError("feature coverage width row is malformed")
+        width = width_row.get("width")
+        rows = width_row.get("rows")
+        rejected = width_row.get("rejected_rows")
+        features = width_row.get("features")
+        if (
+            type(width) is not int or width in seen_widths
+            or width not in expected_rows_by_width
+            or type(rows) is not int or rows != expected_rows_by_width[width]
+            or type(rejected) is not int or rejected != 0
+            or not isinstance(features, list) or len(features) != expected_feature_count
+        ):
+            raise RunError("feature coverage width or rejected-row accounting differs")
+        seen_widths.add(width)
+        normalized_features: list[dict[str, Any]] = []
+        feature_ids: list[str] = []
+        for feature in features:
+            if not isinstance(feature, dict):
+                raise RunError("feature coverage entry is malformed")
+            feature_id = feature.get("id")
+            if not isinstance(feature_id, str) or not feature_id:
+                raise RunError("feature coverage id is malformed")
+            feature_ids.append(feature_id)
+            counts: dict[str, int] = {}
+            for status_name in status_names:
+                count = feature.get(status_name)
+                if type(count) is not int or count < 0:
+                    raise RunError("feature coverage status count is malformed")
+                counts[status_name] = count
+            if (
+                counts["not_requested"] != 0
+                or sum(counts.values()) != rows
+            ):
+                raise RunError("feature coverage does not account for every requested row")
+            normalized_features.append({
+                "id": feature_id,
+                "role": feature.get("role"),
+                "scope": feature.get("scope"),
+                "provider": feature.get("provider"),
+                **counts,
+            })
+        if len(set(feature_ids)) != expected_feature_count:
+            raise RunError("feature coverage selected specs are duplicated")
+        if expected_feature_ids is None:
+            expected_feature_ids = feature_ids
+        elif feature_ids != expected_feature_ids:
+            raise RunError("feature coverage selected specs changed across widths")
+        normalized_widths.append({
+            "width": width,
+            "rows": rows,
+            "rejected_rows": rejected,
+            "features": normalized_features,
+        })
+    if seen_widths != set(expected_rows_by_width):
+        raise RunError("feature coverage omitted a dataset width")
+    normalized_widths.sort(key=lambda row: row["width"])
+    return {
+        "panel": expected_panel,
+        "policy_id": report["policy_id"],
+        "manifest_sha256": expected_manifest_sha256,
+        "dataset_sha256": expected_dataset_sha256,
+        "profile_id": profile_id,
+        "profile_sha256": profile_sha256,
+        "profile_context_widths": profile_context_widths,
+        "model_input_slots": MODEL_INPUTS,
+        "selected_feature_count": expected_feature_count,
+        "widths": normalized_widths,
+    }
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -249,6 +378,7 @@ class Supervisor:
         self.events_path = root / "events.private.jsonl"
         self.error_path = root / "error.private.json"
         self.private_report_path = root / "final-result.private.json"
+        self.feature_coverage_summary: dict[str, Any] | None = None
         self.current_state = "starting"
         self.quality_status = "not_ready"
         self.deadline = started_at_epoch + MAX_RUNTIME_SECONDS
@@ -550,9 +680,26 @@ class Supervisor:
                 manifest_path.with_suffix(manifest_path.suffix + ".provenance.json")
                 .read_text(encoding="utf-8")
             )
+            profile_bytes = (self.source / PROFILE_RELATIVE).read_bytes()
+            profile = json.loads(profile_bytes)
         except (OSError, json.JSONDecodeError):
-            raise RunError("training manifest or provenance is malformed") from None
+            raise RunError("training manifest, profile, or provenance is malformed") from None
         manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        profile_sha = hashlib.sha256(profile_bytes).hexdigest()
+        profile_source = profile.get("source") if isinstance(profile, dict) else None
+        if (
+            not isinstance(profile_source, dict)
+            or profile.get("profile_id") != PROFILE_ID
+            or sidecar.get("profile_id") != PROFILE_ID
+            or sidecar.get("profile_sha256") != profile_sha
+            or sidecar.get("profile_source_repository") != profile_source.get("repository")
+            or sidecar.get("profile_source_revision") != profile_source.get("revision")
+            or sidecar.get("profile_source_path") != profile_source.get("path")
+            or sidecar.get("profile_source_sha256") != profile_source.get("sha256")
+            or sidecar.get("dataset_sha256") != dataset_sha
+            or manifest.get("feature_contexts") != profile.get("feature_contexts")
+        ):
+            raise RunError("training manifest profile or dataset provenance differs")
         if (
             manifest.get("schema") != "cnot103_training_run_v1"
             or manifest.get("training", {}).get("attempts") != attempts
@@ -574,15 +721,89 @@ class Supervisor:
         return manifest_path
 
     def _feature_coverage(self, dataset_sha: str) -> None:
-        manifest = self._build_manifest(
+        manifest_path = self._build_manifest(
             "coverage", dataset_sha, 1, TARGET_ATTEMPTS, False
         )
-        for panel in ("train", "dev"):
-            self._run(
-                f"coverage_{panel}",
-                [str(self._runner("cnot103-coverage")), str(manifest), panel],
-                state="preparing",
+        manifest_bytes = manifest_path.read_bytes()
+        manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+        try:
+            manifest = json.loads(manifest_bytes)
+            provenance = json.loads(
+                manifest_path.with_suffix(manifest_path.suffix + ".provenance.json")
+                .read_text(encoding="utf-8")
             )
+            profile_path = self.source / PROFILE_RELATIVE
+            profile_bytes = profile_path.read_bytes()
+            profile = json.loads(profile_bytes)
+            dataset = json.loads(
+                (self.root / DATA_RELATIVE).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            raise RunError("coverage manifest, profile, or dataset is malformed") from None
+        actual_profile_sha = hashlib.sha256(profile_bytes).hexdigest()
+        if (
+            profile.get("profile_id") != PROFILE_ID
+            or provenance.get("profile_id") != PROFILE_ID
+            or provenance.get("profile_sha256") != actual_profile_sha
+            or provenance.get("dataset_sha256") != dataset_sha
+            or manifest.get("feature_policy", {}).get("schema_id")
+                != "runtime_packet_layout_v25"
+            or manifest.get("dataset", {}).get("sha256") != dataset_sha
+        ):
+            raise RunError("coverage profile or dataset pin differs")
+        panels = dataset.get("panels") if isinstance(dataset, dict) else None
+        if not isinstance(panels, dict):
+            raise RunError("coverage dataset panels are malformed")
+
+        def width_counts(panel: str) -> dict[int, int]:
+            records = panels.get(panel)
+            if not isinstance(records, list) or not records:
+                raise RunError("coverage dataset panel is empty or malformed")
+            counts: dict[int, int] = {}
+            for record in records:
+                state = record.get("state") if isinstance(record, dict) else None
+                width = state.get("n") if isinstance(state, dict) else None
+                if type(width) is not int or width < 1:
+                    raise RunError("coverage dataset record width is malformed")
+                counts[width] = counts.get(width, 0) + 1
+            return counts
+
+        panel_summaries: dict[str, dict[str, Any]] = {}
+        for panel in ("train", "dev"):
+            report = self._run(
+                f"coverage_{panel}",
+                [str(self._runner("cnot103-coverage")), str(manifest_path), panel],
+                state="preparing",
+                json_stdout=True,
+            )
+            panel_summaries[panel] = validate_feature_coverage(
+                report,
+                expected_manifest_sha256=manifest_sha,
+                expected_dataset_sha256=dataset_sha,
+                expected_panel=panel,
+                expected_rows_by_width=width_counts(panel),
+                expected_feature_count=MODEL_INPUTS,
+                profile_id=profile["profile_id"],
+                profile_sha256=actual_profile_sha,
+                profile_context_widths=provenance.get("context_widths"),
+            )
+        if panel_summaries["train"]["policy_id"] != panel_summaries["dev"]["policy_id"]:
+            raise RunError("train and dev coverage used different feature policies")
+        self.feature_coverage_summary = {
+            "schema": "cnot103_feature_coverage_summary_v1",
+            "manifest_sha256": manifest_sha,
+            "dataset_sha256": dataset_sha,
+            "profile_id": PROFILE_ID,
+            "profile_sha256": actual_profile_sha,
+            "profile_context_widths": provenance["context_widths"],
+            "model_input_slots": MODEL_INPUTS,
+            "policy_id": panel_summaries["train"]["policy_id"],
+            "panels": panel_summaries,
+        }
+        _write_new_private_json(
+            self.root / "reports" / "feature_coverage.summary.json",
+            self.feature_coverage_summary,
+        )
 
     def _benchmark(self, dataset_sha: str) -> tuple[float, float, dict[str, Any], float]:
         manifest = self._build_manifest(
@@ -776,6 +997,7 @@ class Supervisor:
                 "holdout_revision": self.holdout_revision,
                 "holdout_sha256": self.holdout_sha256,
                 "dataset_sha256": dataset_sha,
+                "feature_coverage": self.feature_coverage_summary,
                 "started_at_epoch": self.started_at_epoch,
                 "completed_at_utc": _now(),
                 "total_elapsed_seconds": total_elapsed,
