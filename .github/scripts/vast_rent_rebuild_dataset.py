@@ -558,7 +558,15 @@ def remove_run_keys(instance: int, run_id: str, attempt: str) -> str:
         return "failed"
 
 
-def stop_exact_label(label: str, run_id: str, attempt: str) -> tuple[str, str]:
+def stop_exact_label(
+    label: str,
+    run_id: str,
+    attempt: str,
+    *,
+    expected_id: int | None = None,
+) -> tuple[str, str]:
+    if expected_id is not None and (type(expected_id) is not int or expected_id < 1):
+        return "unverified", "failed"
     try:
         row = resolve_label(instance_rows(), label)
     except (GateError, probe.ApiFailure):
@@ -567,6 +575,9 @@ def stop_exact_label(label: str, run_id: str, attempt: str) -> tuple[str, str]:
         return "not_needed", "not_needed"
     ident = instance_id(row)
     if ident is None or row.get("label") != label:
+        return "unverified", "failed"
+    if expected_id is not None and ident != expected_id:
+        # Verify the exact identity before removing keys or requesting a stop.
         return "unverified", "failed"
     key_status = remove_run_keys(ident, run_id, attempt)
     current = probe.observed_state(row)
@@ -601,7 +612,6 @@ def stop_exact_label(label: str, run_id: str, attempt: str) -> tuple[str, str]:
     ):
         return "verified", key_status
     return "unverified", key_status
-
 
 def summarize(checked: str, outcome: str, status: str) -> None:
     if outcome not in ALLOWED_OUTCOMES:

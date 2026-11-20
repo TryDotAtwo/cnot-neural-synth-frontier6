@@ -29,6 +29,8 @@ MAX_STOP_SECONDS = 300
 MONITOR_SECONDS = 5 * 60 * 60 + 30 * 60
 POLL_SECONDS = 60
 STARTUP_WAIT_SECONDS = 3 * 60 * 60
+CLAIM_VISIBILITY_WAIT_SECONDS = 2 * 60
+CLAIM_VISIBILITY_POLL_SECONDS = 5
 PROFILE_PATH = ".github/training-profiles/n10-test-support-v1.json"
 MARKER_PATH = pathlib.Path(__file__).resolve().parents[1] / "paid-runs" / "2026-11-20-full-training.json"
 
@@ -674,6 +676,32 @@ def _find_run_target(rows: list[dict], marker: dict, run_id: str, attempt: str) 
     return _labels_for_run(rows, old_label, fresh_label)
 
 
+def _find_cleanup_target(
+    marker: dict, run_id: str, attempt: str
+) -> tuple[dict | None, str | None]:
+    """Wait for a run-specific label to become visible before falling back.
+
+    A start/create API response can be accepted just before its Actions process
+    is killed. Inventory may briefly still show the pre-start label, so cleanup
+    polls GET-only for the unique claim before considering the shared legacy
+    label. A legacy label never grants stop ownership by itself.
+    """
+    old_label = marker["resume_existing_label"]
+    fresh_label = _fresh_label(run_id, attempt)
+    deadline = time.monotonic() + CLAIM_VISIBILITY_WAIT_SECONDS
+    while True:
+        rows = base.instance_rows()
+        old = base.resolve_label(rows, old_label)
+        fresh = base.resolve_label(rows, fresh_label)
+        if old is not None and fresh is not None:
+            raise GateError("run cleanup labels are ambiguous")
+        if fresh is not None:
+            return fresh, fresh_label
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return (old, old_label) if old is not None else (None, None)
+        time.sleep(min(CLAIM_VISIBILITY_POLL_SECONDS, remaining))
+
 def _monitor_window(
     row: dict,
     label: str,
@@ -787,8 +815,7 @@ def cleanup() -> int:
     try:
         revision, run_id, attempt, root = _run_identity()
         marker = _marker()
-        rows = base.instance_rows()
-        row, label = _find_run_target(rows, marker, run_id, attempt)
+        row, label = _find_cleanup_target(marker, run_id, attempt)
         if row is None or label is None:
             outcome, status = "not_needed", "not_needed"
         elif not base.is_2x3060(row):
@@ -834,7 +861,7 @@ def cleanup() -> int:
                 if owned:
                     rate = _finite(row.get("dph_total"))
                     stop_status, _key_status = base.stop_exact_label(
-                        label, run_id, attempt
+                        label, run_id, attempt, expected_id=ident
                     )
                     if stop_status not in {"verified", "not_needed"}:
                         outcome, status = "unverified", "unverified"
