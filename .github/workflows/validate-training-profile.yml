@@ -59,16 +59,18 @@ jobs:
               failure_class=manifest_parse_rejected
             elif grep -Fq 'manifest validation failed: feature profile incomplete or invalid' "$RUNNER_TEMP/cnot103-profile-validator.stderr"; then
               failure_class=feature_profile_rejected
-            elif grep -Eq 'error:|could not compile|failed to download' "$RUNNER_TEMP/cnot103-profile-validator.stderr"; then
-              failure_class=rust_build_failed
-            else
+            elif [ -x "$CARGO_TARGET_DIR/debug/cnot103-validate-manifest" ]; then
               failure_class=validator_failed
+            else
+              failure_class=rust_build_failed
             fi
-            printf '%s\\n' 'manifest_profile=invalid' "manifest_failure_class=$failure_class"
+            printf '%s\\n' 'manifest_profile=invalid'
+            printf '%s\\n' "manifest_failure_class=$failure_class"
             exit 1
           fi
           if ! grep -qx 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-profile-validator.stdout" || ! grep -qx 'model_input_slots=102' "$RUNNER_TEMP/cnot103-profile-validator.stdout"; then
-            printf '%s\\n' 'manifest_profile=invalid' 'manifest_failure_class=validator_output_mismatch'
+            printf '%s\\n' 'manifest_profile=invalid'
+            printf '%s\\n' 'manifest_failure_class=validator_output_mismatch'
             exit 1
           fi
           printf '%s\\n' 'manifest_profile=valid' 'model_input_slots=102'
