@@ -4,6 +4,6 @@
   "projected_active_hours": 55,
   "stopped_storage_reserve_hours": 168,
   "preserve_remote_disk": true,
-  "attempt": 2,
-  "reason": "classify budget gate without exposing invoice amounts"
+  "attempt": 3,
+  "reason": "recheck user-authorized rebuild against fresh total spend and offer gate"
 }
