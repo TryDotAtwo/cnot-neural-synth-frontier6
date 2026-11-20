@@ -7,6 +7,7 @@ import json
 import math
 import os
 import pathlib
+import tempfile
 import re
 from typing import Any
 
@@ -203,6 +204,69 @@ def claim_run_lock(
     except OSError:
         return "unknown"
     return "reserved"
+
+
+def transition_run_lock(
+    root: pathlib.Path | str,
+    run_key: object,
+    source_sha: object,
+    manifest_sha: object,
+    next_state: object,
+) -> str:
+    """Atomically record one monotone state change for the exact pinned run."""
+    if not _valid_run_identity(run_key, source_sha, manifest_sha):
+        return "unknown"
+    if next_state not in {"running", "succeeded", "failed"}:
+        return "unknown"
+    try:
+        path = run_lock_path(run_key, root)
+        if path.parent.is_symlink() or path.is_symlink():
+            return "unknown"
+        existing = _read_lock(path)
+    except (OSError, ValueError):
+        return "unknown"
+    if existing is None:
+        return "unknown"
+    if (
+        existing.get("run_key") != run_key
+        or existing.get("source_sha") != source_sha
+        or existing.get("manifest_sha") != manifest_sha
+    ):
+        return "identity_mismatch"
+
+    current_state = existing["state"]
+    if current_state == next_state:
+        return "unchanged"
+    allowed = {
+        "reserved": {"running", "failed"},
+        "running": {"succeeded", "failed"},
+        "succeeded": set(),
+        "failed": set(),
+    }
+    if next_state not in allowed[current_state]:
+        return "invalid_transition"
+
+    existing["state"] = next_state
+    temporary_path: pathlib.Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".run-lock-", dir=path.parent
+        )
+        temporary_path = pathlib.Path(temporary_name)
+        payload = json.dumps(existing, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        with os.fdopen(descriptor, "wb") as lock_file:
+            lock_file.write(payload)
+            lock_file.flush()
+            os.fsync(lock_file.fileno())
+        os.replace(temporary_path, path)
+    except OSError:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return "unknown"
+    return "updated"
 
 
 def may_launch_run(lock_status: object) -> bool:
