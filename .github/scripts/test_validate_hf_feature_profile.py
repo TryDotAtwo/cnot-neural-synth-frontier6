@@ -4,6 +4,7 @@ import unittest
 from build_training_manifest import _self_test_profile
 from validate_hf_feature_profile import (
     ProfileCheckError,
+    _select_pinned_profile,
     _source_exists,
     _source_url,
     inspect_profile,
@@ -129,6 +130,25 @@ class HFProfileValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(status, "candidate_ambiguous")
+
+    def test_select_profile_prefers_exact_context_extension(self):
+        base_profile = _self_test_profile()
+        extended_profile = _self_test_profile()
+        extended_profile["feature_contexts"]["labeled_cuts"].append(
+            {"n": 4, "a": [0]}
+        )
+        base = validate_profile_bytes(json.dumps(base_profile).encode())
+        extended = validate_profile_bytes(json.dumps(extended_profile).encode())
+
+        selected = _select_pinned_profile(
+            [
+                ("profiles/base_context_profile.json", base),
+                ("profiles/extended_context_profile.json", extended),
+            ]
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected[0], "profiles/extended_context_profile.json")
 
     def test_missing_pinned_source_is_unverified_not_unavailable(self):
         def missing_source(*_args):
