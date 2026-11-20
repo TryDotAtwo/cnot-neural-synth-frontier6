@@ -246,7 +246,7 @@ def budget_gate_reason(spent: object, rows: object) -> str:
 
 
 def is_2x3060(row: dict) -> bool:
-    name = str(row.get("gpu_name") or "").casefold()
+    name = re.sub(r"\s+", "", str(row.get("gpu_name") or "")).casefold()
     count = row.get("num_gpus", row.get("gpu_count"))
     return (
         "rtx3060" in name and "rtx3060ti" not in name
