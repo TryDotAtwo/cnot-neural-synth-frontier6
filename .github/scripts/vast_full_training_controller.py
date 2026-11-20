@@ -745,10 +745,10 @@ def _summarize(
     if output_path:
         try:
             with open(output_path, "a", encoding="utf-8") as output:
-                output.write(f"status={status}\\n")
+                output.write(f"status={status}\n")
                 if cleanup_needed is not None:
                     value = "yes" if cleanup_needed else "no"
-                    output.write(f"cleanup_needed={value}\\n")
+                    output.write(f"cleanup_needed={value}\n")
         except OSError:
             raise GateError("controller step output could not be written") from None
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
