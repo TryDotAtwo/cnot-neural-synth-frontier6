@@ -267,5 +267,38 @@ class FullTrainingBudgetTests(unittest.TestCase):
 
         stop.assert_called_once_with(old_label, "123", "1")
 
+
+class InterruptedStartCleanupTests(unittest.TestCase):
+    def test_cleanup_recovers_accepted_start_after_job_is_cut_before_outputs(self):
+        old_label = "cnot103-r10k-44749514754-a1"
+        run_label = "cnot103-fulltrain-123-a1"
+        old = {
+            "id": 123, "label": old_label, "gpu_name": "RTX 3060", "num_gpus": 2,
+            "actual_status": "stopped", "dph_total": 0.20, "storage_cost": 0.15,
+        }
+        running = {**old, "label": run_label, "actual_status": "running"}
+        stopped = {**running, "actual_status": "stopped"}
+
+        with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
+            patch.object(controller.base, "instance_rows", side_effect=[[old], [running], [stopped]]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller, "_read_remote_status", return_value=("completed", "passed", None, 1.0)),
+            patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "full_run_budget_allows", return_value=True),
+            patch.object(controller, "_summarize"),
+            patch.object(controller.time, "monotonic", return_value=0.0),
+            patch.object(controller.time, "sleep"),
+        ):
+            self.assertEqual(controller.cleanup(), 0)
+
+        # The first inventory is stale (pre-PUT); the second observes the
+        # atomic run-specific claim. No GITHUB_OUTPUT is present in this job.
+        stop.assert_called_once_with(run_label, "123", "1", expected_id=123)
+
 if __name__ == "__main__":
     unittest.main()

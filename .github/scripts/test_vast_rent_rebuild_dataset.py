@@ -322,5 +322,26 @@ class ObservedStopStateTests(unittest.TestCase):
         self.assertEqual((status, key_status), ("verified", "not_found"))
         stop_request.assert_called_once_with(123, "stopped")
 
+
+class ExactExpectedIdStopTests(unittest.TestCase):
+    def test_label_reassignment_to_another_id_is_not_stopped(self):
+        label = "cnot103-fulltrain-123-a1"
+        replacement = {
+            "id": 124, "label": label, "gpu_name": "RTX 3060", "num_gpus": 2,
+            "actual_status": "running",
+        }
+        with (
+            patch.object(controller, "instance_rows", return_value=[replacement]),
+            patch.object(controller, "remove_run_keys") as remove_keys,
+            patch.object(controller, "api_instance_id") as stop_request,
+        ):
+            status, key_status = controller.stop_exact_label(
+                label, "123", "1", expected_id=123
+            )
+
+        self.assertEqual((status, key_status), ("unverified", "failed"))
+        remove_keys.assert_not_called()
+        stop_request.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

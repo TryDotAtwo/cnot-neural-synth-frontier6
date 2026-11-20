@@ -137,5 +137,45 @@ class FeatureCoverageTests(unittest.TestCase):
                 profile_context_widths={"labeled_cuts": [10]},
             )
 
+
+    def test_coverage_reports_computed_values_separately_from_102_input_slots(self):
+        summary = validate_feature_coverage(
+            self.coverage_report(),
+            expected_manifest_sha256="a" * 64,
+            expected_dataset_sha256="b" * 64,
+            expected_panel="train",
+            expected_rows_by_width={10: 2, 13: 1},
+            expected_feature_count=102,
+            profile_id="n10-test-support-v1",
+            profile_sha256="c" * 64,
+            profile_context_widths={"labeled_cuts": [10]},
+        )
+
+        self.assertEqual(summary["model_input_slots"], 102)
+        self.assertEqual(summary["availability_by_width"], [
+            {
+                "width": 10,
+                "rows": 2,
+                "model_input_slots": 102,
+                "profile_context_keys": ["labeled_cuts"],
+                "features_with_any_computed_rows": 1,
+                "computed_values": 2,
+                "inapplicable_values": 200,
+                "unsupported_values": 2,
+                "resource_limit_values": 0,
+            },
+            {
+                "width": 13,
+                "rows": 1,
+                "model_input_slots": 102,
+                "profile_context_keys": [],
+                "features_with_any_computed_rows": 1,
+                "computed_values": 1,
+                "inapplicable_values": 100,
+                "unsupported_values": 1,
+                "resource_limit_values": 0,
+            },
+        ])
+
 if __name__ == "__main__":
     unittest.main()
