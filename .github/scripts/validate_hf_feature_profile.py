@@ -220,6 +220,15 @@ def validate_profile_bytes(payload: bytes) -> dict:
     }
 
 
+def _safe_download_failure(stage: str, error: ProfileCheckError) -> str:
+    reason = {
+        "source file was not found": "not_found",
+        "download size limit exceeded": "size_limit",
+        "download redirect host is invalid": "redirect_rejected",
+    }.get(str(error), "request_failed")
+    return f"unavailable_{stage}_{reason}"
+
+
 def _allowed_hub_download_host(host: str) -> bool:
     return (
         host in HUB_HOSTS
@@ -370,8 +379,8 @@ def inspect_profile(
                     MAX_PROFILE_BYTES,
                     _allowed_hub_download_host,
                 )
-            except ProfileCheckError:
-                return "unavailable_profile_download"
+            except ProfileCheckError as error:
+                return _safe_download_failure("profile", error)
             try:
                 profile = validate_profile_bytes(raw)
             except ProfileCheckError:
@@ -381,8 +390,8 @@ def inspect_profile(
                 is_pinned = source_exists(
                     profile["source_revision"], profile["source_path"]
                 )
-            except ProfileCheckError:
-                return "unavailable_source_check"
+            except ProfileCheckError as error:
+                return _safe_download_failure("source", error)
             if is_pinned:
                 pinned_profiles.append((path, profile))
         if pinned_profiles:
@@ -399,8 +408,16 @@ if __name__ == "__main__":
         "candidate_source_ambiguous", "candidate_source_unverified",
         "candidate_unverified", "not_found",
         "schema_source_pinned", "unavailable",
-        "unavailable_profile_download", "unavailable_revision",
-        "unavailable_source_check", "unavailable_tree",
+        "unavailable_profile_not_found",
+        "unavailable_profile_redirect_rejected",
+        "unavailable_profile_request_failed",
+        "unavailable_profile_size_limit",
+        "unavailable_revision",
+        "unavailable_tree",
+        "unavailable_source_not_found",
+        "unavailable_source_redirect_rejected",
+        "unavailable_source_request_failed",
+        "unavailable_source_size_limit",
     }:
         status = "unavailable"
     print(f"profile_validation={status}")
