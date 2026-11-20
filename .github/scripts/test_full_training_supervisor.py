@@ -69,7 +69,7 @@ class FeatureCoverageTests(unittest.TestCase):
                 elif index == 1 and width == 10:
                     counts = (0, 0, rows, 0, 0)
                 elif index == 0 and width == 13:
-                    counts = (0, 0, 0, rows, 0)
+                    counts = (0, 0, rows, 0, 0)
                 else:
                     counts = (0, rows, 0, 0, 0)
                 features.append({
