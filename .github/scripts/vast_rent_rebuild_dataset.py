@@ -21,8 +21,8 @@ import vast_rebuild_remote_dataset as dataset  # noqa: E402
 IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
 DISK_GB = "64"
 BUDGET_CAP = 20.0
-# Reserve 48h for the training target plus the 175-minute rebuild workflow, rounded to 3h.
-RUN_HOURS = 51.0
+# This workflow rebuilds the dataset only; reserve its bounded 3h window, not future training.
+RUN_HOURS = 3.0
 TRANSFER_RESERVE = 0.25  # only redacted status traffic; artifacts stay on Vast
 STOPPED_STORAGE_HOURS = 168.0
 MIN_RELIABILITY = 0.95
