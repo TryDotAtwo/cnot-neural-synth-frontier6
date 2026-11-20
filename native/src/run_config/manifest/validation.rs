@@ -10,11 +10,12 @@ impl RunManifest {
             return Err("checkpoint_dir must not be empty".into());
         }
         if self.training.attempts == 0
+            || self.training.target_attempts == Some(0)
             || self.training.batch_size == 0
             || self.training.checkpoint_every_attempts == 0
         {
             return Err(
-                "attempts, batch_size, and checkpoint_every_attempts must be positive".into(),
+                "attempts, batch_size, and checkpoint_every_attempts must be positive; target_attempts, when set, must be positive".into(),
             );
         }
         if !self.training.cuda_devices.is_empty()

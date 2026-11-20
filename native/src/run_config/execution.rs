@@ -276,10 +276,14 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
                     .map_err(|e| format!("new training session failed: {e}"))
             }
         })?;
+        let attempts = manifest.training.attempts_for_progress(session.progress().attempted)?;
+        if attempts == 0 {
+            return Err("absolute target attempt count is already complete".into());
+        }
         if let Some(replica) = replica.as_mut() {
             session
                 .run_device_data_parallel_attempts(
-                    manifest.training.attempts,
+                    attempts,
                     plans,
                     &replica.model,
                     &mut replica.variables,
@@ -288,7 +292,7 @@ pub fn execute_run_manifest(path: &Path) -> Result<Value, String> {
                 .map_err(|e| format!("training session failed: {e}"))?
         } else {
             session
-                .run_device_attempts(manifest.training.attempts, plans)
+                .run_device_attempts(attempts, plans)
                 .map_err(|e| format!("training session failed: {e}"))?
         }
     };

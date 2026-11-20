@@ -56,6 +56,8 @@ pub(super) struct TrainingSpec {
     #[serde(default)]
     pub(super) cuda_devices: Vec<usize>,
     pub(super) attempts: u64,
+    #[serde(default)]
+    pub(super) target_attempts: Option<u64>,
     pub(super) batch_size: usize,
     pub(super) checkpoint_every_attempts: u64,
 }
@@ -66,6 +68,18 @@ impl TrainingSpec {
             vec![self.cuda_device]
         } else {
             self.cuda_devices.clone()
+        }
+    }
+
+    /// Cap this invocation at the remaining absolute target, when configured.
+    pub(super) fn attempts_for_progress(&self, attempted: u64) -> Result<u64, String> {
+        match self.target_attempts {
+            Some(target) => {
+                let remaining = target.checked_sub(attempted)
+                    .ok_or_else(|| "checkpoint progress exceeds target attempt count".to_owned())?;
+                Ok(remaining.min(self.attempts))
+            }
+            None => Ok(self.attempts),
         }
     }
 }

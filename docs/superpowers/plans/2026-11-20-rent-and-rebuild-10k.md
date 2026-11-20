@@ -18,6 +18,7 @@
 - Cleanup stops only the exact stable-label instance and never destroys it.
 
 ## Review Focus
+- A 10k train panel at batch 4 uses 250,000 attempted updates for exactly 100 sampler epochs. The CLI treats `attempts` as one invocation's limit; `target_attempts` is an absolute cap applied against restored checkpoint progress so resumes cannot add another 100 epochs.
 - Missing or malformed price, reliability, GPU count, or invoice data fails closed.
 - A duplicate or unrelated 2x3060 target prevents creation.
 - A create timeout never causes a second create request.

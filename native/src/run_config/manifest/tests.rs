@@ -1,7 +1,28 @@
 use super::validation::validate_sha256;
+use super::TrainingSpec;
 use super::*;
 use crate::features::{FeaturePolicy, FeatureRegistry};
 use serde_json::{json, Value};
+
+#[test]
+fn target_attempts_are_absolute_and_clamped_to_each_invocation() {
+    let training = TrainingSpec {
+        seed: 42,
+        cuda_device: 0,
+        cuda_devices: vec![0, 1],
+        attempts: 10_000,
+        target_attempts: Some(250_000),
+        batch_size: 4,
+        checkpoint_every_attempts: 2_500,
+    };
+    assert_eq!(training.attempts_for_progress(0).unwrap(), 10_000);
+    assert_eq!(training.attempts_for_progress(249_995).unwrap(), 5);
+    assert_eq!(training.attempts_for_progress(250_000).unwrap(), 0);
+    assert!(training.attempts_for_progress(250_001).is_err());
+
+    let legacy = TrainingSpec { target_attempts: None, attempts: 17, ..training };
+    assert_eq!(legacy.attempts_for_progress(900).unwrap(), 17);
+}
 
 #[test]
 fn rejects_wrong_schema_before_artifact_io() {
@@ -163,6 +184,9 @@ fn complete_manifest_parses_with_explicit_null_limits() {
     let parsed = parse_run_manifest(&serde_json::to_vec(&value).unwrap())
         .expect("complete manifest must parse without opening its artifacts");
     assert_eq!(parsed.training.attempts, 1);
+    let mut zero_target = value.clone();
+    zero_target["training"]["target_attempts"] = json!(0);
+    assert!(parse_run_manifest(&serde_json::to_vec(&zero_target).unwrap()).is_err());
     assert!(!parsed.objective.adaptive_neighbor_chunk);
     assert!(parsed.feature_policy.evaluations.0.is_none());
     assert!(parsed.feature_policy.max_bytes.0.is_none());
