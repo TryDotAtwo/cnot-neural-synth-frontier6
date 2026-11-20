@@ -302,5 +302,46 @@ class InterruptedStartCleanupTests(unittest.TestCase):
         # atomic run-specific claim. No GITHUB_OUTPUT is present in this job.
         stop.assert_called_once_with(run_label, "123", "1", expected_id=123)
 
+
+class FullRunBudgetDiagnosisTests(unittest.TestCase):
+    @staticmethod
+    def target(**updates):
+        row = {
+            "id": 123,
+            "label": "cnot103-r10k-44749514754-a1",
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "dph_total": 0.30,
+            "storage_cost": 0.06,
+        }
+        row.update(updates)
+        return row
+
+    def test_budget_diagnostic_uses_full_48_hour_run_projection(self):
+        row = self.target()
+        self.assertEqual(
+            controller.classify_full_run_budget(row, [row], spent=0.0),
+            "within_cap",
+        )
+
+    def test_budget_diagnostic_distinguishes_prior_spend_from_run_rate(self):
+        row = self.target()
+        self.assertEqual(
+            controller.classify_full_run_budget(row, [row], spent=5.0),
+            "prior_spend_exceeds_cap",
+        )
+        expensive = self.target(dph_total=0.50)
+        self.assertEqual(
+            controller.classify_full_run_budget(expensive, [expensive], spent=0.0),
+            "run_projection_exceeds_cap",
+        )
+
+    def test_budget_diagnostic_fails_closed_when_cost_inputs_are_unknown(self):
+        row = self.target(dph_total=None)
+        self.assertEqual(
+            controller.classify_full_run_budget(row, [row], spent=0.0),
+            "inputs_unknown",
+        )
+
 if __name__ == "__main__":
     unittest.main()
