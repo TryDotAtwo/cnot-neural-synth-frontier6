@@ -197,6 +197,7 @@ class FeatureCoverageTests(unittest.TestCase):
         )
         return {
             "schema": "cnot103_feature_coverage_summary_v1",
+            "manifest_sha256": "a" * 64,
             "dataset_sha256": "b" * 64,
             "profile_id": "n10-test-support-v1",
             "profile_sha256": "c" * 64,
