@@ -65,6 +65,40 @@ class TrainingManifestTests(unittest.TestCase):
         self.assertEqual(provenance["profile_source_sha256"], self.profile["source"]["sha256"])
         self.assertEqual(provenance["context_widths"]["selected_residual_widths"], [8])
 
+    def test_bounded_invocations_keep_the_absolute_250k_target(self):
+        initial, initial_provenance = build_manifest(
+            self.profile, self.profile_bytes,
+            "/workspace/train/frozen_train_10k.json", "b" * 64,
+            "/workspace/train/checkpoints", False,
+            attempts=1, target_attempts=TARGET_ATTEMPTS,
+        )
+        resumed, resumed_provenance = build_manifest(
+            self.profile, self.profile_bytes,
+            "/workspace/train/frozen_train_10k.json", "b" * 64,
+            "/workspace/train/checkpoints", True,
+            attempts=249_998, target_attempts=TARGET_ATTEMPTS,
+        )
+        self.assertEqual(initial["training"]["attempts"], 1)
+        self.assertEqual(initial["training"]["target_attempts"], 250_000)
+        self.assertEqual(initial_provenance["invocation_attempts"], 1)
+        self.assertEqual(resumed["training"]["attempts"], 249_998)
+        self.assertEqual(resumed["training"]["target_attempts"], 250_000)
+        self.assertEqual(resumed_provenance["invocation_attempts"], 249_998)
+        with self.assertRaises(ValueError):
+            build_manifest(
+                self.profile, self.profile_bytes,
+                "/workspace/train/frozen_train_10k.json", "b" * 64,
+                "/workspace/train/checkpoints", True,
+                attempts=250_001, target_attempts=250_000,
+            )
+        with self.assertRaises(ValueError):
+            build_manifest(
+                self.profile, self.profile_bytes,
+                "/workspace/train/frozen_train_10k.json", "b" * 64,
+                "/workspace/train/checkpoints", True,
+                attempts=0, target_attempts=250_000,
+            )
+
     def test_context_profile_is_verbatim_and_reports_sparse_widths(self):
         contexts = validate_profile(self.profile)
         self.assertEqual(contexts, self.profile["feature_contexts"])
