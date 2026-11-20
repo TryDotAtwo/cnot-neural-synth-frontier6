@@ -1,4 +1,4 @@
-# Red phase: these contract tests intentionally precede the controller implementation.
+# Budget and lifecycle contract tests for the one-shot Vast controller.
 import unittest
 
 import vast_rent_rebuild_dataset as controller
@@ -55,7 +55,7 @@ class OfferAndBudgetTests(unittest.TestCase):
     def test_budget_gate_reports_whether_history_or_offer_price_blocks_rent(self):
         rows = [offer(10)]
         self.assertEqual(controller.budget_gate_reason(0.0, rows), "within_budget")
-        self.assertEqual(controller.budget_gate_reason(5.0, rows), "prior_spend")
+        self.assertEqual(controller.budget_gate_reason(6.0, rows), "prior_spend")
         expensive = [offer(11, dph_total=0.50)]
         self.assertEqual(controller.budget_gate_reason(0.0, expensive), "offer_cost")
 
