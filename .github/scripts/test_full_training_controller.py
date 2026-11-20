@@ -343,5 +343,28 @@ class FullRunBudgetDiagnosisTests(unittest.TestCase):
             "inputs_unknown",
         )
 
+
+    def test_budget_diagnostic_only_reads_and_never_mutates_vast(self):
+        row = self.target()
+        with (
+            patch.object(controller, "_marker", return_value={
+                "resume_existing_label": row["label"],
+            }),
+            patch.object(controller.base, "instance_rows", return_value=[row]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller, "_summarize_budget") as summarize,
+            patch.object(controller.base, "api_instance_id") as update,
+            patch.object(controller.base, "create_once") as create,
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "stop_exact_label") as stop,
+        ):
+            self.assertEqual(controller.budget_check(), 0)
+
+        summarize.assert_called_once()
+        update.assert_not_called()
+        create.assert_not_called()
+        offers.assert_not_called()
+        stop.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
