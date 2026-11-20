@@ -6,6 +6,8 @@ use crate::training_data::{ExactCatalog, TrainingRecord};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
+use crate::nn_training::ADAMW_UPDATE_SEMANTICS_ID;
+
 pub(super) struct ObjectiveFingerprintInput<'a> {
     pub(super) alphabets: &'a HashMap<String, CnotAlphabet>,
     pub(super) catalogs: &'a HashMap<String, ExactCatalog>,
@@ -113,7 +115,8 @@ pub(super) fn objective_config_digest(input: ObjectiveFingerprintInput<'_>) -> S
         "external_admission_sha256": config.external_admission_sha256,
         "require_all_model_inputs": config.require_all_model_inputs,
         "compact_exposures": config.compact_exposures,
-        "gradient_observation": "neural_trainer_autograd_boundary_v1"
+        "gradient_observation": "neural_trainer_autograd_boundary_v1",
+        "adamw_update_semantics": ADAMW_UPDATE_SEMANTICS_ID,
     });
     // Existing checkpoints pin the original FP32 summation order.
     if config.share_candidate_wire_projections {
@@ -212,7 +215,7 @@ mod adaptive_chunk_contract_tests {
     use super::*;
 
     #[test]
-    fn adaptive_chunk_has_distinct_contract_and_legacy_digest_is_unchanged() {
+    fn training_semantics_and_adaptive_chunk_have_distinct_contracts() {
         let alphabets = HashMap::new();
         let catalogs = HashMap::new();
         let forbidden = HashSet::new();
@@ -230,10 +233,13 @@ mod adaptive_chunk_contract_tests {
         };
         let config = FullGraphObjectiveConfig::default();
         let legacy = digest(&config);
-        assert_eq!(
+        assert_eq!(legacy, digest(&config));
+        assert_ne!(
             legacy,
-            "194f48c155f40fa49eb122a8cc5f343f3deffbf8d4d987a28bf4328a61cc5f59"
+            "194f48c155f40fa49eb122a8cc5f343f3deffbf8d4d987a28bf4328a61cc5f59",
+            "inactive-parameter AdamW semantics must invalidate old fingerprints"
         );
+        assert_eq!(ADAMW_UPDATE_SEMANTICS_ID, "inactive_parameter_skip_v1");
         let adaptive = FullGraphObjectiveConfig {
             adaptive_neighbor_chunk: true,
             ..config.clone()

@@ -78,10 +78,11 @@ fn resident_adamw_skips_absent_groups_decay_and_moments_and_rejects_bad_gradient
             .unwrap();
         assert_eq!(outcome.accepted, i != 2);
     }
+    let group_name = "stem.group_roles.C02.0.weight";
     let mut i = 0usize;
     let mut rows = Vec::new();
-    let outcome = trainer
-        .run_device_updates(&model, 5, 2, |indices| {
+    let first = trainer
+        .run_device_updates(&model, 4, 2, |indices| {
             rows.extend_from_slice(indices);
             let active = matches!(i, 0 | 3);
             let batch = DeviceUpdateLoss {
@@ -93,7 +94,46 @@ fn resident_adamw_skips_absent_groups_decay_and_moments_and_rejects_bad_gradient
             Ok(batch)
         })
         .unwrap();
+    assert!(first.accepted);
+
+    let (before_header, before_moments) = saved(&vars, &trainer, "before-inactive-winner");
+    let before_param = vars.variables()[group_name].detach().copy();
+    let before_parameter_index = before_header["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|parameter| parameter["name"].as_str() == Some(group_name))
+        .unwrap();
+    assert_eq!(
+        before_header["parameter_steps"][before_parameter_index].as_u64(),
+        Some(2),
+    );
+    let first_name = format!("m_{before_parameter_index:08}");
+    let second_name = format!("v_{before_parameter_index:08}");
+    let before_first_moment = before_moments.get(&first_name).unwrap().copy();
+    let before_second_moment = before_moments.get(&second_name).unwrap().copy();
+
+    let outcome = trainer
+        .run_device_updates(&model, 1, 2, |indices| {
+            rows.extend_from_slice(indices);
+            let batch = DeviceUpdateLoss {
+                loss: loss(&vars, i, true),
+                valid: Tensor::ones([], (Kind::Bool, device)),
+                group_activity: Tensor::zeros([1], (Kind::Bool, device)),
+            };
+            i += 1;
+            Ok(batch)
+        })
+        .unwrap();
     assert!(outcome.accepted);
+    let (after_header, after_moments) = saved(&vars, &trainer, "after-inactive-winner");
+    assert_eq!(
+        after_header["parameter_steps"][before_parameter_index].as_u64(),
+        Some(2),
+    );
+    assert!(vars.variables()[group_name].equal(&before_param));
+    assert!(after_moments.get(&first_name).unwrap().equal(&before_first_moment));
+    assert!(after_moments.get(&second_name).unwrap().equal(&before_second_moment));
     assert_eq!(rows, ref_rows);
     assert_eq!(trainer.progress(), reference_trainer.progress());
     assert_eq!(trainer.progress().accepted, 4);

@@ -71,12 +71,27 @@ def is_project_owned(row: dict) -> bool:
     return known_id or known_label
 
 
-def state(row: dict) -> str:
-    value = row.get("actual_status") or row.get("cur_state") or row.get("next_state")
+def observed_state(row: dict) -> str:
+    """Return a confirmed current state; next_state is only a requested transition."""
+    value = row.get("actual_status") or row.get("cur_state")
     if not isinstance(value, str):
         return "unknown"
     value = value.strip().lower()
     return value if value in ALLOWED_STATES else "unknown"
+
+
+def requested_state(row: dict) -> str:
+    """Return the requested transition target without treating it as observation."""
+    value = row.get("next_state")
+    if not isinstance(value, str):
+        return "unknown"
+    value = value.strip().lower()
+    return value if value in ALLOWED_STATES else "unknown"
+
+
+def state(row: dict) -> str:
+    """Compatibility alias for call sites that mean observed state."""
+    return observed_state(row)
 
 
 def target_rows(payload: object) -> list[dict]:

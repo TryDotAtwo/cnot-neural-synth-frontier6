@@ -1,4 +1,5 @@
 use super::{ExposureAudit, FullGraphObjective, ObjectiveDiagnostics, EXPOSURE_SCHEMA};
+use crate::nn_training::ADAMW_UPDATE_SEMANTICS_ID;
 
 impl FullGraphObjective {
     #[cfg(feature = "cuda")]
@@ -43,6 +44,7 @@ impl FullGraphObjective {
         serde_json::json!({
             "id": "full_graph_reference_v3",
             "objective_sha256": self.config_sha256,
+            "adamw_update_semantics": ADAMW_UPDATE_SEMANTICS_ID,
             "feature_registry_sha256": self.feature_contract_sha256,
             "frozen_dataset_sha256": self.frozen_dataset_sha256,
             "training_records_sha256": self.training_records_sha256,

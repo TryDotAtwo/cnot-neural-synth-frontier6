@@ -127,3 +127,100 @@ impl AdamW {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod inactive_parameter_tests {
+    use super::super::config::AdamWConfig;
+    use super::super::state::AdamW;
+    use tch::nn::{Init, VarStore};
+    use tch::{Device, Tensor};
+
+    #[test]
+    fn undefined_inactive_parameter_keeps_weight_moments_and_bias_step_unchanged() {
+        let variables = VarStore::new(Device::Cpu);
+        let root = variables.root();
+        let _active = root.var("active_group", &[1], Init::Const(1.0));
+        let _inactive = root.var("inactive_group", &[1], Init::Const(2.0));
+        let config = AdamWConfig {
+            learning_rate: 0.1,
+            beta1: 0.5,
+            beta2: 0.5,
+            epsilon: 1e-8,
+            weight_decay: 0.25,
+        };
+        let mut optimizer = AdamW::new(&variables, config).unwrap();
+        let active_index = optimizer
+            .parameters
+            .iter()
+            .position(|state| state.name == "active_group")
+            .unwrap();
+        let inactive_index = optimizer
+            .parameters
+            .iter()
+            .position(|state| state.name == "inactive_group")
+            .unwrap();
+        let inactive_parameter = optimizer.parameters[inactive_index]
+            .parameter
+            .detach()
+            .copy();
+        let inactive_first = optimizer.parameters[inactive_index]
+            .first_moment
+            .detach()
+            .copy();
+        let inactive_second = optimizer.parameters[inactive_index]
+            .second_moment
+            .detach()
+            .copy();
+
+        let mut gradients: Vec<_> = optimizer
+            .parameters
+            .iter()
+            .map(|_| Tensor::new())
+            .collect();
+        gradients[active_index] =
+            Tensor::ones_like(&optimizer.parameters[active_index].parameter);
+        optimizer.step(&gradients).unwrap();
+
+        assert_eq!(optimizer.steps(), 1);
+        assert_eq!(optimizer.parameters[active_index].steps, 1);
+        assert_eq!(optimizer.parameters[inactive_index].steps, 0);
+        assert!(optimizer.parameters[inactive_index]
+            .parameter
+            .equal(&inactive_parameter));
+        assert!(optimizer.parameters[inactive_index]
+            .first_moment
+            .equal(&inactive_first));
+        assert!(optimizer.parameters[inactive_index]
+            .second_moment
+            .equal(&inactive_second));
+
+        let gradients: Vec<_> = optimizer
+            .parameters
+            .iter()
+            .map(|state| Tensor::ones_like(&state.parameter))
+            .collect();
+        optimizer.step(&gradients).unwrap();
+
+        assert_eq!(optimizer.steps(), 2);
+        assert_eq!(optimizer.parameters[inactive_index].steps, 1);
+        let resumed = optimizer.parameters[inactive_index].parameter.double_value(&[0]);
+        assert!((resumed - 1.85).abs() < 1e-5, "inactive parameter={resumed}");
+        assert!(
+            (optimizer.parameters[inactive_index]
+                .first_moment
+                .double_value(&[0])
+                - 0.5)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (optimizer.parameters[inactive_index]
+                .second_moment
+                .double_value(&[0])
+                - 0.5)
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(optimizer.parameters[active_index].steps, 2);
+    }
+}

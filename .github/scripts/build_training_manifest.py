@@ -14,6 +14,9 @@ import pathlib
 import re
 import tempfile
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 WIDTHS = (8, 10, 13, 25, 26, 34, 45, 50, 58, 72, 90, 108, 122, 144)
 MODEL_INPUT_COUNT = 102
@@ -21,12 +24,14 @@ TARGET_ATTEMPTS = 250_000
 INVOCATION_ATTEMPTS = TARGET_ATTEMPTS
 BATCH_SIZE = 4
 CHECKPOINT_EVERY = 2_500
-PROFILE_SCHEMA = "cnot103_feature_context_profile_v1"
+PROFILE_SCHEMA = "cnot103_feature_context_profile_v2"
+SOURCE_REPOSITORY = "TryDotAtwo/cnot-neural-synth-frontier6"
 RUN_SCHEMA = "cnot103_training_run_v1"
 FEATURE_SCHEMA = "runtime_packet_layout_v25"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MAX_SOURCE_BYTES = 2 * 1024 * 1024
 
 _CONTEXT_KEYS = {
     "max_n",
@@ -94,6 +99,47 @@ def _validate_objective_compatible_alphabet(alphabet: object) -> None:
         raise ValueError("feature context alphabet must exactly match an objective alphabet")
 
 
+def fetch_source_file(revision: str, source_path: str) -> bytes:
+    url = (
+        f"https://raw.githubusercontent.com/{SOURCE_REPOSITORY}/"
+        f"{quote(revision, safe='')}/{quote(source_path, safe='/')}"
+    )
+    request = Request(
+        url,
+        headers={"User-Agent": "TheQuantumProject-FeatureProfilePin/1.0"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            final_url = urlparse(response.geturl())
+            if final_url.scheme != "https" or final_url.hostname != "raw.githubusercontent.com":
+                raise ValueError("profile source redirect is invalid")
+            payload = response.read(MAX_SOURCE_BYTES + 1)
+    except ValueError:
+        raise
+    except (HTTPError, URLError, TimeoutError, OSError):
+        raise ValueError("profile source is unavailable") from None
+    if not payload or len(payload) > MAX_SOURCE_BYTES:
+        raise ValueError("profile source size is invalid")
+    return payload
+
+
+def validate_profile_source(profile: object, source_fetcher=None) -> None:
+    validate_profile(profile)
+    source = profile["source"]
+    fetcher = source_fetcher or fetch_source_file
+    try:
+        payload = fetcher(source["revision"], source["path"])
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("profile source is unavailable") from None
+    if not isinstance(payload, bytes) or not payload or len(payload) > MAX_SOURCE_BYTES:
+        raise ValueError("profile source size is invalid")
+    if hashlib.sha256(payload).hexdigest() != source["sha256"]:
+        raise ValueError("profile source checksum differs")
+
+
 def validate_profile(profile: object) -> dict[str, Any]:
     if not isinstance(profile, dict) or profile.get("schema") != PROFILE_SCHEMA:
         raise ValueError("profile schema")
@@ -103,10 +149,16 @@ def validate_profile(profile: object) -> dict[str, Any]:
     source = profile.get("source")
     if not isinstance(source, dict):
         raise ValueError("profile source")
+    source_repository = source.get("repository")
+    if source_repository != SOURCE_REPOSITORY:
+        raise ValueError("profile source repository")
     revision = source.get("revision")
     source_path = source.get("path")
+    source_sha256 = source.get("sha256")
     if not isinstance(revision, str) or _COMMIT.fullmatch(revision) is None:
         raise ValueError("profile source revision")
+    if not isinstance(source_sha256, str) or _SHA256.fullmatch(source_sha256) is None:
+        raise ValueError("profile source sha256")
     if (
         not isinstance(source_path, str)
         or not source_path
@@ -264,8 +316,10 @@ def build_manifest(
     provenance = {
         "schema": "cnot103_training_manifest_provenance_v1",
         "profile_id": profile["profile_id"],
+        "profile_source_repository": profile["source"]["repository"],
         "profile_source_revision": profile["source"]["revision"],
         "profile_source_path": profile["source"]["path"],
+        "profile_source_sha256": profile["source"]["sha256"],
         "profile_sha256": hashlib.sha256(profile_bytes).hexdigest(),
         "context_widths": context_widths(contexts),
         "dataset_sha256": dataset_sha256,
@@ -301,8 +355,10 @@ def _self_test_profile() -> dict[str, Any]:
         "schema": PROFILE_SCHEMA,
         "profile_id": "self-test",
         "source": {
+            "repository": SOURCE_REPOSITORY,
             "revision": "a" * 40,
             "path": "native/tests/support/feature_contexts.rs",
+            "sha256": "c" * 64,
         },
         "feature_contexts": {
             "max_n": 144,
@@ -423,6 +479,12 @@ def main() -> int:
             if not profile_bytes or len(profile_bytes) > (4 << 20):
                 raise ValueError("profile size")
             profile = json.loads(profile_bytes)
+            validate_profile(profile)
+            try:
+                validate_profile_source(profile)
+            except ValueError:
+                print("manifest_build=source_unverified")
+                return 2
             dataset_path = args.dataset_path
             dataset_sha = args.dataset_sha256
             checkpoint_dir = args.checkpoint_dir

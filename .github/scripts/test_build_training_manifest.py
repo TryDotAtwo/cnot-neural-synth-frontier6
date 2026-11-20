@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from build_training_manifest import (
     WIDTHS,
     _self_test_profile,
     build_manifest,
+    validate_profile_source,
     context_widths,
     validate_profile,
 )
@@ -55,6 +57,8 @@ class TrainingManifestTests(unittest.TestCase):
         self.assertEqual(manifest["objective"]["sampled_neighbor_count"], 4)
         self.assertEqual(provenance["model_input_slots"], MODEL_INPUT_COUNT)
         self.assertEqual(provenance["target_attempts"], TARGET_ATTEMPTS)
+        self.assertEqual(provenance["profile_source_repository"], self.profile["source"]["repository"])
+        self.assertEqual(provenance["profile_source_sha256"], self.profile["source"]["sha256"])
         self.assertEqual(provenance["context_widths"]["selected_residual_widths"], [8])
 
     def test_context_profile_is_verbatim_and_reports_sparse_widths(self):
@@ -99,6 +103,33 @@ class TrainingManifestTests(unittest.TestCase):
         }]
         with self.assertRaises(ValueError):
             validate_profile(bad)
+
+    def test_rejects_missing_or_malformed_source_sha_and_repository(self):
+        bad = copy.deepcopy(self.profile)
+        bad["source"]["sha256"] = "main"
+        with self.assertRaises(ValueError):
+            validate_profile(bad)
+        bad = copy.deepcopy(self.profile)
+        bad["source"]["repository"] = "another/repository"
+        with self.assertRaises(ValueError):
+            validate_profile(bad)
+
+    def test_profile_source_requires_exact_repository_revision_path_and_sha(self):
+        source = b"immutable source artifact"
+        digest = hashlib.sha256(source).hexdigest()
+        self.profile["source"]["sha256"] = digest
+
+        validate_profile_source(
+            self.profile,
+            source_fetcher=lambda revision, path: (
+                source if revision == "a" * 40 and path == "native/tests/support/feature_contexts.rs" else b""
+            ),
+        )
+        with self.assertRaises(ValueError):
+            validate_profile_source(
+                self.profile,
+                source_fetcher=lambda *_args: b"changed source artifact",
+            )
 
     def test_rejects_unpinned_or_malformed_profile(self):
         bad = json.loads(json.dumps(self.profile))

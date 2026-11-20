@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 
 REPOSITORY = "TryDotAtwo/quantum-generator"
 FILENAME = "full_shared_native_holdout_20261001.sqlite"
-API_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/revision/main"
+REVISION_API_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/revision/main"
 PATHS_INFO_API_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/paths-info"
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 MAX_BYTES = 1 << 30
@@ -36,17 +36,68 @@ def sha256_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def get_revision() -> str:
-    request = Request(API_URL, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+def get_current_revision() -> str:
+    request = Request(
+        REVISION_API_URL,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
     try:
         with urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read(2 * 1024 * 1024))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
+            payload_bytes = response.read(2 * 1024 * 1024 + 1)
+    except (HTTPError, URLError, TimeoutError, OSError):
         raise FetchError("could not query the public holdout revision") from None
+    if len(payload_bytes) > 2 * 1024 * 1024:
+        raise FetchError("public holdout revision response is too large")
+    try:
+        payload = json.loads(payload_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise FetchError("public holdout revision response is invalid") from None
     revision = payload.get("sha") if isinstance(payload, dict) else None
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise FetchError("public holdout revision response is invalid")
     return revision
+
+
+def discover_current_pin(revision_getter=None, metadata_getter=None) -> tuple[str, str]:
+    revision = (revision_getter or get_current_revision)()
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise FetchError("public holdout revision response is invalid")
+    metadata = metadata_getter or get_file_metadata
+    file_size, expected_sha = metadata(revision)
+    if isinstance(file_size, bool) or not isinstance(file_size, int) or file_size <= 0:
+        raise FetchError("pinned holdout file size is invalid")
+    try:
+        return validate_expected_pin(revision, expected_sha)
+    except FetchError as error:
+        raise FetchError("pinned holdout metadata SHA-256 is invalid") from error
+
+
+def write_github_environment_pin(env_path: pathlib.Path, revision: str, sha256: str) -> None:
+    revision, sha256 = validate_expected_pin(revision, sha256)
+    with env_path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(f"CNOT103_HOLDOUT_REVISION={revision}\n")
+        stream.write(f"CNOT103_HOLDOUT_SHA256={sha256}\n")
+
+
+def validate_expected_pin(revision: object, sha256: object) -> tuple[str, str]:
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise FetchError("holdout source revision pin is invalid")
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise FetchError("holdout source SHA-256 pin is invalid")
+    return revision, sha256
+
+
+def verify_source_metadata(
+    expected_revision: str,
+    expected_sha256: str,
+    metadata_getter=None,
+) -> int:
+    revision, expected_sha256 = validate_expected_pin(expected_revision, expected_sha256)
+    getter = metadata_getter or get_file_metadata
+    expected_size, metadata_sha256 = getter(revision)
+    if metadata_sha256 != expected_sha256:
+        raise FetchError("pinned holdout metadata SHA-256 differs from expected pin")
+    return expected_size
 
 
 def parse_file_metadata(entries: object) -> tuple[int, str]:
@@ -83,6 +134,8 @@ def parse_file_metadata(entries: object) -> tuple[int, str]:
 
 
 def get_file_metadata(revision: str) -> tuple[int, str]:
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise FetchError("holdout source revision pin is invalid")
     url = f"{PATHS_INFO_API_URL}/{quote(revision, safe='')}"
     body = urlencode({"paths": FILENAME, "expand": "true"}).encode("ascii")
     request = Request(
@@ -188,7 +241,13 @@ def write_receipt(path: pathlib.Path, receipt: dict) -> None:
     os.rename(temporary, path)
 
 
-def run(root: pathlib.Path) -> None:
+def run(
+    root: pathlib.Path,
+    expected_revision: str,
+    expected_sha256: str,
+    metadata_getter=None,
+    downloader=None,
+) -> None:
     root = root.resolve()
     if not root.is_dir():
         raise FetchError("remote experiment directory does not exist")
@@ -202,10 +261,12 @@ def run(root: pathlib.Path) -> None:
         receipt_path.with_name(receipt_path.name + ".partial"),
     )):
         raise FetchError("preserving an existing input file or receipt")
-    revision = get_revision()
-    expected_size, expected_sha = get_file_metadata(revision)
-    download(path, revision, expected_size, expected_sha)
+    revision, expected_sha = validate_expected_pin(expected_revision, expected_sha256)
+    expected_size = verify_source_metadata(revision, expected_sha, metadata_getter)
+    (downloader or download)(path, revision, expected_size, expected_sha)
     digest = sha256_file(path)
+    if path.stat().st_size != expected_size or digest != expected_sha:
+        raise FetchError("downloaded holdout does not match expected source pin")
     write_receipt(receipt_path, {
         "schema": "cnot103_public_holdout_source_v1",
         "repository": REPOSITORY,
@@ -221,17 +282,40 @@ def run(root: pathlib.Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment-root")
-    parser.add_argument("--metadata-check", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--metadata-check", action="store_true")
+    modes.add_argument("--discover-current-pin", action="store_true")
+    parser.add_argument("--expected-revision")
+    parser.add_argument("--expected-sha256")
     args = parser.parse_args()
     try:
+        if args.discover_current_pin:
+            if args.experiment_root or args.expected_revision or args.expected_sha256:
+                raise FetchError("current pin discovery arguments are invalid")
+            env_file = os.environ.get("GITHUB_ENV")
+            if not env_file:
+                raise FetchError("workflow environment output is unavailable")
+            revision, expected_sha = discover_current_pin()
+            print(f"::add-mask::{revision}")
+            print(f"::add-mask::{expected_sha}")
+            write_github_environment_pin(pathlib.Path(env_file), revision, expected_sha)
+            print("holdout_pin=accepted")
+            return 0
         if args.metadata_check:
-            revision = get_revision()
-            get_file_metadata(revision)
+            if not args.expected_revision or not args.expected_sha256:
+                raise FetchError("exact holdout source pin is required")
+            verify_source_metadata(args.expected_revision, args.expected_sha256)
             print("holdout_metadata=verified")
             return 0
         if not args.experiment_root:
             raise FetchError("remote experiment directory is missing")
-        run(pathlib.Path(args.experiment_root))
+        if not args.expected_revision or not args.expected_sha256:
+            raise FetchError("exact holdout source pin is required")
+        run(
+            pathlib.Path(args.experiment_root),
+            args.expected_revision,
+            args.expected_sha256,
+        )
         print("holdout_download=available")
         return 0
     except Exception as error:
@@ -243,11 +327,40 @@ def main() -> int:
                     stream.write(f"{type(error).__name__}: {error}\n")
             except OSError:
                 pass
+        if args.discover_current_pin:
+            print("holdout_pin=failed")
+            failure_codes = {
+                "could not query the public holdout revision": "revision_query_failed",
+                "public holdout revision response is too large": "revision_response_too_large",
+                "public holdout revision response is invalid": "revision_response_invalid",
+                "pinned holdout file size is invalid": "file_size_invalid",
+                "pinned holdout metadata SHA-256 is invalid": "sha256_metadata_invalid",
+                "could not query pinned holdout file metadata": "file_metadata_query_failed",
+                "pinned holdout metadata exceeds the configured size limit": "file_metadata_too_large",
+                "pinned holdout metadata response is invalid": "file_metadata_invalid",
+                "pinned holdout file metadata is missing": "file_metadata_missing",
+                "pinned holdout file metadata is missing or ambiguous": "file_metadata_ambiguous",
+                "pinned holdout file type is invalid": "file_type_invalid",
+                "pinned holdout file exceeds the configured size limit": "file_too_large",
+                "pinned holdout LFS size differs from file size": "lfs_size_mismatch",
+                "pinned holdout LFS metadata is missing": "lfs_metadata_missing",
+                "pinned holdout LFS digest format is unsupported": "lfs_digest_format_unsupported",
+                "workflow environment output is unavailable": "workflow_output_unavailable",
+                "current pin discovery arguments are invalid": "discovery_arguments_invalid",
+            }
+            failure = (
+                failure_codes.get(str(error), "pin_discovery_failed")
+                if isinstance(error, FetchError)
+                else "pin_discovery_internal_error"
+            )
+            print(f"holdout_pin_failure={failure}")
+            return 1
         if args.metadata_check:
             print("holdout_metadata=failed")
             failure_codes = {
-                "could not query the public holdout revision": "revision_query_failed",
-                "public holdout revision response is invalid": "revision_response_invalid",
+                "holdout source revision pin is invalid": "revision_pin_invalid",
+                "holdout source SHA-256 pin is invalid": "sha256_pin_invalid",
+                "pinned holdout metadata SHA-256 differs from expected pin": "sha256_pin_mismatch",
                 "could not query pinned holdout file metadata": "file_metadata_query_failed",
                 "pinned holdout metadata exceeds the configured size limit": "file_metadata_too_large",
                 "pinned holdout metadata response is invalid": "file_metadata_invalid",
@@ -259,6 +372,7 @@ def main() -> int:
                 "pinned holdout LFS size differs from file size": "lfs_size_mismatch",
                 "pinned holdout LFS metadata is missing": "lfs_metadata_missing",
                 "pinned holdout LFS digest format is unsupported": "lfs_digest_format_unsupported",
+                "exact holdout source pin is required": "source_pin_missing",
             }
             failure = (
                 failure_codes.get(str(error), "metadata_validation_failed")
@@ -269,6 +383,10 @@ def main() -> int:
         else:
             print("holdout_download=failed")
         return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 if __name__ == "__main__":

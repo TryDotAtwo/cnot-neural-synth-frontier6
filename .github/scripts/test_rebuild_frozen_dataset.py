@@ -99,6 +99,8 @@ class FrozenDatasetBuilderTests(unittest.TestCase):
                 "receipt": str(receipt),
                 "source_revision": builder_revision,
                 "builder_source_revision": builder_revision,
+                "expected_holdout_revision": hf_revision,
+                "expected_holdout_sha256": source_receipt["sha256"],
                 "seed": 202611190001,
             })()
             body = {"provenance": {}}
@@ -112,6 +114,8 @@ class FrozenDatasetBuilderTests(unittest.TestCase):
             dataset = json.loads(output.read_text(encoding="utf-8"))
             build_receipt = json.loads(receipt.read_text(encoding="utf-8"))
             self.assertEqual(dataset["provenance"]["heldout_source_revision"], hf_revision)
+            self.assertEqual(dataset["provenance"]["heldout_source_repository"], source_receipt["repository"])
+            self.assertEqual(dataset["provenance"]["heldout_source_filename"], source_receipt["filename"])
             self.assertEqual(dataset["provenance"]["builder_source_revision"], builder_revision)
             self.assertFalse(build_receipt["complete"])
             self.assertEqual(build_receipt["validation_status"], "pending")
@@ -137,6 +141,8 @@ class FrozenDatasetBuilderTests(unittest.TestCase):
                 "receipt": str(data_dir / "build.receipt.json"),
                 "source_revision": "b" * 40,
                 "builder_source_revision": "b" * 40,
+                "expected_holdout_revision": "a" * 40,
+                "expected_holdout_sha256": hashlib.sha256(holdout.read_bytes()).hexdigest(),
                 "seed": 202611190001,
             })()
 

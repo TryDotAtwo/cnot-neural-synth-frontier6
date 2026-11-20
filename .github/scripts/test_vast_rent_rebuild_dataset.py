@@ -120,5 +120,68 @@ class OfferAndBudgetTests(unittest.TestCase):
         self.assertEqual(selected, [wanted])
 
 
+
+
+class HoldoutSourcePinTests(unittest.TestCase):
+    def test_missing_or_malformed_pins_fail_closed(self):
+        self.assertEqual(controller.holdout_pin_status(None, None), "missing")
+        self.assertEqual(controller.holdout_pin_status("a" * 40, None), "missing")
+        self.assertEqual(controller.holdout_pin_status("main", "b" * 64), "invalid")
+        self.assertEqual(controller.holdout_pin_status("a" * 40, "B" * 64), "invalid")
+        self.assertEqual(controller.holdout_pin_status("a" * 40, "b" * 64), "accepted")
+
+    def test_rent_controller_rejects_missing_pin_before_vast_queries(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_RUN_ID": "12",
+            "GITHUB_RUN_ATTEMPT": "1",
+        }, clear=True), patch.object(controller, "instance_rows") as inventory:
+            status = controller.run()
+
+        self.assertEqual(status, 1)
+        inventory.assert_not_called()
+
+
+class ObservedStopStateTests(unittest.TestCase):
+    def test_requested_transition_is_separate_from_observed_state(self):
+        row = {"actual_status": "running", "next_state": "stopped"}
+
+        self.assertEqual(controller.probe.observed_state(row), "running")
+        self.assertEqual(controller.probe.requested_state(row), "stopped")
+
+    def test_incomplete_status_does_not_prove_stopped(self):
+        row = {"next_state": "stopped"}
+
+        self.assertEqual(controller.probe.observed_state(row), "unknown")
+        self.assertEqual(controller.probe.requested_state(row), "stopped")
+
+    def test_stop_loop_does_not_accept_transition_target_as_confirmation(self):
+        from unittest.mock import patch
+
+        label = "cnot103-r10k-12-a1"
+        row = {
+            "id": 123,
+            "label": label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "next_state": "stopped",
+        }
+        with (
+            patch.object(controller, "instance_rows", return_value=[row]),
+            patch.object(controller, "remove_run_keys", return_value="not_found"),
+            patch.object(controller, "api_instance_id", return_value=True) as stop_request,
+            patch.object(controller.time, "monotonic", side_effect=[0.0, 0.0, 301.0]),
+            patch.object(controller.time, "sleep"),
+        ):
+            status, key_status = controller.stop_exact_label(label, "12", "1")
+
+        self.assertEqual(status, "unverified")
+        self.assertEqual(key_status, "not_found")
+        stop_request.assert_called_once_with(123, "stopped")
+
+
 if __name__ == "__main__":
     unittest.main()

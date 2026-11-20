@@ -6,6 +6,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/vast_rent_rebuild_dataset.py
+      - .github/scripts/vast_probe_existing_2x3060.py
       - .github/scripts/test_vast_rent_rebuild_dataset.py
       - .github/workflows/vast-rent-rebuild-dataset-check.yml
 

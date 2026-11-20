@@ -559,7 +559,11 @@ def self_test() -> None:
 
 
 def read_holdout_source_receipt(
-    root: pathlib.Path, holdout_path: pathlib.Path, holdout_sha: str
+    root: pathlib.Path,
+    holdout_path: pathlib.Path,
+    holdout_sha: str,
+    expected_revision: str,
+    expected_sha256: str,
 ) -> dict:
     receipt_path = require_under(
         root / "input" / "holdout-source.receipt.json", root
@@ -571,6 +575,10 @@ def read_holdout_source_receipt(
     if not isinstance(receipt, dict):
         raise BuildError("pinned holdout source receipt has an invalid shape")
     revision = receipt.get("revision")
+    if not isinstance(expected_revision, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_revision):
+        raise BuildError("expected holdout revision pin is invalid")
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise BuildError("expected holdout SHA-256 pin is invalid")
     size = holdout_path.stat().st_size
     if (
         receipt.get("schema") != "cnot103_public_holdout_source_v1"
@@ -579,8 +587,10 @@ def read_holdout_source_receipt(
         or holdout_path.name != HOLDOUT_FILENAME
         or not isinstance(revision, str)
         or not re.fullmatch(r"[0-9a-f]{40}", revision)
+        or revision != expected_revision
+        or holdout_sha != expected_sha256
         or receipt.get("sha256") != holdout_sha
-        or receipt.get("expected_sha256") != holdout_sha
+        or receipt.get("expected_sha256") != expected_sha256
         or not isinstance(receipt.get("bytes"), int)
         or isinstance(receipt.get("bytes"), bool)
         or receipt.get("bytes") != size
@@ -608,9 +618,17 @@ def run(args: argparse.Namespace) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", args.builder_source_revision):
         raise BuildError("builder source revision must be a lowercase commit SHA")
     holdout_sha = sha256_file(holdout_path)
-    source_receipt = read_holdout_source_receipt(root, holdout_path, holdout_sha)
+    source_receipt = read_holdout_source_receipt(
+        root,
+        holdout_path,
+        holdout_sha,
+        args.expected_holdout_revision,
+        args.expected_holdout_sha256,
+    )
     dev, test = read_holdout(holdout_path)
     body, stats = build_body(dev, test, args.seed)
+    body["provenance"]["heldout_source_repository"] = source_receipt["repository"]
+    body["provenance"]["heldout_source_filename"] = source_receipt["filename"]
     body["provenance"]["heldout_source_revision"] = source_receipt["revision"]
     body["provenance"]["heldout_sqlite_sha256"] = holdout_sha
     body["provenance"]["builder_source_revision"] = args.builder_source_revision
@@ -629,6 +647,8 @@ def run(args: argparse.Namespace) -> None:
         "dataset_sha256": dataset_sha,
         "dataset_bytes": len(raw),
         "holdout_sqlite_sha256": holdout_sha,
+        "heldout_source_repository": source_receipt["repository"],
+        "heldout_source_filename": source_receipt["filename"],
         "heldout_source_revision": source_receipt["revision"],
         "builder_source_revision": args.builder_source_revision,
         "seed_base": args.seed,
@@ -704,6 +724,8 @@ def main() -> int:
     parser.add_argument("--output")
     parser.add_argument("--receipt")
     parser.add_argument("--builder-source-revision")
+    parser.add_argument("--expected-holdout-revision")
+    parser.add_argument("--expected-holdout-sha256")
     parser.add_argument("--expected-dataset-sha256")
     parser.add_argument("--seed", type=int, default=202611190001)
     args = parser.parse_args()
@@ -730,6 +752,7 @@ def main() -> int:
         if not all((
             args.experiment_root, args.holdout_sqlite, args.output,
             args.receipt, args.builder_source_revision,
+            args.expected_holdout_revision, args.expected_holdout_sha256,
         )):
             raise BuildError("remote rebuild arguments are incomplete")
         if not 0 <= args.seed <= MASK64:

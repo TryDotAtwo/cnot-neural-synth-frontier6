@@ -10,6 +10,9 @@ use crate::training::TrainingError;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+/// Checkpoint-visible AdamW rule for feature groups with no winner activity.
+pub(crate) const ADAMW_UPDATE_SEMANTICS_ID: &str = "inactive_parameter_skip_v1";
+
 #[derive(Debug)]
 pub enum TchTrainingError {
     Checkpoint(CheckpointError),

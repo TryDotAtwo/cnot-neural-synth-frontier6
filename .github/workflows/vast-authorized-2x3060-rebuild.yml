@@ -24,6 +24,9 @@ jobs:
       - name: Check out source pinned to this run
         uses: actions/checkout@v4
 
+      - name: Discover and pin current holdout metadata before Vast access
+        run: python3 .github/scripts/fetch_public_holdout.py --discover-current-pin
+
       - name: Parse and test controller before Vast access
         run: |
           set -euo pipefail
@@ -41,7 +44,9 @@ jobs:
               ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
           PY
           python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
-          python3 .github/scripts/fetch_public_holdout.py --metadata-check
+          python3 -m unittest discover -s .github/scripts -p 'test_fetch_public_holdout.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_rebuild_frozen_dataset.py' -v
+          python3 .github/scripts/fetch_public_holdout.py --metadata-check --expected-revision "$CNOT103_HOLDOUT_REVISION" --expected-sha256 "$CNOT103_HOLDOUT_SHA256"
 
       - name: Install Vast CLI
         timeout-minutes: 5

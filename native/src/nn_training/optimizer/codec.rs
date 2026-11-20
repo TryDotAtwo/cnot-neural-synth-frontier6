@@ -1,12 +1,13 @@
 use super::super::TchTrainingError;
 use super::{AdamW, AdamWConfig, DecodedAdamW};
+use super::super::ADAMW_UPDATE_SEMANTICS_ID;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Cursor;
 use tch::{Device, Tensor};
 
-const OPTIMIZER_MAGIC: &[u8; 8] = b"C103ADW1";
-const OPTIMIZER_VERSION: u32 = 1;
+const OPTIMIZER_MAGIC: &[u8; 8] = b"C103ADW2";
+const OPTIMIZER_VERSION: u32 = 2;
 const MAX_OPTIMIZER_HEADER_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,7 @@ struct ParameterSignature {
 #[serde(deny_unknown_fields)]
 struct AdamWHeader {
     version: u32,
+    update_semantics: String,
     config: AdamWConfig,
     steps: u64,
     parameter_steps: Vec<u64>,
@@ -42,6 +44,7 @@ fn signatures(optimizer: &AdamW) -> Vec<ParameterSignature> {
 pub(super) fn encode(optimizer: &AdamW) -> Result<Vec<u8>, TchTrainingError> {
     let header = AdamWHeader {
         version: OPTIMIZER_VERSION,
+        update_semantics: ADAMW_UPDATE_SEMANTICS_ID.to_owned(),
         config: optimizer.config,
         steps: optimizer.steps,
         parameter_steps: optimizer
@@ -94,6 +97,7 @@ pub(super) fn decode(optimizer: &AdamW, bytes: &[u8]) -> Result<DecodedAdamW, Tc
         .ok_or(TchTrainingError::Invalid("AdamW state is truncated"))?;
     let header: AdamWHeader = serde_json::from_slice(&bytes[16..payload_start])?;
     if header.version != OPTIMIZER_VERSION
+        || header.update_semantics != ADAMW_UPDATE_SEMANTICS_ID
         || header.config != optimizer.config
         || header.parameters != signatures(optimizer)
         || header.parameter_steps.len() != optimizer.parameters.len()

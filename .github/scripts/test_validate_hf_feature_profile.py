@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 
@@ -28,8 +29,10 @@ class HFProfileValidationTests(unittest.TestCase):
     def test_profile_json_must_match_manifest_schema(self):
         profile = _self_test_profile()
         parsed = validate_profile_bytes(json.dumps(profile).encode())
+        self.assertEqual(parsed["source_repository"], "TryDotAtwo/cnot-neural-synth-frontier6")
         self.assertEqual(parsed["source_revision"], "a" * 40)
         self.assertEqual(parsed["source_path"], "native/tests/support/feature_contexts.rs")
+        self.assertEqual(parsed["source_sha256"], "c" * 64)
         with self.assertRaises(ProfileCheckError):
             validate_profile_bytes(b'{"schema":"wrong"}')
 
@@ -87,7 +90,7 @@ class HFProfileValidationTests(unittest.TestCase):
         status = inspect_profile(
             fetch_page=lambda _url: (list(payloads), None),
             fetch_file=fetch_file,
-            source_exists=lambda _revision, _path: True,
+            source_exists=lambda _revision, _path, _sha256: True,
             revision_getter=lambda: "b" * 40,
         )
 
@@ -108,9 +111,10 @@ class HFProfileValidationTests(unittest.TestCase):
         status = inspect_profile(
             fetch_page=lambda _url: (paths, None),
             fetch_file=fetch_file,
-            source_exists=lambda revision, path: (
+            source_exists=lambda revision, path, sha256: (
                 revision == "a" * 40
                 and path == "native/tests/support/feature_contexts.rs"
+                and sha256 == "c" * 64
             ),
             revision_getter=lambda: "b" * 40,
         )
@@ -136,7 +140,7 @@ class HFProfileValidationTests(unittest.TestCase):
         status = inspect_profile(
             fetch_page=lambda _url: (paths, None),
             fetch_file=fetch_file,
-            source_exists=lambda _revision, _path: True,
+            source_exists=lambda _revision, _path, _sha256: True,
             revision_getter=lambda: "b" * 40,
         )
 
@@ -162,7 +166,7 @@ class HFProfileValidationTests(unittest.TestCase):
         status = inspect_profile(
             fetch_page=lambda _url: (paths, None),
             fetch_file=fetch_file,
-            source_exists=lambda _revision, _path: True,
+            source_exists=lambda _revision, _path, _sha256: True,
             revision_getter=lambda: "b" * 40,
         )
 
@@ -207,7 +211,7 @@ class HFProfileValidationTests(unittest.TestCase):
         status = inspect_profile(
             fetch_page=lambda _url: (paths, None),
             fetch_file=fetch_file,
-            source_exists=lambda _revision, _path: True,
+            source_exists=lambda _revision, _path, _sha256: True,
             revision_getter=lambda: "b" * 40,
         )
 
@@ -271,6 +275,14 @@ class HFProfileValidationTests(unittest.TestCase):
         )
         self.assertEqual(status, "candidate_rejected_profile_schema_with_contexts")
 
+    def test_source_pointer_requires_repository_and_sha256(self):
+        for field in ("repository", "sha256"):
+            profile = _self_test_profile()
+            profile["source"].pop(field)
+            with self.subTest(field=field):
+                with self.assertRaises(ProfileCheckError):
+                    validate_profile_bytes(json.dumps(profile).encode())
+
     def test_profile_reports_objective_alphabet_mismatch_as_safe_status(self):
         profile = _self_test_profile()
         n = 3
@@ -310,11 +322,32 @@ class HFProfileValidationTests(unittest.TestCase):
         status = inspect_profile(
             fetch_page=lambda _url: (["profiles/candidate_profile.json"], None),
             fetch_file=lambda *_args: json.dumps(profile).encode(),
-            source_exists=lambda _revision, _path: False,
+            source_exists=lambda _revision, _path, _sha256: False,
             revision_getter=lambda: "b" * 40,
         )
 
         self.assertEqual(status, "candidate_source_unverified")
+
+    def test_source_pin_requires_matching_content_sha256(self):
+        source = b"pinned source bytes"
+        expected = hashlib.sha256(source).hexdigest()
+
+        self.assertTrue(
+            _source_exists(
+                "a" * 40,
+                "native/tests/support/feature_contexts.rs",
+                expected,
+                fetch_file=lambda *_args: source,
+            )
+        )
+        self.assertFalse(
+            _source_exists(
+                "a" * 40,
+                "native/tests/support/feature_contexts.rs",
+                "0" * 64,
+                fetch_file=lambda *_args: source,
+            )
+        )
 
     def test_missing_pinned_source_is_unverified_not_unavailable(self):
         def missing_source(*_args):
@@ -324,6 +357,7 @@ class HFProfileValidationTests(unittest.TestCase):
             _source_exists(
                 "a" * 40,
                 "native/tests/support/feature_contexts.rs",
+                "c" * 64,
                 fetch_file=missing_source,
             )
         )

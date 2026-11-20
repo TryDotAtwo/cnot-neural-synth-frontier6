@@ -20,6 +20,7 @@ on:
       - .github/scripts/test_build_training_manifest.py
       - .github/scripts/vast_store_private_diagnostic.py
       - .github/scripts/fetch_public_holdout.py
+      - .github/scripts/test_fetch_public_holdout.py
       - .github/scripts/check_public_feature_profile.py
       - .github/scripts/test_check_public_feature_profile.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
@@ -61,6 +62,9 @@ jobs:
       - name: Check the pinned training manifest builder
         run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py'
 
+
+      - name: Test exact public holdout revision and checksum pins without network access
+        run: python3 -m unittest discover -s .github/scripts -p 'test_fetch_public_holdout.py' -v
 
       - name: Parse the remote holdout fetcher without network access
         run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/fetch_public_holdout.py').read_text(encoding='utf-8'))"
@@ -164,7 +168,7 @@ jobs:
             --env LIBTORCH_USE_PYTORCH=1 \
             --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
             pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc '/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark --bin cnot103-validate-manifest > /runner_temp/cuda-feature-build.jsonl 2>&1; /root/.cargo/bin/cargo test --features cuda --lib run_config::manifest::tests; /root/.cargo/bin/cargo test --features cuda --lib model::device_packet::frozen::winner_activity_tests; /root/.cargo/bin/cargo run --quiet --features cuda --bin cnot103-validate-manifest -- /runner_temp/candidate-training-manifest.json'; then
+            bash -euc '/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark --bin cnot103-validate-manifest > /runner_temp/cuda-feature-build.jsonl 2>&1; /root/.cargo/bin/cargo test --features cuda --lib run_config::manifest::tests; /root/.cargo/bin/cargo test --features cuda --lib model::device_packet::frozen::winner_activity_tests; /root/.cargo/bin/cargo test --features cuda --lib nn_training::optimizer::update::inactive_parameter_tests; /root/.cargo/bin/cargo test --features cuda --test cuda_device_optimizer --no-run; /root/.cargo/bin/cargo run --quiet --features cuda --bin cnot103-validate-manifest -- /runner_temp/candidate-training-manifest.json'; then
             printf 'cuda_feature_build=pass\n'
             printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else

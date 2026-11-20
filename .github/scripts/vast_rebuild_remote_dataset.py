@@ -16,7 +16,7 @@ from vast_probe_existing_2x3060 import (
     api_json,
     classify_ssh_failure,
     find_attached_key_id,
-    state,
+    observed_state,
     target_rows,
 )
 
@@ -69,6 +69,19 @@ def main() -> int:
         source_revision = os.environ.get("GITHUB_SHA", "")
         run_id = os.environ.get("GITHUB_RUN_ID", "")
         attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+        holdout_revision = os.environ.get("CNOT103_HOLDOUT_REVISION", "")
+        holdout_sha256 = os.environ.get("CNOT103_HOLDOUT_SHA256", "")
+        if not holdout_revision or not holdout_sha256:
+            result = "source_pin_missing"
+            failure_class = "source_pin_missing"
+            raise RuntimeError()
+        if (
+            not re.fullmatch(r"[0-9a-f]{40}", holdout_revision)
+            or not re.fullmatch(r"[0-9a-f]{64}", holdout_sha256)
+        ):
+            result = "source_pin_invalid"
+            failure_class = "source_pin_invalid"
+            raise RuntimeError()
         if not api_key:
             result = "configuration_missing"
             raise RuntimeError()
@@ -77,7 +90,7 @@ def main() -> int:
             raise RuntimeError()
 
         rows = target_rows(api_json(api_key, "/instances/"))
-        running = [row for row in rows if state(row) == "running"]
+        running = [row for row in rows if observed_state(row) == "running"]
         if len(running) != 1:
             result = "target_ambiguous"
             raise RuntimeError()
@@ -177,13 +190,18 @@ mkdir -p "$ROOT/data"
 git clone --quiet --filter=blob:none --no-checkout https://github.com/TryDotAtwo/cnot-neural-synth-frontier6.git "$SOURCE"
 git -C "$SOURCE" fetch --quiet --depth=1 origin '{source_revision}'
 git -C "$SOURCE" checkout --quiet --detach '{source_revision}'
-python3 "$SOURCE/.github/scripts/fetch_public_holdout.py" --experiment-root "$ROOT"
+python3 "$SOURCE/.github/scripts/fetch_public_holdout.py" \\
+  --experiment-root "$ROOT" \\
+  --expected-revision '{holdout_revision}' \\
+  --expected-sha256 '{holdout_sha256}'
 python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
   --experiment-root "$ROOT" \\
   --holdout-sqlite "$ROOT/input/full_shared_native_holdout_20261001.sqlite" \\
   --output "$DATA" \\
   --receipt "$ROOT/data/build.receipt.json" \\
-  --source-revision '{source_revision}' \\
+  --builder-source-revision '{source_revision}' \\
+  --expected-holdout-revision '{holdout_revision}' \\
+  --expected-holdout-sha256 '{holdout_sha256}' \\
   --seed 202611190001
 DATA_SHA="$(tr -d '\\r\\n' <"$ROOT/data/frozen_train_10k.sha256")"
 case "$DATA_SHA" in
@@ -193,6 +211,12 @@ if [ "$(expr length "$DATA_SHA")" -ne 64 ]; then exit 21; fi
 CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
   --manifest-path "$SOURCE/native/Cargo.toml" \\
   --no-default-features --bin cnot103-validate-data -- "$DATA" "$DATA_SHA"
+python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
+  --finalize-dataset \\
+  --experiment-root "$ROOT" \\
+  --output "$DATA" \\
+  --receipt "$ROOT/data/build.receipt.json" \\
+  --expected-dataset-sha256 "$DATA_SHA"
 """
         proc = remote_bash(host, port, key_path, known_hosts, remote)
         if proc is None:
@@ -205,6 +229,7 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
             allowed = {
                 "accepted", "failed", "workspace_exists",
                 "workspace_creation_failed", "budget_gate_closed",
+                "source_pin_missing", "source_pin_invalid",
             }
             status = next(
                 (
@@ -219,6 +244,7 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
                 "none", "toolchain_unavailable", "workspace_probe_failed",
                 "disk_full", "network_failure", "generator_or_validation_failed",
                 "remote_step_failed", "budget_gate_closed",
+                "source_pin_missing", "source_pin_invalid",
             }
             failure_class = next(
                 (
@@ -274,7 +300,7 @@ CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
     allowed_failure_classes = {
         "none", "toolchain_unavailable", "workspace_probe_failed", "disk_full",
         "network_failure", "generator_or_validation_failed", "remote_step_failed",
-        "budget_gate_closed",
+        "budget_gate_closed", "source_pin_missing", "source_pin_invalid",
         "connection_failed", "connection_or_timeout", "ssh_auth_failed",
         "ssh_timeout", "ssh_connection_refused", "ssh_network_unreachable",
         "ssh_dns_failure", "ssh_host_key_failure", "ssh_handshake_failed",

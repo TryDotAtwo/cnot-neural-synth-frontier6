@@ -3,16 +3,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from build_training_manifest import validate_profile
+from build_training_manifest import SOURCE_REPOSITORY, validate_profile
 
 REPOSITORY = "TryDotAtwo/quantum-generator"
-SOURCE_REPOSITORY = "TryDotAtwo/cnot-neural-synth-frontier6"
 REVISION_URL = f"https://huggingface.co/api/datasets/{REPOSITORY}/revision/main"
 TREE_PREFIX = f"https://huggingface.co/api/datasets/{REPOSITORY}/tree/"
 FILE_PREFIX = f"https://huggingface.co/datasets/{REPOSITORY}/resolve/"
@@ -228,7 +228,9 @@ def validate_profile_bytes(payload: bytes) -> dict:
                 "profile schema": "profile_schema",
                 "profile identity": "profile_identity",
             "profile source": "profile_source",
+            "profile source repository": "profile_source_repository",
             "profile source revision": "profile_source_revision",
+            "profile source sha256": "profile_source_sha256",
             "profile source path": "profile_source_path",
             "feature context fields": "feature_context_fields",
             "feature context maximum width": "feature_context_max_width",
@@ -241,8 +243,10 @@ def validate_profile_bytes(payload: bytes) -> dict:
     return {
         "profile": profile,
         "contexts": contexts,
+        "source_repository": profile["source"]["repository"],
         "source_revision": profile["source"]["revision"],
         "source_path": profile["source"]["path"],
+        "source_sha256": profile["source"]["sha256"],
     }
 
 
@@ -266,6 +270,7 @@ def _allowed_hub_download_host(host: str) -> bool:
 def _source_exists(
     revision: str,
     path: str,
+    expected_sha256: str,
     fetch_file=_fetch_limited,
 ) -> bool:
     try:
@@ -278,7 +283,7 @@ def _source_exists(
         if str(error) == "source file was not found":
             return False
         raise
-    return bool(body)
+    return bool(body) and hashlib.sha256(body).hexdigest() == expected_sha256
 
 
 def _canonical_json(value: object) -> str:
@@ -287,8 +292,10 @@ def _canonical_json(value: object) -> str:
 
 def _same_source(left: dict, right: dict) -> bool:
     return (
-        left["source_revision"] == right["source_revision"]
+        left["source_repository"] == right["source_repository"]
+        and left["source_revision"] == right["source_revision"]
         and left["source_path"] == right["source_path"]
+        and left["source_sha256"] == right["source_sha256"]
     )
 
 
@@ -324,8 +331,10 @@ def _profile_semantic_signature(profile: dict) -> str:
     return _canonical_json(
         {
             "contexts": profile["contexts"],
+            "source_repository": profile["source_repository"],
             "source_revision": profile["source_revision"],
             "source_path": profile["source_path"],
+            "source_sha256": profile["source_sha256"],
         }
     )
 
@@ -357,7 +366,7 @@ def _profile_selection_status(candidates: list[tuple[str, dict]]) -> str:
     if _select_pinned_profile(candidates) is not None:
         return "schema_source_pinned"
     sources = {
-        (profile["source_revision"], profile["source_path"])
+        (profile["source_repository"], profile["source_revision"], profile["source_path"], profile["source_sha256"])
         for _path, profile in candidates
     }
     if len(sources) > 1:
@@ -421,7 +430,9 @@ def inspect_profile(
             saw_schema_valid = True
             try:
                 is_pinned = source_exists(
-                    profile["source_revision"], profile["source_path"]
+                    profile["source_revision"],
+                    profile["source_path"],
+                    profile["source_sha256"],
                 )
             except ProfileCheckError as error:
                 return _safe_download_failure("source", error)
@@ -458,7 +469,8 @@ if __name__ == "__main__":
         f"candidate_rejected_{code}"
         for code in (
             "json", "profile_schema", "profile_schema_with_contexts", "profile_identity", "profile_source",
-            "profile_source_revision", "profile_source_path", "feature_context_fields",
+            "profile_source_repository", "profile_source_revision", "profile_source_path",
+            "profile_source_sha256", "feature_context_fields",
             "feature_context_max_width", "feature_context_alphabet",
             "additional_contexts", "additional_context_fields",
             "additional_context_gates", "other",

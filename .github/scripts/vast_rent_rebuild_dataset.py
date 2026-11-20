@@ -36,7 +36,7 @@ ALLOWED_OUTCOMES = {
     "label_collision", "existing_2x3060_present", "offer_gate",
     "budget_gate", "budget_gate_prior_spend", "budget_gate_offer_cost", "create_uncertain", "instance_start_failed",
     "target_gpu_mismatch", "toolchain_failed", "dataset_failed",
-    "api_failed", "controller_failed",
+    "api_failed", "controller_failed", "source_pin_missing", "source_pin_invalid",
 }
 OWNED_INSTANCE_IDS = probe.OWNED_INSTANCE_IDS
 
@@ -352,7 +352,7 @@ def wait_until_running(label: str) -> dict:
         if row is None:
             time.sleep(10)
             continue
-        current_state = probe.state(row)
+        current_state = probe.observed_state(row)
         if current_state == "running":
             if not is_2x3060(row):
                 raise GateError("created target GPU inventory does not match")
@@ -563,7 +563,7 @@ def stop_exact_label(label: str, run_id: str, attempt: str) -> tuple[str, str]:
     if ident is None or row.get("label") != label:
         return "unverified", "failed"
     key_status = remove_run_keys(ident, run_id, attempt)
-    current = probe.state(row)
+    current = probe.observed_state(row)
     if current not in {"stopped", "exited"}:
         try:
             api_instance_id(ident, "stopped")
@@ -579,7 +579,7 @@ def stop_exact_label(label: str, run_id: str, attempt: str) -> tuple[str, str]:
             return "unverified", key_status
         if instance_id(current_row) != ident:
             return "unverified", key_status
-        if probe.state(current_row) in {"stopped", "exited"}:
+        if probe.observed_state(current_row) in {"stopped", "exited"}:
             return "verified", key_status
         time.sleep(5)
     return "unverified", key_status
@@ -607,6 +607,19 @@ def summarize(checked: str, outcome: str, status: str) -> None:
             pass
 
 
+def holdout_pin_status(revision: object, sha256: object) -> str:
+    if not revision or not sha256:
+        return "missing"
+    if (
+        not isinstance(revision, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", revision)
+        or not isinstance(sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+    ):
+        return "invalid"
+    return "accepted"
+
+
 def run() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome = "controller_failed"
@@ -614,6 +627,13 @@ def run() -> int:
     try:
         revision, run_id, label = run_identity()
         attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+        pin_status = holdout_pin_status(
+            os.environ.get("CNOT103_HOLDOUT_REVISION"),
+            os.environ.get("CNOT103_HOLDOUT_SHA256"),
+        )
+        if pin_status != "accepted":
+            outcome = "source_pin_missing" if pin_status == "missing" else "source_pin_invalid"
+            raise GateError("exact HF holdout source pin is required")
         if resolve_label(instance_rows(), label) is not None:
             outcome = "label_collision"
             raise GateError("stable label already exists")

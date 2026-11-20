@@ -2,6 +2,15 @@ name: Rebuild frozen 10k dataset on existing Vast disk
 
 on:
   workflow_dispatch:
+    inputs:
+      holdout_revision:
+        description: Exact Hugging Face dataset commit SHA
+        required: true
+        type: string
+      holdout_sha256:
+        description: SHA-256 of the pinned holdout SQLite artifact
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -31,10 +40,15 @@ jobs:
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify pinned holdout metadata before Vast access
-        run: python3 .github/scripts/fetch_public_holdout.py --metadata-check
+        env:
+          CNOT103_HOLDOUT_REVISION: ${{ inputs.holdout_revision }}
+          CNOT103_HOLDOUT_SHA256: ${{ inputs.holdout_sha256 }}
+        run: python3 .github/scripts/fetch_public_holdout.py --metadata-check --expected-revision "$CNOT103_HOLDOUT_REVISION" --expected-sha256 "$CNOT103_HOLDOUT_SHA256"
 
       - name: Rebuild and validate only on the existing running 2x3060 target
         timeout-minutes: 140
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          CNOT103_HOLDOUT_REVISION: ${{ inputs.holdout_revision }}
+          CNOT103_HOLDOUT_SHA256: ${{ inputs.holdout_sha256 }}
         run: python3 .github/scripts/vast_rebuild_remote_dataset.py
