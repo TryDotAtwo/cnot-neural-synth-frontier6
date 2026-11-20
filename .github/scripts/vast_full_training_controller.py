@@ -54,6 +54,9 @@ class GateError(RuntimeError):
     pass
 
 
+START_REQUESTED_LABEL: str | None = None
+
+
 def _finite(value: object) -> float | None:
     return base.finite_number(value)
 
@@ -289,6 +292,7 @@ def _start_target(
     old_label = marker["resume_existing_label"]
     target, label = _labels_for_run(rows, old_label, fresh_label)
     spent = base.project_charges()
+    global START_REQUESTED_LABEL
     if target is not None:
         if not base.is_2x3060(target):
             raise GateError("target GPU inventory does not match")
@@ -305,6 +309,7 @@ def _start_target(
             spent, rate, storage_cost, extra_storage_reserve=extra_storage
         ):
             raise GateError("the full-run budget gate is closed")
+        START_REQUESTED_LABEL = label or old_label
         if not base.api_instance_id(ident, "running"):
             raise GateError("exact target start was not confirmed")
         running = base.wait_until_running(label or old_label)
@@ -338,6 +343,7 @@ def _start_target(
     offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id") or "")
     if not re.fullmatch(r"[0-9]{1,20}", offer_id):
         raise GateError("selected offer identity is invalid")
+    START_REQUESTED_LABEL = fresh_label
     base.CREATE_ATTEMPTED = False
     row = base.create_once(offer_id, fresh_label)
     running = base.wait_until_running(fresh_label)
@@ -361,19 +367,19 @@ def start() -> int:
     outcome, status = "controller_failed", "unavailable"
     label = None
     run_id = attempt = ""
-    target_started = False
+    global START_REQUESTED_LABEL
+    START_REQUESTED_LABEL = None
     attached_target_id = None
     try:
         revision, run_id, attempt, root = _run_identity()
         holdout_revision, holdout_sha256 = _pin_status()
         marker = _marker()
         rows = base.instance_rows()
-        row, label, created, spend_before = _start_target(rows, marker, run_id, attempt)
+        row, label, _created, _spend_before = _start_target(rows, marker, run_id, attempt)
         ident = base.instance_id(row)
         if ident is None or not base.is_2x3060(row):
             outcome, status = "target_gpu_mismatch", "failed"
             raise GateError("running target identity or GPU differs")
-        target_started = True
         attached_target_id = ident
         running_rows = base.instance_rows()
         started_at_epoch = time.time()
@@ -418,9 +424,10 @@ def start() -> int:
     except Exception:
         outcome, status = "controller_failed", "failed"
     finally:
-        if target_started and outcome != "accepted" and label and run_id and attempt:
+        cleanup_label = START_REQUESTED_LABEL or label
+        if outcome != "accepted" and cleanup_label and run_id and attempt:
             try:
-                base.stop_exact_label(label, run_id, attempt)
+                base.stop_exact_label(cleanup_label, run_id, attempt)
             except Exception:
                 pass
     _summarize(checked, outcome, status)
@@ -517,17 +524,21 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
             )
             if state == "completed":
                 outcome, status = "completed", "completed"
+                _summarize(checked, outcome, status)
                 return 0
             if state == "budget_gate":
                 outcome, status = "budget_gate", "budget_gate"
+                _summarize(checked, outcome, status)
                 return 1
             if state == "time_limit":
                 outcome, status = "time_limit", "time_limit"
+                _summarize(checked, outcome, status)
                 return 1
             if state in {"failed", "unavailable"}:
                 outcome, status = "remote_state_unavailable", "failed"
                 if state == "failed":
                     outcome = "failed"
+                _summarize(checked, outcome, status)
                 return 1
 
             current_rows = base.instance_rows()
@@ -544,22 +555,21 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
             rate = _finite(current.get("dph_total"))
             projected_spend = max(spend_now, baseline + (rate or 0.0) * elapsed_hours)
             remaining_hours = max(0.0, (MAX_RUNTIME_SECONDS / 3600.0) - elapsed_hours)
-            if not _validate_running_budget(current, projected_spend, current_rows, ident):
-                base.stop_exact_label(label, run_id, attempt)
-                outcome, status = "budget_gate", "budget_gate"
-                return 1
-            if not full_run_budget_allows(
+            extra_storage = _other_storage_reserve(current_rows, ident)
+            if rate is None or extra_storage is None or not full_run_budget_allows(
                 projected_spend,
                 rate,
                 current.get("storage_cost"),
                 active_hours=remaining_hours + 0.25,
-                extra_storage_reserve=_other_storage_reserve(current_rows, ident) or 0.0,
+                extra_storage_reserve=extra_storage,
             ):
                 base.stop_exact_label(label, run_id, attempt)
                 outcome, status = "budget_gate", "budget_gate"
+                _summarize(checked, outcome, status)
                 return 1
             if time.monotonic() >= host_deadline:
                 outcome, status = "running", "running"
+                _summarize(checked, outcome, status)
                 return 0
             time.sleep(min(POLL_SECONDS, max(1.0, host_deadline - time.monotonic())))
     except base.probe.ApiFailure:
@@ -590,9 +600,12 @@ def cleanup() -> int:
             outcome, status = "target_gpu_mismatch", "unverified"
             _summarize(checked, outcome, status)
             return 1
+        started_at = None
+        budget_baseline = None
+        rate = _finite(row.get("dph_total"))
         if base.probe.observed_state(row) == "running":
             try:
-                state, quality, _started, _baseline = _read_remote_status(
+                state, quality, started_at, budget_baseline = _read_remote_status(
                     row, run_id, attempt, root
                 )
             except Exception:
@@ -611,9 +624,12 @@ def cleanup() -> int:
         spend = base.project_charges()
         if final_row is not None:
             extra = _other_storage_reserve(final_rows, base.instance_id(final_row))
-            if extra is None or not full_run_budget_allows(
-                spend,
-                0.0,
+            elapsed_hours = max(0.0, (time.time() - started_at) / 3600.0) if started_at else 0.0
+            baseline = budget_baseline if budget_baseline is not None else spend
+            projected_spend = max(spend, baseline + (rate or 0.0) * elapsed_hours)
+            if rate is None or extra is None or not full_run_budget_allows(
+                projected_spend,
+                rate,
                 final_row.get("storage_cost"),
                 active_hours=0.0,
                 extra_storage_reserve=extra,
