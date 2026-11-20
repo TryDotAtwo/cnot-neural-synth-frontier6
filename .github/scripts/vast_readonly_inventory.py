@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Read-only, redacted inventory check for an existing owned 2x RTX 3060."""
 
+# Trigger a fresh GET-only check after an unverified cleanup result.
+
 from __future__ import annotations
 
 import json
