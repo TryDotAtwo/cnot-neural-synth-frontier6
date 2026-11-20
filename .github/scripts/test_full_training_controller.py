@@ -144,7 +144,8 @@ class FullTrainingBudgetTests(unittest.TestCase):
             )
 
         self.assertEqual(result, (running, run_label, False, 1.0))
-        self.assertEqual(activate.call_args.args, (123, "running", run_label))
+        self.assertEqual(activate.call_args.args, (123, "running"))
+        self.assertEqual(activate.call_args.kwargs, {"label": run_label})
         self.assertEqual(activate.call_count, 1)
         self.assertEqual(budget_gate.call_count, 2)
         offers.assert_not_called()
