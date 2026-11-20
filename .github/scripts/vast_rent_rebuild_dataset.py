@@ -36,6 +36,7 @@ ALLOWED_OUTCOMES = {
     "label_collision", "existing_2x3060_present", "offer_gate",
     "budget_gate", "budget_gate_prior_spend", "budget_gate_offer_cost", "create_uncertain", "instance_start_failed",
     "target_gpu_mismatch", "toolchain_failed", "dataset_failed",
+    "resume_target_invalid", "resume_target_missing", "resume_target_ambiguous", "resume_target_state",
     "api_failed", "controller_failed", "source_pin_missing", "source_pin_invalid",
 }
 OWNED_INSTANCE_IDS = probe.OWNED_INSTANCE_IDS
@@ -620,12 +621,21 @@ def holdout_pin_status(revision: object, sha256: object) -> str:
     return "accepted"
 
 
+def configured_resume_label() -> str | None:
+    if "CNOT103_RESUME_LABEL" not in os.environ:
+        return None
+    label = os.environ.get("CNOT103_RESUME_LABEL", "").strip()
+    if not re.fullmatch(r"cnot103-r10k-[0-9]{1,20}-a[0-9]{1,10}", label):
+        raise GateError("resume target label is invalid")
+    return label
+
+
 def run() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome = "controller_failed"
     status = "failed"
     try:
-        revision, run_id, label = run_identity()
+        revision, run_id, fresh_label = run_identity()
         attempt = os.environ["GITHUB_RUN_ATTEMPT"]
         pin_status = holdout_pin_status(
             os.environ.get("CNOT103_HOLDOUT_REVISION"),
@@ -634,59 +644,87 @@ def run() -> int:
         if pin_status != "accepted":
             outcome = "source_pin_missing" if pin_status == "missing" else "source_pin_invalid"
             raise GateError("exact HF holdout source pin is required")
-        if resolve_label(instance_rows(), label) is not None:
-            outcome = "label_collision"
-            raise GateError("stable label already exists")
-        before = instance_rows()
-        if any(is_2x3060(row) for row in before):
-            outcome = "existing_2x3060_present"
-            raise GateError("an RTX 3060 pair already exists")
-        spent = project_charges()
-        offers = offer_inventory()
-        if not offers:
-            outcome = "offer_gate"
-            raise GateError("no verified 2x3060 offer is available")
-        selected = next(
-            (row for row in offers if budget_allows(
-                spent, row["dph_total"], reserve=total_reserve(row.get("storage_cost"))
-            )),
-            None,
-        )
-        if selected is None:
-            reason = budget_gate_reason(spent, offers)
-            outcome = "budget_gate_prior_spend" if reason == "prior_spend" else "budget_gate_offer_cost"
-            raise GateError("the $20 budget gate is closed")
-        offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id"))
-        row = create_once(offer_id, label)
-        row = wait_until_running(label)
+
+        label = configured_resume_label()
+        if label is None:
+            if resolve_label(instance_rows(), fresh_label) is not None:
+                outcome = "label_collision"
+                raise GateError("stable label already exists")
+            before = instance_rows()
+            if any(is_2x3060(row) for row in before):
+                outcome = "existing_2x3060_present"
+                raise GateError("an RTX 3060 pair already exists")
+            spent = project_charges()
+            offers = offer_inventory()
+            if not offers:
+                outcome = "offer_gate"
+                raise GateError("no verified 2x3060 offer is available")
+            selected = next(
+                (row for row in offers if budget_allows(
+                    spent, row["dph_total"], reserve=total_reserve(row.get("storage_cost"))
+                )),
+                None,
+            )
+            if selected is None:
+                reason = budget_gate_reason(spent, offers)
+                outcome = "budget_gate_prior_spend" if reason == "prior_spend" else "budget_gate_offer_cost"
+                raise GateError("the $20 budget gate is closed")
+            offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id"))
+            outcome = "create_uncertain"
+            row = create_once(offer_id, label)
+            outcome = "instance_start_failed"
+            row = wait_until_running(label)
+        else:
+            rows = instance_rows()
+            matches = target_rows_for_label(rows, label)
+            if not matches:
+                outcome = "resume_target_missing"
+                raise GateError("the exact resume target is absent")
+            if len(matches) != 1:
+                outcome = "resume_target_ambiguous"
+                raise GateError("the exact resume label is ambiguous")
+            row = matches[0]
+            if not is_2x3060(row):
+                outcome = "target_gpu_mismatch"
+                raise GateError("resume target GPU inventory does not match")
+            if probe.observed_state(row) not in {"stopped", "exited"}:
+                outcome = "resume_target_state"
+                raise GateError("resume target is not safely stopped")
+            spent = project_charges()
+            if not existing_rebuild_budget_allows(row, spent):
+                outcome = "budget_gate_prior_spend"
+                raise GateError("the $20 budget gate is closed for the existing target")
+            outcome = "instance_start_failed"
+            row = wait_until_running(label)
+
         rate = finite_number(row.get("dph_total"))
-        spent_after_create = project_charges()
+        spent_after_start = project_charges()
         reserve = total_reserve(row.get("storage_cost"))
-        if rate is None or reserve is None or not budget_allows(spent_after_create, rate, reserve=reserve):
+        if rate is None or reserve is None or not budget_allows(
+            spent_after_start, rate, run_hours=RUN_HOURS, reserve=reserve
+        ):
             outcome = "budget_gate"
-            raise GateError("post-create budget recheck failed")
+            raise GateError("post-start budget recheck failed")
         if not is_2x3060(row):
             outcome = "target_gpu_mismatch"
-            raise GateError("created GPU shape changed")
+            raise GateError("target GPU inventory does not match")
+
+        outcome = "toolchain_failed"
         toolchain = install_remote_cargo(row, run_id, revision, attempt)
         if toolchain != "ready":
-            outcome = "toolchain_failed"
             raise GateError("remote Rust toolchain bootstrap failed")
+        outcome = "dataset_failed"
         code = scoped_dataset_rebuild(label)
         if code != 0:
-            outcome = "dataset_failed"
             raise GateError("remote dataset build did not pass")
         outcome = "accepted"
         status = "accepted"
-    except probe.ApiFailure as error:
+    except probe.ApiFailure:
         outcome = "api_failed"
         status = "failed"
-    except GateError as error:
-        if outcome == "controller_failed":
-            outcome = "controller_failed"
+    except GateError:
         status = "failed"
     except Exception:
-        outcome = "controller_failed"
         status = "failed"
     summarize(checked, outcome, status)
     return 0 if outcome == "accepted" else 1
@@ -695,8 +733,9 @@ def run() -> int:
 def cleanup() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     try:
-        _revision, run_id, label = run_identity()
+        _revision, run_id, fresh_label = run_identity()
         attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+        label = configured_resume_label() or fresh_label
         stop_status, key_status = stop_exact_label(label, run_id, attempt)
         outcome = "accepted" if stop_status in {"verified", "not_needed"} and key_status in {"detached", "not_found", "not_needed"} else "controller_failed"
         summarize(checked, outcome, stop_status)
