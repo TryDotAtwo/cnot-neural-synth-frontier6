@@ -46,6 +46,40 @@ class ReportingTests(unittest.TestCase):
         self.assertNotIn("quality", report)
 
 
+
+class TrainingContractTests(unittest.TestCase):
+    EXPECTED_MODEL = {
+        "wire_dim": 744,
+        "pair_dim": 186,
+        "structural_blocks": 8,
+        "attention_heads": 8,
+        "feedforward_dim": 1488,
+        "fusion_blocks": 2,
+        "basis_proposal_hidden_dim": 256,
+    }
+
+    def test_full_model_contract_and_parameter_count_are_pinned(self):
+        self.assertEqual(controller.ORIGINAL_MODEL_CONFIG, self.EXPECTED_MODEL)
+        self.assertEqual(controller.ORIGINAL_PARAMETER_COUNT, 136_421_807)
+        self.assertTrue(controller.is_original_model(self.EXPECTED_MODEL, 136_421_807))
+        smaller = dict(self.EXPECTED_MODEL)
+        smaller["structural_blocks"] = 2
+        self.assertFalse(controller.is_original_model(smaller, 136_421_807))
+        self.assertFalse(controller.is_original_model(self.EXPECTED_MODEL, 136_421_806))
+
+    def test_one_hundred_epochs_resolve_to_exact_attempts_for_batch_four(self):
+        self.assertEqual(controller.TRAIN_ROWS_PER_EPOCH, 10_000)
+        self.assertEqual(controller.TARGET_EPOCHS, 100)
+        self.assertEqual(controller.TRAIN_BATCH_SIZE, 4)
+        self.assertEqual(controller.BELLMAN_SAMPLED_NEIGHBORS, 4)
+        self.assertEqual(controller.required_attempts_for_epochs(10_000, 4, 100), 250_000)
+
+    def test_epoch_attempt_count_rejects_invalid_or_fractional_schedules(self):
+        for values in ((10_000, 0, 100), (10_000, 6, 100), (True, 4, 100), (-1, 4, 100)):
+            with self.subTest(values=values):
+                self.assertIsNone(controller.required_attempts_for_epochs(*values))
+
+
 class TargetSelectionTests(unittest.TestCase):
     LABEL = "cnot103-longtrain-epoch100-20261120"
 
