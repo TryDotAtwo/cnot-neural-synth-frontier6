@@ -183,6 +183,10 @@ fn complete_manifest_parses_with_explicit_null_limits() {
     });
     let parsed = parse_run_manifest(&serde_json::to_vec(&value).unwrap())
         .expect("complete manifest must parse without opening its artifacts");
+    assert_eq!(
+        parsed.validate_feature_profile().unwrap(),
+        crate::schema::MODEL_INPUT_COUNT
+    );
     assert_eq!(parsed.training.attempts, 1);
     let mut zero_target = value.clone();
     zero_target["training"]["target_attempts"] = json!(0);

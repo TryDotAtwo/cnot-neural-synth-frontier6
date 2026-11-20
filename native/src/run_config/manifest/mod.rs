@@ -1,6 +1,7 @@
 use crate::model::ModelConfig;
 use crate::nn_training::AdamWConfig;
 use crate::objective::FullGraphObjectiveConfig;
+use crate::features::{FeaturePolicy, FeatureRegistry};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -60,6 +61,31 @@ pub(super) struct TrainingSpec {
     pub(super) target_attempts: Option<u64>,
     pub(super) batch_size: usize,
     pub(super) checkpoint_every_attempts: u64,
+}
+
+impl RunManifest {
+    /// Validate provider construction and the complete runtime model-input selection
+    /// without opening the pinned dataset or touching a CUDA device.
+    pub fn validate_feature_profile(&self) -> Result<usize, String> {
+        let contexts = self.feature_contexts.clone().build()?;
+        let registry = FeatureRegistry::with_all_model_input_providers(contexts)
+            .map_err(|error| error.to_string())?;
+        let mut policy = FeaturePolicy::all_model_inputs_augmentation_only(
+            self.feature_policy.schema_id.clone(),
+        );
+        policy.solver_assisted = self.feature_policy.solver_assisted;
+        let selected = registry
+            .selected_specs(&policy)
+            .map_err(|error| error.to_string())?;
+        let expected = crate::schema::MODEL_INPUT_COUNT;
+        if selected.len() != expected {
+            return Err(format!(
+                "feature profile selects {} model inputs, expected {expected}",
+                selected.len()
+            ));
+        }
+        Ok(selected.len())
+    }
 }
 
 impl TrainingSpec {

@@ -12,6 +12,11 @@ crate-type = ["rlib"]
 name = "cnot103-validate-data"
 path = "src/bin/cnot103_validate_data.rs"
 
+[[bin]]
+name = "cnot103-validate-manifest"
+path = "src/bin/cnot103_validate_manifest.rs"
+required-features = ["cuda"]
+
 [[test]]
 name = "cuda_quadratic"
 path = "tests/cuda_quadratic.rs"

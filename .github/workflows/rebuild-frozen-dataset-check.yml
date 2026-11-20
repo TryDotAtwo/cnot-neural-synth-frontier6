@@ -8,6 +8,8 @@ on:
       - codex/f08-loader-stage-profile
     paths:
       - .github/scripts/rebuild_frozen_dataset.py
+      - .github/scripts/build_training_manifest.py
+      - .github/scripts/test_build_training_manifest.py
       - .github/scripts/vast_store_private_diagnostic.py
       - .github/scripts/fetch_public_holdout.py
       - .github/workflows/rebuild-frozen-dataset-check.yml
@@ -16,6 +18,8 @@ on:
       - 'native/cuda/**'
       - 'native/src/**'
       - native/src/bin/cnot103_validate_data.rs
+      - native/src/bin/cnot103_validate_manifest.rs
+      - native/src/run_config/manifest/**
 
 permissions:
   contents: read
@@ -37,6 +41,12 @@ jobs:
           python-version: "3.12"
       - name: Verify deterministic record and matrix routines
         run: python .github/scripts/rebuild_frozen_dataset.py --self-test
+
+      - name: Check the pinned training manifest builder
+        run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py'
+
+      - name: Create a non-sensitive profile-validation manifest
+        run: python3 .github/scripts/build_training_manifest.py --self-test --output "$RUNNER_TEMP/candidate-training-manifest.json"
 
       - name: Parse the remote holdout fetcher without network access
         run: python -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/fetch_public_holdout.py').read_text(encoding='utf-8'))"
@@ -126,7 +136,7 @@ jobs:
             --env LIBTORCH_USE_PYTORCH=1 \
             --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
             pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc '/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark > /runner_temp/cuda-feature-build.jsonl 2>&1; /root/.cargo/bin/cargo test --features cuda --lib run_config::manifest::tests'; then
+            bash -euc '/root/.cargo/bin/cargo build --message-format=json --features cuda --bin cnot103-train --bin cnot103-benchmark --bin cnot103-validate-manifest > /runner_temp/cuda-feature-build.jsonl 2>&1; /root/.cargo/bin/cargo test --features cuda --lib run_config::manifest::tests; /root/.cargo/bin/cargo run --quiet --features cuda --bin cnot103-validate-manifest -- /runner_temp/candidate-training-manifest.json'; then
             printf 'cuda_feature_build=pass\n'
             printf 'cuda_feature_build=pass\n' >> "${GITHUB_STEP_SUMMARY}"
           else
