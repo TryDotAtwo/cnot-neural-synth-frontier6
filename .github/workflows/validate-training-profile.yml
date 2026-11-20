@@ -20,7 +20,7 @@ jobs:
   validate-profile:
     if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -39,51 +39,47 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Validate the profile with the Rust manifest parser
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-profile-target
         run: |
-          python3 - <<'PY'
-          import os
-          import pathlib
-          import subprocess
-          import sys
-
-          output = pathlib.Path(os.environ["RUNNER_TEMP"]) / "cnot103-training-profile-manifest.json"
-          validator = pathlib.Path(os.environ["CARGO_TARGET_DIR"]) / "debug" / "cnot103-validate-manifest"
-          command = [
-              "cargo", "run", "--quiet", "--manifest-path", "native/Cargo.toml",
-              "--no-default-features", "--bin", "cnot103-validate-manifest", "--", str(output),
-          ]
-          try:
-              result = subprocess.run(command, capture_output=True, text=True, timeout=480, check=False)
-          except FileNotFoundError:
-              print("manifest_profile=invalid")
-              print("manifest_failure_class=cargo_unavailable")
-              raise SystemExit(1)
-          except subprocess.TimeoutExpired:
-              print("manifest_profile=invalid")
-              print("manifest_failure_class=rust_build_timeout")
-              raise SystemExit(1)
-
-          if result.returncode != 0:
-              if "manifest validation failed: invalid run manifest" in result.stderr:
-                  failure = "manifest_parse_rejected"
-              elif "manifest validation failed: feature profile incomplete or invalid" in result.stderr:
-                  failure = "feature_profile_rejected"
-              elif not validator.is_file():
-                  failure = "rust_build_failed"
-              else:
-                  failure = "validator_failed"
-              print("manifest_profile=invalid")
-              print(f"manifest_failure_class={failure}")
-              raise SystemExit(1)
-
-          values = set(result.stdout.splitlines())
-          if not {"manifest_profile=valid", "model_input_slots=102"}.issubset(values):
-              print("manifest_profile=invalid")
-              print("manifest_failure_class=validator_output_mismatch")
-              raise SystemExit(1)
-
-          print("manifest_profile=valid")
-          print("model_input_slots=102")
-          PY
+          set -euo pipefail
+          cargo_home="$(dirname "$(dirname "$(command -v cargo)")")"
+          rustup_home="$(rustup show home)"
+          if ! docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/project" \
+            --volume "$RUNNER_TEMP:/runner_temp" \
+            --volume "$cargo_home:/root/.cargo" \
+            --volume "$rustup_home:/root/.rustup" \
+            --workdir /workspace/project/native \
+            --env CARGO_HOME=/root/.cargo \
+            --env RUSTUP_HOME=/root/.rustup \
+            --env PATH=/root/.cargo/bin:/usr/local/cuda/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env CARGO_TARGET_DIR=/runner_temp/cnot103-profile-target \
+            --env CNOT103_CUDA_ARCHITECTURES=86 \
+            --env CUDA_HOME=/usr/local/cuda \
+            --env LIBTORCH_USE_PYTORCH=1 \
+            --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
+            pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
+            bash -euc '/root/.cargo/bin/cargo run --quiet --features cuda --bin cnot103-validate-manifest -- /runner_temp/cnot103-training-profile-manifest.json' \
+            >"$RUNNER_TEMP/cnot103-profile-docker.stdout" \
+            2>"$RUNNER_TEMP/cnot103-profile-docker.stderr"; then
+            if grep -Fq 'manifest validation failed: invalid run manifest' "$RUNNER_TEMP/cnot103-profile-docker.stderr"; then
+              echo 'manifest_profile=invalid'
+              echo 'manifest_failure_class=manifest_parse_rejected'
+            elif grep -Fq 'manifest validation failed: feature profile incomplete or invalid' "$RUNNER_TEMP/cnot103-profile-docker.stderr"; then
+              echo 'manifest_profile=invalid'
+              echo 'manifest_failure_class=feature_profile_rejected'
+            elif grep -Eq 'Unable to find image|pull access denied|Cannot connect to the Docker daemon' "$RUNNER_TEMP/cnot103-profile-docker.stderr"; then
+              echo 'manifest_profile=invalid'
+              echo 'manifest_failure_class=cuda_container_unavailable'
+            else
+              echo 'manifest_profile=invalid'
+              echo 'manifest_failure_class=cuda_validator_failed'
+            fi
+            exit 1
+          fi
+          if ! grep -qx 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-profile-docker.stdout" || ! grep -qx 'model_input_slots=102' "$RUNNER_TEMP/cnot103-profile-docker.stdout"; then
+            echo 'manifest_profile=invalid'
+            echo 'manifest_failure_class=validator_output_mismatch'
+            exit 1
+          fi
+          echo 'manifest_profile=valid'
+          echo 'model_input_slots=102'
