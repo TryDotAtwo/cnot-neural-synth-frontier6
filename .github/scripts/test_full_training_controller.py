@@ -27,7 +27,6 @@ class FullTrainingBudgetTests(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertFalse(full_run_budget_allows(*values))
 
-
     def test_summary_exports_status_and_cleanup_flag_to_github_step_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
@@ -37,7 +36,6 @@ class FullTrainingBudgetTests(unittest.TestCase):
                 output.read_text(encoding="utf-8"),
                 "status=started\ncleanup_needed=yes\n",
             )
-
 
     def test_full_run_clock_starts_before_instance_activation(self):
         events = []
@@ -73,6 +71,64 @@ class FullTrainingBudgetTests(unittest.TestCase):
             self.assertEqual(controller.start(), 0)
 
         self.assertLess(events.index("clock"), events.index("activate"))
+
+    def test_existing_loading_target_waits_without_treating_it_as_stopped(self):
+        label = "cnot103-r10k-44749514754-a1"
+        row = {
+            "id": 123,
+            "label": label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "loading",
+            "dph_total": 0.20,
+            "storage_cost": 0.15,
+        }
+        running = {**row, "actual_status": "running"}
+
+        def wait_for_running(received_label, timeout_seconds):
+            self.assertEqual(received_label, label)
+            self.assertEqual(timeout_seconds, 10_800)
+            self.assertEqual(controller.START_REQUESTED_LABEL, label)
+            return running
+
+        with (
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller.base, "instance_id", return_value=123),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller.base, "wait_until_running", side_effect=wait_for_running) as wait,
+            patch.object(controller.base, "api_instance_id") as activate,
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "create_once") as create,
+            patch.object(controller, "START_REQUESTED_LABEL", None),
+        ):
+            result = controller._start_target(
+                [row], {"resume_existing_label": label}, "123", "1"
+            )
+
+        self.assertEqual(result, (running, label, False, 1.0))
+        wait.assert_called_once_with(label, timeout_seconds=10_800)
+        activate.assert_not_called()
+        offers.assert_not_called()
+        create.assert_not_called()
+
+    def test_running_wait_accepts_an_explicit_slow_start_timeout(self):
+        label = "cnot103-r10k-44749514754-a1"
+        row = {
+            "id": 123,
+            "label": label,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "actual_status": "running",
+        }
+        with (
+            patch.object(controller.base, "instance_rows", return_value=[row]),
+            patch.object(controller.base.time, "monotonic", side_effect=[0.0, 1.0]),
+        ):
+            self.assertEqual(
+                controller.base.wait_until_running(label, timeout_seconds=10_800),
+                row,
+            )
 
 
 if __name__ == "__main__":
