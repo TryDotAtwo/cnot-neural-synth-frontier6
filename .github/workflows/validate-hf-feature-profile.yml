@@ -6,6 +6,7 @@ on:
       - codex/2x3060-full-feature-training
     paths:
       - .github/scripts/validate_hf_feature_profile.py
+      - .github/scripts/build_training_manifest.py
       - .github/scripts/test_validate_hf_feature_profile.py
       - .github/workflows/validate-hf-feature-profile.yml
 
