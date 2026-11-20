@@ -22,6 +22,7 @@ HUB_HOSTS = {"huggingface.co", "hf.co"}
 PROFILE_SUFFIXES = {".json", ".jsonl", ".yaml", ".yml", ".toml"}
 MAX_PAGE_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_BYTES = 1 * 1024 * 1024
+MAX_PROFILE_CANDIDATES = 32
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_TREE_PAGES = 20
 MAX_TREE_ENTRIES = 20_000
@@ -185,30 +186,60 @@ def _allowed_hub_download_host(host: str) -> bool:
     )
 
 
-def _source_exists(revision: str, path: str) -> bool:
-    body = _fetch_limited(_source_url(revision, path), MAX_SOURCE_BYTES,
-                          lambda host: host == "raw.githubusercontent.com")
+def _source_exists(
+    revision: str,
+    path: str,
+    fetch_file=_fetch_limited,
+) -> bool:
+    try:
+        body = fetch_file(
+            _source_url(revision, path),
+            MAX_SOURCE_BYTES,
+            lambda host: host == "raw.githubusercontent.com",
+        )
+    except ProfileCheckError as error:
+        if str(error) == "source file was not found":
+            return False
+        raise
     return bool(body)
 
 
-def inspect_profile(fetch_page=_fetch_tree_page, fetch_file=_fetch_limited) -> str:
+def inspect_profile(
+    fetch_page=_fetch_tree_page,
+    fetch_file=_fetch_limited,
+    source_exists=_source_exists,
+    revision_getter=_revision,
+) -> str:
     try:
-        revision = _revision()
+        revision = revision_getter()
         candidates = list_candidate_paths(revision, fetch_page=fetch_page)
-        json_candidates = [p for p in candidates if p.casefold().endswith(".json")]
-        if len(json_candidates) > 1:
-            return "candidate_ambiguous"
-        if not json_candidates:
-            return "candidate_unverified" if candidates else "not_found"
-        raw = fetch_file(
-            _candidate_url(revision, json_candidates[0]),
-            MAX_PROFILE_BYTES,
-            _allowed_hub_download_host,
+        json_candidates = sorted(
+            {path for path in candidates if path.casefold().endswith(".json")}
         )
-        pinned = validate_profile_bytes(raw)
-        if not _source_exists(pinned["source_revision"], pinned["source_path"]):
+        if not candidates:
+            return "not_found"
+        if not json_candidates:
             return "candidate_unverified"
-        return "schema_source_pinned"
+        if len(json_candidates) > MAX_PROFILE_CANDIDATES:
+            return "candidate_ambiguous"
+
+        pinned_profiles = 0
+        for path in json_candidates:
+            raw = fetch_file(
+                _candidate_url(revision, path),
+                MAX_PROFILE_BYTES,
+                _allowed_hub_download_host,
+            )
+            try:
+                profile = validate_profile_bytes(raw)
+            except ProfileCheckError:
+                continue
+            if source_exists(profile["source_revision"], profile["source_path"]):
+                pinned_profiles += 1
+                if pinned_profiles > 1:
+                    return "candidate_ambiguous"
+
+        return "schema_source_pinned" if pinned_profiles == 1 else "candidate_unverified"
     except ProfileCheckError:
         return "unavailable"
 
