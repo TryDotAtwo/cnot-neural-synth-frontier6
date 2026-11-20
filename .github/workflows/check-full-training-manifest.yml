@@ -9,6 +9,8 @@ on:
       - .github/scripts/test_build_training_manifest.py
       - .github/scripts/vast_full_training_controller.py
       - .github/scripts/test_full_training_controller.py
+      - .github/scripts/run_full_training.py
+      - .github/scripts/test_full_training_supervisor.py
       - .github/workflows/check-full-training-manifest.yml
 
 permissions:
@@ -31,3 +33,5 @@ jobs:
         run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py' -v
       - name: Test the full-run budget gate
         run: python3 -m unittest discover -s .github/scripts -p 'test_full_training_controller.py' -v
+      - name: Test the remote supervisor acceptance gates
+        run: python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v
