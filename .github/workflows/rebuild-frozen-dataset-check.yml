@@ -84,8 +84,7 @@ jobs:
   cuda-feature-build:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(join(github.event.head_commit.modified, ','), 'native/src/') ||
-      contains(join(github.event.head_commit.modified, ','), '.github/scripts/build_training_manifest.py')
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
