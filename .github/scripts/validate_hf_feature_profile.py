@@ -319,7 +319,7 @@ def inspect_profile(
         if not json_candidates:
             return "candidate_unverified"
         if len(json_candidates) > MAX_PROFILE_CANDIDATES:
-            return "candidate_ambiguous"
+            return "candidate_limit_exceeded"
 
         pinned_profiles = []
         for path in json_candidates:
@@ -346,7 +346,8 @@ if __name__ == "__main__":
     status = inspect_profile()
     if status not in {
         "candidate_ambiguous", "candidate_contexts_incomparable",
-        "candidate_source_ambiguous", "candidate_unverified", "not_found",
+        "candidate_limit_exceeded", "candidate_source_ambiguous",
+        "candidate_unverified", "not_found",
         "schema_source_pinned", "unavailable",
     }:
         status = "unavailable"
