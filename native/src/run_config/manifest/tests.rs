@@ -295,6 +295,21 @@ fn feature_profile_rejects_context_alphabet_absent_from_objectives() {
         .validate_feature_profile()
         .expect_err("feature contexts must use an objective alphabet");
     assert!(error.contains("feature-context alphabet must exactly match an objective alphabet"));
+    let mut incompatible_additional = complete_manifest_value();
+    incompatible_additional["feature_contexts"]["selected_residual_additional_contexts"] = json!([{
+        "alphabet": {
+            "dimension":2,
+            "id":"all_to_all_unit_cnot:2",
+            "gates":[{"control":0,"target":1},{"control":1,"target":0}],
+            "costs":[1,1]
+        },
+        "gates":[{"control":1,"target":0}]
+    }]);
+    let parsed = parse_run_manifest(&serde_json::to_vec(&incompatible_additional).unwrap()).unwrap();
+    let error = parsed
+        .validate_feature_profile()
+        .expect_err("additional feature contexts must use an objective alphabet");
+    assert!(error.contains("feature-context alphabet must exactly match an objective alphabet"));
 }
 
 #[test]

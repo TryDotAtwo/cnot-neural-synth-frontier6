@@ -2,7 +2,9 @@
 #[cfg(test)]
 mod budget_tests;
 
-use super::super::manifest::{FeatureContextsSpec, FeaturePolicySpec};
+use super::super::manifest::{
+    validate_feature_context_alphabets, FeatureContextsSpec, FeaturePolicySpec,
+};
 use crate::alphabet::CnotAlphabet;
 use crate::device_feature_plan::{DeviceFeatureContextInputs, DeviceFeaturePlan};
 use crate::features::{FeaturePolicy, FeatureRegistry};
@@ -28,20 +30,7 @@ pub(super) fn build(
     let f08_max_component_events = contexts_spec.f08_max_component_events();
     let f08_max_history_counts = contexts_spec.f08_max_history_counts();
     let contexts = contexts_spec.build()?;
-    let profile_alphabets = std::iter::once(&contexts.alphabet).chain(
-        contexts.selected_residual_additional_contexts.iter().map(|context| &context.alphabet),
-    );
-    for profile_alphabet in profile_alphabets {
-        if !alphabets.iter().any(|alphabet| {
-            alphabet.id() == profile_alphabet.id()
-                && alphabet.dimension() == profile_alphabet.dimension()
-                && alphabet.gates() == profile_alphabet.gates()
-                && (0..alphabet.gates().len())
-                    .all(|i| alphabet.cost_at(i) == profile_alphabet.cost_at(i))
-        }) {
-            return Err("feature-context alphabet must exactly match an objective alphabet".into());
-        }
-    }
+    validate_feature_context_alphabets(&contexts, alphabets)?;
 
     let registry =
         FeatureRegistry::with_all_model_input_providers_f08_limit(contexts.clone(), f08_max_n, f08_max_changed_rows, f08_max_component_events, f08_max_history_counts)

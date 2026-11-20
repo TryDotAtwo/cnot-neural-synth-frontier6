@@ -1,8 +1,34 @@
 //! Deserialization and checked construction of explicit feature-provider contexts.
 
+use crate::alphabet::CnotAlphabet;
+use crate::features::FeatureProviderContexts;
 use serde::Deserialize;
 
 mod builder;
+
+pub(super) fn validate_feature_context_alphabets(
+    contexts: &FeatureProviderContexts,
+    objective_alphabets: &[CnotAlphabet],
+) -> Result<(), String> {
+    let profile_alphabets = std::iter::once(&contexts.alphabet).chain(
+        contexts
+            .selected_residual_additional_contexts
+            .iter()
+            .map(|context| &context.alphabet),
+    );
+    for profile_alphabet in profile_alphabets {
+        if !objective_alphabets.iter().any(|alphabet| {
+            alphabet.id() == profile_alphabet.id()
+                && alphabet.dimension() == profile_alphabet.dimension()
+                && alphabet.gates() == profile_alphabet.gates()
+                && (0..alphabet.gates().len())
+                    .all(|i| alphabet.cost_at(i) == profile_alphabet.cost_at(i))
+        }) {
+            return Err("feature-context alphabet must exactly match an objective alphabet".into());
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

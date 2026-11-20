@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 mod contexts;
-pub(super) use contexts::{AlphabetSpec, FeatureContextsSpec};
+pub(super) use contexts::{validate_feature_context_alphabets, AlphabetSpec, FeatureContextsSpec};
 
 const RUN_SCHEMA: &str = "cnot103_training_run_v1";
 
@@ -72,6 +72,12 @@ impl RunManifest {
         let f08_max_component_events = self.feature_contexts.f08_max_component_events();
         let f08_max_history_counts = self.feature_contexts.f08_max_history_counts();
         let contexts = self.feature_contexts.clone().build()?;
+        let objective_alphabets = self
+            .alphabets
+            .iter()
+            .map(AlphabetSpec::build)
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_feature_context_alphabets(&contexts, &objective_alphabets)?;
         let registry = FeatureRegistry::with_all_model_input_providers_f08_limit(
             contexts,
             f08_max_n,

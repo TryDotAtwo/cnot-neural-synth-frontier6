@@ -69,6 +69,31 @@ def _all_to_all_alphabet(n: int) -> dict[str, Any]:
     }
 
 
+def _json_exact(actual: object, expected: object) -> bool:
+    """Compare JSON values without Python's bool/int equality shortcut."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _json_exact(actual[key], expected[key]) for key in expected
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_exact(left, right) for left, right in zip(actual, expected)
+        )
+    return actual == expected
+
+
+def _validate_objective_compatible_alphabet(alphabet: object) -> None:
+    if not isinstance(alphabet, dict):
+        raise ValueError("feature context alphabet")
+    dimension = alphabet.get("dimension")
+    if type(dimension) is not int or dimension not in WIDTHS:
+        raise ValueError("feature context alphabet dimension is not an objective width")
+    if not _json_exact(alphabet, _all_to_all_alphabet(dimension)):
+        raise ValueError("feature context alphabet must exactly match an objective alphabet")
+
+
 def validate_profile(profile: object) -> dict[str, Any]:
     if not isinstance(profile, dict) or profile.get("schema") != PROFILE_SCHEMA:
         raise ValueError("profile schema")
@@ -95,6 +120,16 @@ def validate_profile(profile: object) -> dict[str, Any]:
         raise ValueError("feature context fields")
     if contexts.get("max_n") != max(WIDTHS):
         raise ValueError("feature context maximum width")
+    _validate_objective_compatible_alphabet(contexts.get("alphabet"))
+    additional = contexts.get("selected_residual_additional_contexts", [])
+    if not isinstance(additional, list):
+        raise ValueError("additional selected-residual contexts")
+    for context in additional:
+        if not isinstance(context, dict) or set(context) != {"alphabet", "gates"}:
+            raise ValueError("additional selected-residual context fields")
+        if not isinstance(context["gates"], list):
+            raise ValueError("additional selected-residual gates")
+        _validate_objective_compatible_alphabet(context["alphabet"])
     return contexts
 
 
@@ -262,14 +297,6 @@ def _write_private_json(path: pathlib.Path, value: dict[str, Any]) -> None:
 
 
 def _self_test_profile() -> dict[str, Any]:
-    gates = [
-        {"control": 0, "target": 1},
-        {"control": 0, "target": 2},
-        {"control": 1, "target": 0},
-        {"control": 1, "target": 2},
-        {"control": 2, "target": 0},
-        {"control": 2, "target": 1},
-    ]
     return {
         "schema": PROFILE_SCHEMA,
         "profile_id": "self-test",
@@ -286,12 +313,7 @@ def _self_test_profile() -> dict[str, Any]:
             "rank_increment_probes": [
                 {"n": 3, "span_rows": [0], "coordinates": [0], "candidate_support": []}
             ],
-            "alphabet": {
-                "dimension": 3,
-                "id": "all_to_all_unit_cnot:3",
-                "gates": gates,
-                "costs": [1] * len(gates),
-            },
+            "alphabet": _all_to_all_alphabet(8),
             "selected_residual_gates": [{"control": 0, "target": 1}],
             "block_parity_contexts": [{"n": 3, "sources": [0], "targets": [1]}],
             "max_parity_patterns": 8,

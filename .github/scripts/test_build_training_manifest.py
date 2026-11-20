@@ -55,7 +55,7 @@ class TrainingManifestTests(unittest.TestCase):
         self.assertEqual(manifest["objective"]["sampled_neighbor_count"], 4)
         self.assertEqual(provenance["model_input_slots"], MODEL_INPUT_COUNT)
         self.assertEqual(provenance["target_attempts"], TARGET_ATTEMPTS)
-        self.assertEqual(provenance["context_widths"]["selected_residual_widths"], [3])
+        self.assertEqual(provenance["context_widths"]["selected_residual_widths"], [8])
 
     def test_context_profile_is_verbatim_and_reports_sparse_widths(self):
         contexts = validate_profile(self.profile)
@@ -64,6 +64,12 @@ class TrainingManifestTests(unittest.TestCase):
         self.assertEqual(widths["labeled_cuts"], [3])
         self.assertNotIn(10, widths["labeled_cuts"])
         self.assertEqual(widths["i10_max_n"], [3])
+
+    def test_rejects_boolean_alphabet_dimension(self):
+        bad = copy.deepcopy(self.profile)
+        bad["feature_contexts"]["alphabet"]["dimension"] = True
+        with self.assertRaises(ValueError):
+            validate_profile(bad)
 
     def test_rejects_selected_residual_alphabet_outside_objective_widths(self):
         bad = copy.deepcopy(self.profile)
