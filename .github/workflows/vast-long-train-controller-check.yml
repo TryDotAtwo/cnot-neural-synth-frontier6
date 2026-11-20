@@ -1,0 +1,29 @@
+name: Long training controller source checks
+
+on:
+  push:
+    branches:
+      - codex/long-training-controller
+    paths:
+      - .github/scripts/vast_long_train.py
+      - .github/scripts/test_vast_long_train.py
+      - .github/workflows/vast-long-train-controller-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  controller-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out controller source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run controller contract tests without Vast credentials
+        run: python3 -m unittest discover -s .github/scripts -p 'test_vast_long_train.py' -v
