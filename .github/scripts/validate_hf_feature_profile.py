@@ -48,14 +48,21 @@ class ProfileCheckError(RuntimeError):
 
 
 def is_candidate_path(path: str) -> bool:
-    if not isinstance(path, str) or "\x00" in path:
+    if not isinstance(path, str) or "\\x00" in path:
         return False
     from pathlib import PurePosixPath
 
-    suffix = PurePosixPath(path).suffix.casefold()
-    return suffix in PROFILE_SUFFIXES and (
-        "context" in path.casefold() or "profile" in path.casefold()
-    )
+    parsed = PurePosixPath(path)
+    suffix = parsed.suffix.casefold()
+    basename = parsed.name.casefold().replace("-", "_")
+    parents = {part.casefold().replace("-", "_") for part in parsed.parts[:-1]}
+    named_profile = (
+        "feature" in basename and ("context" in basename or "profile" in basename)
+    ) or ("context" in basename and "profile" in basename)
+    profile_directory = bool(
+        parents & {"profile", "profiles", "feature_profiles", "feature_context_profiles"}
+    ) and ("context" in basename or "profile" in basename)
+    return suffix in PROFILE_SUFFIXES and (named_profile or profile_directory)
 
 
 def _next_page_url(link_header: str | None, current_url: str) -> str | None:
