@@ -16,7 +16,6 @@ from vast_probe_existing_2x3060 import (
     api_json,
     classify_ssh_failure,
     find_attached_key_id,
-    safe_budget_projection,
     state,
     target_rows,
 )
@@ -82,11 +81,16 @@ def main() -> int:
         if len(running) != 1:
             result = "target_ambiguous"
             raise RuntimeError()
-        if safe_budget_projection(rows) != "within_48h_cap":
-            result = "budget_gate_closed"
-            raise RuntimeError()
 
         target = running[0]
+        from vast_rent_rebuild_dataset import (
+            existing_rebuild_budget_allows,
+            project_charges,
+        )
+        if not existing_rebuild_budget_allows(target, project_charges()):
+            result = "budget_gate_closed"
+            failure_class = "budget_gate_closed"
+            raise RuntimeError()
         candidate = target.get("id")
         host = target.get("ssh_host")
         port = target.get("ssh_port")
@@ -179,7 +183,7 @@ python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
   --holdout-sqlite "$ROOT/input/full_shared_native_holdout_20261001.sqlite" \\
   --output "$DATA" \\
   --receipt "$ROOT/data/build.receipt.json" \\
-  --builder-source-revision '{source_revision}' \\
+  --source-revision '{source_revision}' \\
   --seed 202611190001
 DATA_SHA="$(tr -d '\\r\\n' <"$ROOT/data/frozen_train_10k.sha256")"
 case "$DATA_SHA" in
@@ -189,12 +193,6 @@ if [ "$(expr length "$DATA_SHA")" -ne 64 ]; then exit 21; fi
 CARGO_TARGET_DIR="$ROOT/cargo-target" cargo run --quiet \\
   --manifest-path "$SOURCE/native/Cargo.toml" \\
   --no-default-features --bin cnot103-validate-data -- "$DATA" "$DATA_SHA"
-python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
-  --finalize-dataset \\
-  --experiment-root "$ROOT" \\
-  --output "$DATA" \\
-  --receipt "$ROOT/data/build.receipt.json" \\
-  --expected-dataset-sha256 "$DATA_SHA"
 """
         proc = remote_bash(host, port, key_path, known_hosts, remote)
         if proc is None:
@@ -206,7 +204,7 @@ python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
         else:
             allowed = {
                 "accepted", "failed", "workspace_exists",
-                "workspace_creation_failed",
+                "workspace_creation_failed", "budget_gate_closed",
             }
             status = next(
                 (
@@ -220,7 +218,7 @@ python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
             failure_values = {
                 "none", "toolchain_unavailable", "workspace_probe_failed",
                 "disk_full", "network_failure", "generator_or_validation_failed",
-                "remote_step_failed",
+                "remote_step_failed", "budget_gate_closed",
             }
             failure_class = next(
                 (
@@ -237,6 +235,8 @@ python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
                 result = "workspace_exists"
             elif status == "workspace_creation_failed":
                 result = "workspace_creation_failed"
+            elif status == "budget_gate_closed":
+                result = "budget_gate_closed"
             else:
                 result = "remote_failed"
 
@@ -274,6 +274,7 @@ python3 "$SOURCE/.github/scripts/rebuild_frozen_dataset.py" \\
     allowed_failure_classes = {
         "none", "toolchain_unavailable", "workspace_probe_failed", "disk_full",
         "network_failure", "generator_or_validation_failed", "remote_step_failed",
+        "budget_gate_closed",
         "connection_failed", "connection_or_timeout", "ssh_auth_failed",
         "ssh_timeout", "ssh_connection_refused", "ssh_network_unreachable",
         "ssh_dns_failure", "ssh_host_key_failure", "ssh_handshake_failed",

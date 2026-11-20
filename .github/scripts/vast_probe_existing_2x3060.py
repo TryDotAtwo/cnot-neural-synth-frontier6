@@ -21,6 +21,13 @@ GPU_COMMAND = "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader"
 DISK_COMMAND = "df -Pk /workspace"
 ALLOWED_STATES = {"running", "stopped", "starting", "stopping", "scheduling", "loading", "created", "offline", "exited", "error"}
 
+OWNED_INSTANCE_IDS = {
+    60488802, 60491053, 60509722, 60522214, 60585616, 60586973, 60588069,
+    60621205, 60622406, 60626596, 60642345, 60646895, 60654590, 60658156,
+    60660708, 60667533, 60674887, 60694337, 60695154, 60729505, 60745475,
+    60749603, 60917228, 60919132, 60932086, 61081857,
+}
+
 
 class ApiFailure(RuntimeError):
     def __init__(self, status: int | None):
@@ -49,6 +56,21 @@ def api_json(api_key: str, path: str, method: str = "GET", payload: object | Non
         raise ApiFailure(None) from None
 
 
+def is_project_owned(row: dict) -> bool:
+    instance_id = row.get("id")
+    known_id = (
+        isinstance(instance_id, int)
+        and not isinstance(instance_id, bool)
+        and instance_id in OWNED_INSTANCE_IDS
+    )
+    label = row.get("label")
+    known_label = (
+        isinstance(label, str)
+        and re.fullmatch(r"(?i)cnot103[a-z0-9_.-]{1,120}", label) is not None
+    )
+    return known_id or known_label
+
+
 def state(row: dict) -> str:
     value = row.get("actual_status") or row.get("cur_state") or row.get("next_state")
     if not isinstance(value, str):
@@ -69,6 +91,7 @@ def target_rows(payload: object) -> list[dict]:
         and isinstance(row.get("num_gpus", row.get("gpu_count")), int)
         and not isinstance(row.get("num_gpus", row.get("gpu_count")), bool)
         and row.get("num_gpus", row.get("gpu_count")) == 2
+        and is_project_owned(row)
     ]
 
 

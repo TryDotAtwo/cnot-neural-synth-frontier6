@@ -1,13 +1,7 @@
 name: Rebuild frozen 10k dataset on existing Vast disk
 
 on:
-  push:
-    branches:
-      - codex/2x3060-full-feature-training
-    paths:
-      - .github/scripts/vast_rebuild_remote_dataset.py
-      - .github/scripts/fetch_public_holdout.py
-      - .github/workflows/vast-rebuild-remote-dataset.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,6 +21,15 @@ jobs:
 
       - name: Check controller syntax
         run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('.github/scripts/vast_rebuild_remote_dataset.py').read_text(encoding='utf-8'))"
+      - name: Install Vast CLI for the total-spend gate
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          cli_venv="$RUNNER_TEMP/vast-cli-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
       - name: Verify pinned holdout metadata before Vast access
         run: python3 .github/scripts/fetch_public_holdout.py --metadata-check
 

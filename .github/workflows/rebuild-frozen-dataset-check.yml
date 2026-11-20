@@ -9,10 +9,13 @@ on:
     paths:
       - .github/scripts/rebuild_frozen_dataset.py
       - .github/scripts/vast_rebuild_remote_dataset.py
+      - .github/scripts/vast_rent_rebuild_dataset.py
       - .github/scripts/test_rebuild_frozen_dataset.py
       - .github/scripts/test_vast_rent_rebuild_dataset.py
       - .github/scripts/vast_probe_existing_2x3060.py
       - .github/scripts/vast_readonly_inventory.py
+      - .github/workflows/vast-rebuild-remote-dataset.yml
+      - .github/workflows/vast-probe-existing-2x3060.yml
       - .github/scripts/build_training_manifest.py
       - .github/scripts/test_build_training_manifest.py
       - .github/scripts/vast_store_private_diagnostic.py

@@ -10,6 +10,8 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+
+from vast_probe_existing_2x3060 import OWNED_INSTANCE_IDS
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -65,7 +67,16 @@ def inventory() -> tuple[str, str]:
         instance_state = state(row.get("actual_status") or row.get("cur_state") or row.get("next_state"))
         matches.append((instance_id, instance_state))
         label = row.get("label")
-        if isinstance(label, str) and re.fullmatch(r"(?i)cnot103[a-z0-9_.-]{1,120}", label):
+        owned_id = (
+            isinstance(instance_id, int)
+            and not isinstance(instance_id, bool)
+            and instance_id in OWNED_INSTANCE_IDS
+        )
+        owned_label = (
+            isinstance(label, str)
+            and re.fullmatch(r"(?i)cnot103[a-z0-9_.-]{1,120}", label) is not None
+        )
+        if owned_id or owned_label:
             project_matches.append((instance_id, instance_state))
 
     def state_summary(entries: list[tuple[object, str]], empty: str) -> str:

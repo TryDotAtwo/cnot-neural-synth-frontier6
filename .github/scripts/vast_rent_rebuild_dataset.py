@@ -38,13 +38,7 @@ ALLOWED_OUTCOMES = {
     "target_gpu_mismatch", "toolchain_failed", "dataset_failed",
     "api_failed", "controller_failed",
 }
-OWNED_INSTANCE_IDS = {
-    60488802, 60491053, 60509722, 60522214, 60585616, 60586973, 60588069,
-    60621205, 60622406, 60626596, 60642345, 60646895, 60654590, 60658156,
-    60660708, 60667533, 60674887, 60694337, 60695154, 60729505, 60745475,
-    60749603, 60917228, 60919132, 60932086, 61081857,
-}
-
+OWNED_INSTANCE_IDS = probe.OWNED_INSTANCE_IDS
 
 class GateError(RuntimeError):
     pass
@@ -84,6 +78,18 @@ def total_reserve(storage_cost: object) -> float | None:
         return None
     stopped_storage = monthly * float(DISK_GB) * STOPPED_STORAGE_HOURS / 720.0
     return TRANSFER_RESERVE + stopped_storage
+
+
+def existing_rebuild_budget_allows(row: object, spent: object) -> bool:
+    if not isinstance(row, dict):
+        return False
+    reserve = total_reserve(row.get("storage_cost"))
+    return budget_allows(
+        spent,
+        row.get("dph_total"),
+        run_hours=3.0,
+        reserve=reserve,
+    )
 
 
 def eligible_offers(rows: object) -> list[dict]:
