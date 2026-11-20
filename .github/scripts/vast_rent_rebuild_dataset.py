@@ -338,9 +338,14 @@ def create_once(offer_id: str, label: str) -> dict:
     return row
 
 
-def api_instance_id(instance: int, state: str) -> bool:
+def api_instance_id(instance: int, state: str, label: str | None = None) -> bool:
+    payload = {"state": state}
+    if label is not None:
+        if not isinstance(label, str) or not label or len(label) > 64 or "\\n" in label:
+            raise GateError("instance control label is invalid")
+        payload["label"] = label
     response = probe.api_json(
-        api_key(), f"/instances/{instance}/", "PUT", {"state": state}
+        api_key(), f"/instances/{instance}/", "PUT", payload
     )
     return isinstance(response, dict) and response.get("success") is True
 
@@ -583,6 +588,18 @@ def stop_exact_label(label: str, run_id: str, attempt: str) -> tuple[str, str]:
         if probe.observed_state(current_row) in {"stopped", "exited"}:
             return "verified", key_status
         time.sleep(5)
+    # The final observation must query actual state again; next_state only records intent.
+    try:
+        final_row = resolve_label(instance_rows(), label)
+    except (GateError, probe.ApiFailure):
+        return "unverified", key_status
+    if (
+        final_row is not None
+        and instance_id(final_row) == ident
+        and final_row.get("label") == label
+        and probe.observed_state(final_row) in {"stopped", "exited"}
+    ):
+        return "verified", key_status
     return "unverified", key_status
 
 
