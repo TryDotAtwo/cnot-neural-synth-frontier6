@@ -1,9 +1,11 @@
 name: Frozen dataset builder source check
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - codex/2x3060-full-feature-training
+      - codex/f08-loader-stage-profile
     paths:
       - .github/scripts/rebuild_frozen_dataset.py
       - .github/scripts/vast_store_private_diagnostic.py
