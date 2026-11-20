@@ -223,7 +223,7 @@ def inspect_profile(
         if len(json_candidates) > MAX_PROFILE_CANDIDATES:
             return "candidate_ambiguous"
 
-        pinned_profiles = 0
+        pinned_signatures = set()
         for path in json_candidates:
             raw = fetch_file(
                 _candidate_url(revision, path),
@@ -235,11 +235,21 @@ def inspect_profile(
             except ProfileCheckError:
                 continue
             if source_exists(profile["source_revision"], profile["source_path"]):
-                pinned_profiles += 1
-                if pinned_profiles > 1:
+                signature = json.dumps(
+                    {
+                        "contexts": profile["contexts"],
+                        "source_revision": profile["source_revision"],
+                        "source_path": profile["source_path"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                pinned_signatures.add(signature)
+                if len(pinned_signatures) > 1:
                     return "candidate_ambiguous"
 
-        return "schema_source_pinned" if pinned_profiles == 1 else "candidate_unverified"
+        return "schema_source_pinned" if pinned_signatures else "candidate_unverified"
     except ProfileCheckError:
         return "unavailable"
 
