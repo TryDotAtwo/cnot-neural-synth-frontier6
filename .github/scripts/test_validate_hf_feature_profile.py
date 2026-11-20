@@ -214,6 +214,39 @@ class HFProfileValidationTests(unittest.TestCase):
         self.assertEqual(status, "candidate_source_ambiguous")
 
 
+    def test_inspect_profile_reports_safe_failure_stage(self):
+        def fail(message):
+            raise ProfileCheckError(message)
+
+        self.assertEqual(
+            inspect_profile(revision_getter=lambda: fail("Hub revision request failed")),
+            "unavailable_revision",
+        )
+        self.assertEqual(
+            inspect_profile(
+                revision_getter=lambda: "b" * 40,
+                fetch_page=lambda _url: fail("Hub tree request failed"),
+            ),
+            "unavailable_tree",
+        )
+        self.assertEqual(
+            inspect_profile(
+                revision_getter=lambda: "b" * 40,
+                fetch_page=lambda _url: (["profiles/feature_context_profile.json"], None),
+                fetch_file=lambda *_args: fail("download request failed"),
+            ),
+            "unavailable_profile_download",
+        )
+        self.assertEqual(
+            inspect_profile(
+                revision_getter=lambda: "b" * 40,
+                fetch_page=lambda _url: (["profiles/feature_context_profile.json"], None),
+                fetch_file=lambda *_args: json.dumps(_self_test_profile()).encode(),
+                source_exists=lambda *_args: fail("download request failed"),
+            ),
+            "unavailable_source_check",
+        )
+
     def test_inspect_profile_classifies_invalid_candidate_schema(self):
         status = inspect_profile(
             fetch_page=lambda _url: (["profiles/candidate_profile.json"], None),
