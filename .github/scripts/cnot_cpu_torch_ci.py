@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Redacted CI helpers for compiling and executing the CPU torch acceptance lanes."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import re
+import subprocess
+from typing import Any
+
+RUSTC_CODE = re.compile(r"^E[0-9]{4}$")
+CHECK_NAMES = ("v13", "resume", "profile")
+
+
+def _target_matches(target: dict[str, Any], target_name: str | None, artifact_kind: str) -> bool:
+    if target_name is not None and target.get("name") != target_name:
+        return False
+    kind = target.get("kind")
+    if not isinstance(kind, list):
+        return False
+    if artifact_kind == "lib_test":
+        return target.get("test") is True and "lib" in kind
+    if artifact_kind == "test":
+        return target.get("test") is True
+    if artifact_kind == "bin":
+        return target.get("test") is False and "bin" in kind
+    raise ValueError("unknown artifact kind")
+
+
+def compile_evidence(
+    cargo_json: str,
+    cargo_exit: int,
+    artifact_kind: str,
+    target_name: str | None = None,
+) -> dict[str, str | None]:
+    executables: list[str] = []
+    codes: list[str] = []
+    for line in cargo_json.splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get("reason") == "compiler-artifact":
+            target = item.get("target")
+            executable = item.get("executable")
+            if (
+                isinstance(target, dict)
+                and isinstance(executable, str)
+                and executable
+                and _target_matches(target, target_name, artifact_kind)
+            ):
+                executables.append(executable)
+        elif item.get("reason") == "compiler-message":
+            message = item.get("message")
+            if not isinstance(message, dict) or message.get("level") != "error":
+                continue
+            code = message.get("code")
+            code_value = code.get("code") if isinstance(code, dict) else None
+            if isinstance(code_value, str) and RUSTC_CODE.fullmatch(code_value):
+                codes.append(code_value)
+
+    unique_executables = sorted(set(executables))
+    if cargo_exit == 0 and len(unique_executables) == 1:
+        return {
+            "status": "compiled",
+            "rustc_code": "none",
+            "executable": unique_executables[0],
+        }
+    return {
+        "status": "failed",
+        "rustc_code": codes[0] if codes else "none",
+        "executable": None,
+    }
+
+
+def gate_receipt(outcomes: dict[str, str]) -> dict[str, Any]:
+    expected = {
+        "torch": "success",
+        "v13_compile": "compiled",
+        "v13": "passed",
+        "resume_compile": "compiled",
+        "resume": "passed",
+        "profile_compile": "compiled",
+        "profile": "passed",
+    }
+    checks = {name: outcomes.get(name, "not_run") for name in expected}
+    return {
+        "status": "passed" if all(checks[name] == expected[name] for name in expected) else "failed",
+        "outcomes": checks,
+    }
+
+
+def run_named_tests(executable: str, test_names: list[str]) -> dict[str, str]:
+    path = pathlib.Path(executable)
+    if not path.is_file():
+        return {"status": "failed", "code": "binary_missing"}
+    try:
+        listing = subprocess.run(
+            [str(path), "--list"], capture_output=True, text=True, timeout=60, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "code": "test_list_timeout"}
+    if listing.returncode != 0:
+        return {"status": "failed", "code": "test_list_failed"}
+    available = {
+        line.rsplit(": ", 1)[0]
+        for line in listing.stdout.splitlines()
+        if line.endswith(": test")
+    }
+    if any(name not in available for name in test_names):
+        return {"status": "failed", "code": "expected_test_missing"}
+    for name in test_names:
+        try:
+            result = subprocess.run(
+                [str(path), "--exact", name],
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "failed", "code": "test_timeout"}
+        if result.returncode != 0 or f"test {name} ... ok" not in result.stdout:
+            return {"status": "failed", "code": "test_failed"}
+    return {"status": "passed", "code": "none"}
+
+
+def _emit(values: dict[str, str], output: str | None) -> None:
+    rendered = "\n".join(f"{key}={value}" for key, value in values.items())
+    if output:
+        with open(output, "a", encoding="utf-8") as stream:
+            stream.write(rendered + "\n")
+    print(rendered)
+
+
+def command_compile(args: argparse.Namespace) -> int:
+    cargo_text = pathlib.Path(args.cargo_json).read_text(encoding="utf-8", errors="replace")
+    evidence = compile_evidence(
+        cargo_text, args.cargo_exit, args.artifact_kind, args.target_name
+    )
+    binary_file = pathlib.Path(args.binary_file)
+    if evidence["status"] == "compiled":
+        binary_file.write_text(str(evidence["executable"]), encoding="utf-8")
+    else:
+        binary_file.unlink(missing_ok=True)
+    _emit(
+        {"status": str(evidence["status"]), "rustc_code": str(evidence["rustc_code"])},
+        args.output,
+    )
+    return 0
+
+
+def command_run_tests(args: argparse.Namespace) -> int:
+    try:
+        executable = pathlib.Path(args.binary_file).read_text(encoding="utf-8").strip()
+    except OSError:
+        result = {"status": "failed", "code": "binary_missing"}
+    else:
+        result = run_named_tests(executable, args.tests)
+    _emit(result, args.output)
+    return 0
+
+
+def command_gate(args: argparse.Namespace) -> int:
+    receipt = gate_receipt(
+        {
+            "torch": args.torch,
+            "v13_compile": args.v13_compile,
+            "v13": args.v13,
+            "resume_compile": args.resume_compile,
+            "resume": args.resume,
+            "profile_compile": args.profile_compile,
+            "profile": args.profile,
+        }
+    )
+    _emit({"status": receipt["status"]}, args.output)
+    return 0 if receipt["status"] == "passed" else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    compile_parser = subparsers.add_parser("compile")
+    compile_parser.add_argument("--cargo-json", required=True)
+    compile_parser.add_argument("--cargo-exit", required=True, type=int)
+    compile_parser.add_argument("--artifact-kind", choices=("lib_test", "test", "bin"), required=True)
+    compile_parser.add_argument("--target-name")
+    compile_parser.add_argument("--binary-file", required=True)
+    compile_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
+    compile_parser.set_defaults(run=command_compile)
+
+    tests_parser = subparsers.add_parser("run-tests")
+    tests_parser.add_argument("--binary-file", required=True)
+    tests_parser.add_argument("--tests", nargs="+", required=True)
+    tests_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
+    tests_parser.set_defaults(run=command_run_tests)
+
+    gate_parser = subparsers.add_parser("gate")
+    for name in (
+        "torch",
+        "v13",
+        "resume",
+        "profile",
+        "v13-compile",
+        "resume-compile",
+        "profile-compile",
+    ):
+        gate_parser.add_argument("--" + name, required=True)
+    gate_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
+    gate_parser.set_defaults(run=command_gate)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    return args.run(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

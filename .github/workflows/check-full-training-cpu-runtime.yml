@@ -6,7 +6,8 @@ on:
       - codex/full-feature-train-workflow
     paths:
       - '.github/workflows/check-full-training-cpu-runtime.yml'
-      - '.github/scripts/**'
+      - '.github/scripts/cnot_cpu_torch_ci.py'
+      - '.github/scripts/build_training_manifest.py'
       - '.github/training-profiles/**'
       - 'native/**'
       - Cargo.lock
@@ -22,6 +23,7 @@ jobs:
     env:
       LIBTORCH_USE_PYTORCH: "1"
       CARGO_BUILD_JOBS: "2"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -35,157 +37,179 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install the pinned CPU PyTorch runtime for tch 0.22
+        id: torch
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu 'torch==2.9.0'
+          install_log="$RUNNER_TEMP/cnot103-torch-install.log"
+          if ! python3 -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu 'torch==2.9.0' >"$install_log" 2>&1; then
+            echo 'torch_install=failed'
+            exit 1
+          fi
           torch_lib="$(python3 -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")')"
-          test -f "$torch_lib/libtorch_cpu.so"
-          echo "LD_LIBRARY_PATH=$torch_lib" >> "$GITHUB_ENV"
+          if ! python3 -c 'import torch; assert torch.__version__.split("+")[0] == "2.9.0" and torch.version.cuda is None'; then
+            echo 'torch_install=version_or_device_mismatch'
+            exit 1
+          fi
+          if [ ! -f "$torch_lib/libtorch_cpu.so" ]; then
+            echo 'torch_install=cpu_library_missing'
+            exit 1
+          fi
+          echo "LD_LIBRARY_PATH=$torch_lib" >>"$GITHUB_ENV"
+          echo "status=success" >>"$GITHUB_OUTPUT"
+          echo 'torch_install=success'
 
-      - name: Run the compiled v13 runtime on CPU tensors
+      - name: Compile the v13 CPU runtime test binary
+        id: compile_v13
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
         working-directory: native
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
-          runtime_log="$RUNNER_TEMP/cnot103-torch-runtime.log"
-          if ! cargo test --locked --features torch --lib device_search::runtime::tests >"$runtime_log" 2>&1; then
-            if grep -Fq 'v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=budget_or_identity_semantics_failed'
-            elif grep -Fq 'v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=terminal_scan_failed'
-            elif grep -Fq 'v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=depth_three_budget_failed'
-            elif grep -Fq 'v13_saturated_frontier_is_all_or_none_at_one_plus_b_minus_one_and_one_plus_b ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=saturated_frontier_failed'
-            elif grep -Fq 'compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=pinned_v13_fixture_failed'
-            elif grep -Fq 'compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=gl2_replay_regression'
-            elif grep -Fq 'cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays ... FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=hamming_control_regression'
-            elif grep -Fq 'test result: FAILED' "$runtime_log"; then
-              echo 'cpu_torch_runtime=unit_test_failed'
-            elif grep -Eiq '(^|[[:space:]])error(:|\[E[0-9]+\]:)' "$runtime_log"; then
-              echo 'cpu_torch_runtime=compile_or_link_failed'
-            elif grep -Fq 'error while loading shared libraries' "$runtime_log"; then
-              echo 'cpu_torch_runtime=libtorch_runtime_link_failed'
-            elif grep -Fq 'undefined symbol' "$runtime_log"; then
-              echo 'cpu_torch_runtime=libtorch_symbol_mismatch'
-            elif grep -Fq 'could not compile' "$runtime_log"; then
-              rust_error_code="$(grep -oE 'E[0-9]+' "$runtime_log" | head -n 1 | tr -d 'error[]:' || true)"
-              case "$rust_error_code" in
-                E0308) echo 'cpu_torch_runtime=rust_type_mismatch' ;;
-                E0425) echo 'cpu_torch_runtime=rust_name_resolution_failed' ;;
-                E0432|E0433) echo 'cpu_torch_runtime=rust_import_resolution_failed' ;;
-                E0599) echo 'cpu_torch_runtime=rust_method_resolution_failed' ;;
-                E0277) echo 'cpu_torch_runtime=rust_trait_bound_failed' ;;
-                E0061) echo 'cpu_torch_runtime=rust_call_signature_mismatch' ;;
-                E0609) echo 'cpu_torch_runtime=rust_field_resolution_failed' ;;
-                E0502|E0499|E0382|E0507) echo 'cpu_torch_runtime=rust_borrow_or_move_failed' ;;
-                E0282|E0283) echo 'cpu_torch_runtime=rust_type_inference_failed' ;;
-                E0583) echo 'cpu_torch_runtime=rust_module_resolution_failed' ;;
-                E0658) echo 'cpu_torch_runtime=rust_feature_gate_failed' ;;
-                *) echo 'cpu_torch_runtime=rust_compiler_error' ;;
-              esac
-            elif grep -Fq 'failed to run custom build command' "$runtime_log"; then
-              echo 'cpu_torch_runtime=torch_build_script_failed'
-            elif grep -Fq 'exit successfully' "$runtime_log"; then
-              echo 'cpu_torch_runtime=child_process_failed'
-            elif grep -Fq 'No space left on device' "$runtime_log"; then
-              echo 'cpu_torch_runtime=runner_storage_exhausted'
-            elif grep -Fq 'signal: 9' "$runtime_log"; then
-              echo 'cpu_torch_runtime=runner_resource_exhausted'
-            else
-              echo 'cpu_torch_runtime=runtime_test_or_build_failed'
-            fi
-            exit 1
-          fi
-          for name in \
-            v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold \
-            v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution \
-            v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three \
-            v13_saturated_frontier_is_all_or_none_at_one_plus_b_minus_one_and_one_plus_b \
-            compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays \
-            compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle \
-            cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays; do
-            if ! grep -Fq "test device_search::runtime::tests::$name ... ok" "$runtime_log"; then
-              echo 'cpu_torch_runtime=expected_test_missing'
-              exit 1
-            fi
-          done
-          if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed' "$runtime_log"; then
-            echo 'cpu_torch_runtime=no_passing_test_summary'
-            exit 1
-          fi
-          echo 'cpu_torch_runtime=passed'
+          cargo_json="$RUNNER_TEMP/cnot103-v13-cargo.json"
+          binary_file="$RUNNER_TEMP/cnot103-v13-executable"
+          cargo_status=0
+          cargo test --no-run --locked --features torch --lib --message-format=json >"$cargo_json" 2>&1 || cargo_status=$?
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
+            --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
+            --artifact-kind lib_test --binary-file "$binary_file" --output "$GITHUB_OUTPUT"
 
-      - name: Verify fresh-process resume against uninterrupted accepted updates
-        if: always()
+      - name: Run the named v13 runtime regressions on CPU tensors
+        id: v13
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
         working-directory: native
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
-          resume_log="$RUNNER_TEMP/cnot103-resume-equivalence.log"
-          if ! cargo test --locked --features torch --test tch_training_resume >"$resume_log" 2>&1; then
-            echo 'cpu_torch_resume=failed'
-            exit 1
-          fi
-          if ! grep -Fq 'fresh_process_resume_matches_uninterrupted ... ok' "$resume_log" \
-            || ! grep -Fq 'finite_loss_with_overflowing_adam_moments_requires_restore ... ok' "$resume_log"; then
-            echo 'cpu_torch_resume=expected_test_missing'
-            exit 1
-          fi
-          if ! grep -Fq 'test result: ok. 2 passed; 0 failed; 1 ignored' "$resume_log"; then
-            echo 'cpu_torch_resume=no_passing_test_summary'
-            exit 1
-          fi
-          echo 'cpu_torch_resume=optimizer_progress_sampler_and_order_match'
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py run-tests \
+            --binary-file "$RUNNER_TEMP/cnot103-v13-executable" \
+            --tests \
+              device_search::runtime::tests::v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold \
+              device_search::runtime::tests::v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution \
+              device_search::runtime::tests::v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three \
+              device_search::runtime::tests::v13_saturated_frontier_is_all_or_none_at_one_plus_b_minus_one_and_one_plus_b \
+              device_search::runtime::tests::compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays \
+              device_search::runtime::tests::compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle \
+              device_search::runtime::tests::cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays \
+            --output "$GITHUB_OUTPUT"
+
+      - name: Compile the fresh-process resume test binary
+        id: compile_resume
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        run: |
+          set -euo pipefail
+          cargo_json="$RUNNER_TEMP/cnot103-resume-cargo.json"
+          binary_file="$RUNNER_TEMP/cnot103-resume-executable"
+          cargo_status=0
+          cargo test --no-run --locked --features torch --test tch_training_resume --message-format=json >"$cargo_json" 2>&1 || cargo_status=$?
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
+            --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
+            --artifact-kind test --target-name tch_training_resume \
+            --binary-file "$binary_file" --output "$GITHUB_OUTPUT"
+
+      - name: Run the named fresh-process resume regressions
+        id: resume
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        run: |
+          set -euo pipefail
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py run-tests \
+            --binary-file "$RUNNER_TEMP/cnot103-resume-executable" \
+            --tests fresh_process_resume_matches_uninterrupted \
+              finite_loss_with_overflowing_adam_moments_requires_restore \
+            --output "$GITHUB_OUTPUT"
+
+      - name: Compile the real Rust manifest validator
+        id: compile_profile
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        run: |
+          set -euo pipefail
+          cargo_json="$RUNNER_TEMP/cnot103-profile-cargo.json"
+          binary_file="$RUNNER_TEMP/cnot103-profile-executable"
+          cargo_status=0
+          cargo build --locked --features torch --bin cnot103-validate-manifest --message-format=json >"$cargo_json" 2>&1 || cargo_status=$?
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
+            --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
+            --artifact-kind bin --target-name cnot103-validate-manifest \
+            --binary-file "$binary_file" --output "$GITHUB_OUTPUT"
 
       - name: Validate the pinned 102-input profile with the real Rust parser
-        if: always()
+        id: profile
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
         working-directory: native
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
-          dataset="$RUNNER_TEMP/cnot103-parser-fixture.json"
-          manifest="$RUNNER_TEMP/cnot103-valid-manifest.json"
-          invalid="$RUNNER_TEMP/cnot103-invalid-manifest.json"
-          printf '%s' '{"schema":"cnot103_parser_smoke","records":[]}' >"$dataset"
-          dataset_sha="$(sha256sum "$dataset" | cut -d ' ' -f 1)"
-          python3 ../.github/scripts/build_training_manifest.py \
-            --profile ../.github/training-profiles/n10-test-support-v1.json \
-            --dataset-path "$dataset" \
-            --dataset-sha256 "$dataset_sha" \
-            --checkpoint-dir "$RUNNER_TEMP/cnot103-checkpoints" \
-            --attempts 1 --target-attempts 1 \
-            --output "$manifest" >"$RUNNER_TEMP/cnot103-manifest-builder.log" 2>&1
-          cargo build --locked --features torch --bin cnot103-validate-manifest \
-            >"$RUNNER_TEMP/cnot103-manifest-build.log" 2>&1
-          validator="$CARGO_TARGET_DIR/debug/cnot103-validate-manifest"
-          if ! "$validator" "$manifest" >"$RUNNER_TEMP/cnot103-manifest-valid.log" 2>&1; then
-            echo 'manifest_profile=rust_parser_rejected_pinned_profile'
-            exit 1
-          fi
-          if ! grep -Fq 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-manifest-valid.log" \
-            || ! grep -Fq 'model_input_slots=102' "$RUNNER_TEMP/cnot103-manifest-valid.log"; then
-            echo 'manifest_profile=rust_parser_wrong_receipt'
-            exit 1
-          fi
-          python3 - "$manifest" "$invalid" <<'PY'
+          profile_status=failed
+          profile_code=parser_validation_failed
+          binary_file="$RUNNER_TEMP/cnot103-profile-executable"
+          if [ ! -f "$binary_file" ]; then
+            profile_code=compiled_binary_missing
+          else
+            validator="$(cat "$binary_file")"
+            dataset="$RUNNER_TEMP/cnot103-parser-fixture.json"
+            manifest="$RUNNER_TEMP/cnot103-valid-manifest.json"
+            invalid="$RUNNER_TEMP/cnot103-invalid-manifest.json"
+            printf '%s' '{"schema":"cnot103_parser_smoke","records":[]}' >"$dataset"
+            dataset_sha="$(sha256sum "$dataset" | cut -d ' ' -f 1)"
+            if python3 ../.github/scripts/build_training_manifest.py \
+              --profile ../.github/training-profiles/n10-test-support-v1.json \
+              --dataset-path "$dataset" \
+              --dataset-sha256 "$dataset_sha" \
+              --checkpoint-dir "$RUNNER_TEMP/cnot103-checkpoints" \
+              --attempts 1 --target-attempts 1 \
+              --output "$manifest" >"$RUNNER_TEMP/cnot103-manifest-builder.log" 2>&1; then
+              if "$validator" "$manifest" >"$RUNNER_TEMP/cnot103-manifest-valid.log" 2>&1 \
+                && grep -Fq 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-manifest-valid.log" \
+                && grep -Fq 'model_input_slots=102' "$RUNNER_TEMP/cnot103-manifest-valid.log"; then
+                python3 - "$manifest" "$invalid" <<'PY'
           import json
           import sys
-          source, target = sys.argv[1:]
+          source, target = sys.argv[1], sys.argv[2]
           with open(source, encoding="utf-8") as stream:
               value = json.load(stream)
           value["feature_policy"]["schema_id"] = ""
           with open(target, "w", encoding="utf-8") as stream:
               json.dump(value, stream)
           PY
-          if "$validator" "$invalid" >"$RUNNER_TEMP/cnot103-manifest-invalid.log" 2>&1; then
-            echo 'manifest_profile=invalid_fixture_accepted'
-            exit 1
+                if ! "$validator" "$invalid" >"$RUNNER_TEMP/cnot103-manifest-invalid.log" 2>&1; then
+                  profile_status=passed
+                  profile_code=none
+                fi
+              fi
+            fi
           fi
-          echo 'manifest_profile=valid_102_slots_invalid_fixture_rejected'
+          echo "status=$profile_status" >>"$GITHUB_OUTPUT"
+          echo "code=$profile_code" >>"$GITHUB_OUTPUT"
+          echo "profile_status=$profile_status profile_code=$profile_code"
+
+      - name: Close the CPU torch acceptance gate
+        if: always() && !cancelled()
+        env:
+          TORCH_OUTCOME: ${{ steps.torch.outcome }}
+          V13_COMPILE_STATUS: ${{ steps.compile_v13.outputs.status }}
+          V13_COMPILE_CODE: ${{ steps.compile_v13.outputs.rustc_code }}
+          V13_STATUS: ${{ steps.v13.outputs.status }}
+          V13_CODE: ${{ steps.v13.outputs.code }}
+          RESUME_COMPILE_STATUS: ${{ steps.compile_resume.outputs.status }}
+          RESUME_COMPILE_CODE: ${{ steps.compile_resume.outputs.rustc_code }}
+          RESUME_STATUS: ${{ steps.resume.outputs.status }}
+          RESUME_CODE: ${{ steps.resume.outputs.code }}
+          PROFILE_COMPILE_STATUS: ${{ steps.compile_profile.outputs.status }}
+          PROFILE_COMPILE_CODE: ${{ steps.compile_profile.outputs.rustc_code }}
+          PROFILE_STATUS: ${{ steps.profile.outputs.status }}
+          PROFILE_CODE: ${{ steps.profile.outputs.code }}
+        run: |
+          set -euo pipefail
+          echo "v13_compile=${V13_COMPILE_STATUS:-not_run} rustc_code=${V13_COMPILE_CODE:-none}"
+          echo "v13=${V13_STATUS:-not_run} code=${V13_CODE:-none}"
+          echo "resume_compile=${RESUME_COMPILE_STATUS:-not_run} rustc_code=${RESUME_COMPILE_CODE:-none}"
+          echo "resume=${RESUME_STATUS:-not_run} code=${RESUME_CODE:-none}"
+          echo "profile_compile=${PROFILE_COMPILE_STATUS:-not_run} rustc_code=${PROFILE_COMPILE_CODE:-none}"
+          echo "profile=${PROFILE_STATUS:-not_run} code=${PROFILE_CODE:-none}"
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py gate \
+            --torch "${TORCH_OUTCOME:-missing}" \
+            --v13-compile "${V13_COMPILE_STATUS:-not_run}" \
+            --v13 "${V13_STATUS:-not_run}" \
+            --resume-compile "${RESUME_COMPILE_STATUS:-not_run}" \
+            --resume "${RESUME_STATUS:-not_run}" \
+            --profile-compile "${PROFILE_COMPILE_STATUS:-not_run}" \
+            --profile "${PROFILE_STATUS:-not_run}"

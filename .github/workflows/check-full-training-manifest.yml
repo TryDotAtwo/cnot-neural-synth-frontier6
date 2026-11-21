@@ -49,6 +49,7 @@ jobs:
           python3 -m unittest discover -s .github/scripts -p 'test_full_training_controller.py' -v
           python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
           python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_cnot_cpu_torch_ci.py' -v
 
       - name: Parse affected workflow YAML
         run: |
