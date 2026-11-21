@@ -360,7 +360,7 @@ for pid_path in glob.glob("/workspace/tqp_full_training_*/supervisor.pid"):
         if pid <= 0:
             continue
         os.kill(pid, 0)
-        command = open(f"/proc/{pid}/cmdline", "rb").read()
+        command = open(f"/proc/{{pid}}/cmdline", "rb").read()
     except (OSError, ValueError):
         continue
     if b"run_full_training.py" in command:
