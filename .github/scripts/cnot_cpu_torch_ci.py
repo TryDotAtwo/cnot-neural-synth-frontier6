@@ -145,8 +145,18 @@ def _diagnostic_test_site(message: dict[str, Any]) -> str:
         if filename.endswith("/device_search/runtime.rs") and isinstance(line_start, int):
             if line_start >= 861:
                 return "hamming_control_test"
+            if line_start >= 813:
+                return "pinned_v13_fixture_test"
+            if line_start >= 787:
+                return "bfs_runtime_test"
+            if line_start >= 755:
+                return "saturated_frontier_test"
+            if line_start >= 710:
+                return "depth_three_budget_test"
+            if line_start >= 689:
+                return "terminal_shortlist_test"
             if line_start >= 630:
-                return "v13_regression_test"
+                return "budget_identity_test"
             return "runtime_test_support"
     return "unknown_test_site"
 

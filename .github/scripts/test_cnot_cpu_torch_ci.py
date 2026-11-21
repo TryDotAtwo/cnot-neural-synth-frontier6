@@ -184,6 +184,24 @@ class CpuTorchCiTests(unittest.TestCase):
         self.assertNotIn("secret_type", json.dumps(result))
         self.assertNotIn("private compiler detail", json.dumps(result))
 
+    def test_uncoded_depth_three_runtime_error_gets_only_an_allowlisted_site(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "code": None,
+                "message": "private compiler detail",
+                "spans": [{
+                    "file_name": "native/src/device_search/runtime.rs",
+                    "line_start": 720,
+                    "is_primary": False,
+                }],
+            },
+        }
+        result = compile_evidence(json.dumps(message), 101, "lib_test")
+        self.assertEqual(result["status"], "compile_failed_runtime_tests_depth_three_budget_test")
+        self.assertEqual(result["rustc_code"], "none")
+
     def test_unresolved_name_without_a_source_span_has_a_safe_class(self):
         message = {
             "reason": "compiler-message",
