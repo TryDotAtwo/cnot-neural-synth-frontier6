@@ -8,6 +8,16 @@ from unittest.mock import patch
 import vast_full_training_controller as controller
 from vast_full_training_controller import full_run_budget_allows, _summarize
 
+_TEST_TARGET_ENV = patch.dict(os.environ, {"CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"})
+
+
+def setUpModule():
+    _TEST_TARGET_ENV.start()
+
+
+def tearDownModule():
+    _TEST_TARGET_ENV.stop()
+
 
 class FullTrainingBudgetTests(unittest.TestCase):
     def test_reserves_48_hours_and_seven_days_of_disk_storage(self):
@@ -78,6 +88,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             patch.object(controller.base, "instance_id", return_value=123),
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller, "_start_target", side_effect=fake_start_target),
+            patch.object(controller, "_has_active_supervisor", return_value=False),
             patch.object(controller, "_validate_bootstrap_budget", return_value=True),
             patch.object(controller, "_launch_script", return_value="remote script"),
             patch.object(controller, "_attach_and_remote", side_effect=fake_attach),
@@ -201,7 +212,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             "storage_cost": 0.15,
         }
         with (
-            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
             patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
             patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
@@ -219,10 +230,10 @@ class FullTrainingBudgetTests(unittest.TestCase):
     def test_cleanup_is_successful_noop_when_no_run_target_exists(self):
         old_label = "cnot103-r10k-44749514754-a1"
         with (
-            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
             patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
-            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label, "approved_instance_id": 123}),
             patch.object(controller.base, "instance_rows", return_value=[]),
             patch.object(controller.base, "stop_exact_label") as stop,
             patch.object(controller, "_summarize") as summarize,
@@ -246,7 +257,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
         }
         stopped = {**running, "actual_status": "stopped"}
         with (
-            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
             patch.object(controller, "_marker", return_value={"resume_existing_label": "cnot103-r10k-44749514754-a1"}),
             patch.object(controller.base, "instance_rows", side_effect=[[running], [stopped]]),
@@ -276,10 +287,11 @@ class FullTrainingBudgetTests(unittest.TestCase):
         }
         stopped = {**running, "actual_status": "stopped"}
         with (
-            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
             patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
-            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
+            patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label, "approved_instance_id": 123}),
             patch.object(controller.base, "instance_rows", side_effect=[[running], [stopped]]),
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller, "RemoteSession") as session_factory,
@@ -309,7 +321,7 @@ class InterruptedStartCleanupTests(unittest.TestCase):
         stopped = {**running, "actual_status": "stopped"}
 
         with (
-            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
             patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
             patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
             patch.object(controller.base, "instance_rows", side_effect=[[old], [running], [stopped]]),
@@ -562,6 +574,77 @@ class StableApprovedTargetTests(unittest.TestCase):
             with self.assertRaises(controller.GateError):
                 controller._wait_for_exact_instance(123, label, deadline=10.0)
 
+    def test_approved_target_configuration_is_required_before_any_rent_path(self):
+        label = "cnot103-r10k-100-a1"
+        row = self.row(123, label, "stopped")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(controller.base, "instance_rows", return_value=[row]),
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "create_once") as create,
+        ):
+            with self.assertRaises(controller.GateError):
+                controller._start_target(
+                    [row], {"resume_existing_label": label, "approved_instance_id": 123}, "200", "1"
+                )
+        offers.assert_not_called()
+        create.assert_not_called()
+
+    def test_cleanup_is_unverified_when_post_stop_state_is_still_running(self):
+        run_label = "cnot103-fulltrain-123-a1"
+        running = {
+            "id": 123, "label": run_label, "gpu_name": "RTX 3060", "num_gpus": 2,
+            "actual_status": "running", "dph_total": 0.20, "storage_cost": 0.15,
+        }
+        with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": "cnot103-r10k-44749514754-a1"}),
+            patch.object(controller.base, "instance_rows", side_effect=[[running], [running]]),
+            patch.object(controller, "_read_remote_status", return_value=("completed", "passed", None, 1.0)),
+            patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
+            patch.object(controller, "_summarize") as summarize,
+        ):
+            self.assertEqual(controller.cleanup(), 1)
+        stop.assert_called_once_with(run_label, "123", "1", expected_id=123)
+        self.assertEqual(summarize.call_args.args[1:3], ("unverified", "unverified"))
+
+    def test_cleanup_is_unverified_when_post_stop_inventory_is_unavailable(self):
+        run_label = "cnot103-fulltrain-123-a1"
+        running = {
+            "id": 123, "label": run_label, "gpu_name": "RTX 3060", "num_gpus": 2,
+            "actual_status": "running", "dph_total": 0.20, "storage_cost": 0.15,
+        }
+        api_failure = controller.base.probe.ApiFailure(None)
+        with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1", "CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": "cnot103-r10k-44749514754-a1"}),
+            patch.object(controller.base, "instance_rows", side_effect=[[running], api_failure]),
+            patch.object(controller, "_read_remote_status", return_value=("completed", "passed", None, 1.0)),
+            patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
+            patch.object(controller, "_summarize") as summarize,
+        ):
+            self.assertEqual(controller.cleanup(), 1)
+        stop.assert_called_once_with(run_label, "123", "1", expected_id=123)
+        self.assertEqual(summarize.call_args.args[1:3], ("api_failed", "unverified"))
+
+    def test_second_supervisor_is_detected_from_only_an_allowlisted_status(self):
+        row = self.row(123, "cnot103-r10k-100-a1", "running")
+        with patch.object(
+            controller,
+            "_attach_and_remote",
+            return_value=(
+                subprocess.CompletedProcess([], 0, "full_training=supervisor_active\n", ""),
+                "detached",
+                123,
+            ),
+        ) as remote:
+            self.assertTrue(controller._has_active_supervisor(row, "200", "1"))
+        remote.assert_called_once()
+
     def test_start_capable_workflow_serializes_runs_and_has_finalizer_headroom(self):
         workflow = (
             Path(__file__).resolve().parents[1]
@@ -571,6 +654,14 @@ class StableApprovedTargetTests(unittest.TestCase):
         self.assertTrue("concurrency:\n  group:" in workflow)
         self.assertTrue("cancel-in-progress: false" in workflow)
         self.assertTrue("timeout-minutes: 300" in workflow)
+        self.assertTrue("  finalize:\n    if: always()" in workflow)
+        self.assertFalse("needs.start.outputs.cleanup_needed" in workflow)
+        launch = controller._launch_script(
+            "/workspace/test", "a" * 40, "b" * 40, "c" * 64, 1.0, 0.0,
+            2.0, 3.0, "123", "1", 123,
+        )
+        self.assertIn("flock -n 9", launch)
+        self.assertIn("supervisor_busy", launch)
 
 
 if __name__ == "__main__":

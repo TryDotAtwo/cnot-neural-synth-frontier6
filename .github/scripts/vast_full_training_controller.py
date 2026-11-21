@@ -55,7 +55,7 @@ REMOTE_STATES = {
     "training", "final_quality", "completed", "failed", "budget_gate",
     "time_limit", "unavailable",
 }
-QUALITY_STATES = {"not_ready", "measured", "passed", "failed", "unavailable"}
+QUALITY_STATES = {"not_ready", "measured", "passed", "failed", "inconclusive", "invalid", "unavailable"}
 
 
 class GateError(RuntimeError):
@@ -178,6 +178,40 @@ def _fresh_label(run_id: str, attempt: str) -> str:
     return f"cnot103-fulltrain-{run_id}-a{attempt}"
 
 
+def _approved_instance_id(_marker: dict) -> int:
+    # Stable identity is private deployment configuration, never a repository marker.
+    secret = os.environ.get("CNOT103_APPROVED_TARGET_INSTANCE_ID", "").strip()
+    if not re.fullmatch(r"[0-9]{1,20}", secret):
+        raise GateError("approved target configuration is missing or invalid")
+    return int(secret)
+
+
+def _row_for_approved_target(
+    rows: list[dict], marker: dict
+) -> tuple[dict | None, str | None]:
+    ident = _approved_instance_id(marker)
+    matches = [row for row in rows if base.instance_id(row) == ident]
+    if len(matches) > 1:
+        raise GateError("approved target identity is ambiguous")
+    if not matches:
+        return None, None
+    row = matches[0]
+    label = row.get("label")
+    allowed_label = (
+        isinstance(label, str)
+        and (
+            label == marker["resume_existing_label"]
+            or re.fullmatch(r"cnot103-fulltrain-[0-9]{1,20}-a[0-9]{1,10}", label)
+        )
+    )
+    if not allowed_label or not base.is_2x3060(row):
+        raise GateError("approved target identity or GPU inventory mismatches")
+    same_label = [item for item in rows if item.get("label") == label]
+    if len(same_label) != 1 or base.instance_id(same_label[0]) != ident:
+        raise GateError("approved target label is ambiguous")
+    return row, label
+
+
 def _other_storage_reserve(rows: list[dict], exclude_id: int | None) -> float | None:
     total = 0.0
     for row in rows:
@@ -245,6 +279,40 @@ def _remove_local_key(root: pathlib.Path, key_path: pathlib.Path) -> None:
         pass
 
 
+def _has_active_supervisor(
+    row: dict, run_id: str, attempt: str
+) -> bool:
+    remote = r"""set -euo pipefail
+python3 - <<'PY'
+import glob
+import os
+active = False
+for pid_path in glob.glob("/workspace/tqp_full_training_*/supervisor.pid"):
+    try:
+        pid = int(open(pid_path, encoding="ascii").read().strip())
+        if pid <= 0:
+            continue
+        os.kill(pid, 0)
+        command = open(f"/proc/{{pid}}/cmdline", "rb").read()
+    except (OSError, ValueError):
+        continue
+    if b"run_full_training.py" in command:
+        active = True
+        break
+print("full_training=supervisor_active" if active else "full_training=no_supervisor")
+PY
+"""
+    proc, key_cleanup, _ident = _attach_and_remote(row, run_id, attempt, remote, 30)
+    if proc is None or proc.returncode != 0 or key_cleanup not in {"detached", "not_found"}:
+        raise GateError("existing supervisor ownership could not be checked")
+    statuses = set(proc.stdout.splitlines())
+    if "full_training=supervisor_active" in statuses:
+        return True
+    if "full_training=no_supervisor" in statuses:
+        return False
+    raise GateError("existing supervisor ownership check was inconclusive")
+
+
 def _launch_script(
     root: str,
     source_revision: str,
@@ -253,6 +321,7 @@ def _launch_script(
     started_at_epoch: float,
     budget_baseline: float,
     bootstrap_deadline_epoch: float,
+    startup_deadline_epoch: float,
     run_id: str,
     attempt: str,
     instance_id: int,
@@ -262,6 +331,42 @@ def _launch_script(
     return f"""set -euo pipefail
 ROOT={q(root)}
 SOURCE={q(source)}
+STARTUP_DEADLINE={q(str(startup_deadline_epoch))}
+exec 9>/workspace/.cnot103-full-training-launch.lock
+if ! flock -n 9; then
+  printf 'full_training=supervisor_busy\\n'
+  exit 13
+fi
+python3 - "$ROOT" "$STARTUP_DEADLINE" <<'PY'
+import glob
+import os
+import sys
+import time
+root, raw_deadline = sys.argv[1:]
+try:
+    deadline = float(raw_deadline)
+except ValueError:
+    raise SystemExit(14)
+if not (time.time() < deadline):
+    print("full_training=start_deadline")
+    raise SystemExit(14)
+for pid_path in glob.glob("/workspace/tqp_full_training_*/supervisor.pid"):
+    owner_root = os.path.dirname(pid_path)
+    if owner_root == root:
+        continue
+    try:
+        raw_pid = open(pid_path, encoding="ascii").read().strip()
+        pid = int(raw_pid)
+        if pid <= 0:
+            continue
+        os.kill(pid, 0)
+        command = open(f"/proc/{pid}/cmdline", "rb").read()
+    except (OSError, ValueError):
+        continue
+    if b"run_full_training.py" in command:
+        print("full_training=supervisor_busy")
+        raise SystemExit(13)
+PY
 if [ -e "$ROOT" ] || [ -L "$ROOT" ]; then
   printf 'full_training=workspace_exists\\n'
   exit 10
@@ -297,6 +402,17 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     output.write("\\n")
     output.flush()
     os.fsync(output.fileno())
+PY
+python3 - "$STARTUP_DEADLINE" <<'PY'
+import sys
+import time
+try:
+    deadline = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(14)
+if time.time() >= deadline:
+    print("full_training=start_deadline")
+    raise SystemExit(14)
 PY
 nohup setsid python3 {q(source + "/.github/scripts/run_full_training.py")} \\
   --root {q(root)} \\
@@ -379,7 +495,12 @@ class RemoteSession:
 def _wait_for_exact_instance(ident: int, label: str, deadline: float) -> dict:
     """Poll GET inventory for one exact ID without starting or stopping it."""
     while True:
+        if time.monotonic() >= deadline:
+            raise GateError("target startup wait reached its three-hour deadline")
         rows = base.instance_rows()
+        # A blocking GET may return after the deadline; never accept its state.
+        if time.monotonic() >= deadline:
+            raise GateError("target startup wait reached its three-hour deadline")
         labeled = base.resolve_label(rows, label)
         if labeled is not None and base.instance_id(labeled) != ident:
             raise GateError("target instance id changed while waiting")
@@ -407,15 +528,20 @@ def _activate_stopped_target(
     deadline: float,
     started_at_epoch: float | None = None,
 ) -> tuple[dict, str]:
+    if time.monotonic() >= deadline:
+        raise GateError("target startup wait reached its three-hour deadline")
     ident = base.instance_id(target)
     if ident is None:
         raise GateError("exact target id is invalid")
     rows = base.instance_rows()
-    current = base.resolve_label(rows, current_label)
-    if current is None or base.instance_id(current) != ident:
-        raise GateError("exact target identity changed before start")
-    if current.get("label") != current_label or not base.is_2x3060(current):
-        raise GateError("exact target label or GPU inventory changed before start")
+    if time.monotonic() >= deadline:
+        raise GateError("target startup wait reached its three-hour deadline")
+    current = next((item for item in rows if base.instance_id(item) == ident), None)
+    labeled = base.resolve_label(rows, current_label)
+    if labeled is not None and base.instance_id(labeled) != ident:
+        raise GateError("exact target label moved to another instance")
+    if current is None or current.get("label") != current_label or not base.is_2x3060(current):
+        raise GateError("exact target identity, label, or GPU changed before start")
     state = base.probe.observed_state(current)
     if state not in {"running", "stopped", "exited"}:
         current = _wait_for_exact_instance(ident, current_label, deadline)
@@ -424,17 +550,21 @@ def _activate_stopped_target(
         return current, current_label
     if state not in {"stopped", "exited"}:
         raise GateError("target did not reach a startable state")
-    if current_label != fresh_label and base.resolve_label(rows, fresh_label) is not None:
-        raise GateError("run-specific start label is already occupied")
+    if time.monotonic() >= deadline:
+        raise GateError("target startup wait reached its three-hour deadline")
+    if current_label != fresh_label:
+        existing_fresh = base.resolve_label(rows, fresh_label)
+        if existing_fresh is not None:
+            raise GateError("run-specific start label is already occupied")
     spend = base.project_charges()
     if not _validate_bootstrap_budget(
         current, spend, rows, ident,
         active_hours=_bootstrap_remaining_hours(started_at_epoch),
     ):
         raise GateError("the bounded pilot budget gate is closed before start")
-    # Vast accepts state and label in one instance update. That label is the
-    # recoverable proof that this run requested the start, even if Actions dies
-    # before Python can publish any step output.
+    # Recheck the monotonic deadline immediately before the only start mutation.
+    if time.monotonic() >= deadline:
+        raise GateError("target startup wait reached its three-hour deadline")
     if not base.api_instance_id(ident, "running", label=fresh_label):
         raise GateError("exact target start was not confirmed")
     started = _wait_for_exact_instance(ident, fresh_label, deadline)
@@ -446,77 +576,37 @@ def _activate_stopped_target(
 def _start_target(
     rows: list[dict], marker: dict, run_id: str, attempt: str,
     started_at_epoch: float | None = None,
+    deadline: float | None = None,
 ) -> tuple[dict, str, bool, float]:
-    deadline = time.monotonic() + STARTUP_WAIT_SECONDS
-    fresh_label = _fresh_label(run_id, attempt)
-    old_label = marker["resume_existing_label"]
-    target, label = _labels_for_run(rows, old_label, fresh_label)
+    if deadline is None:
+        deadline = time.monotonic() + STARTUP_WAIT_SECONDS
+    if time.monotonic() >= deadline:
+        raise GateError("target startup wait reached its three-hour deadline")
+    target, label = _row_for_approved_target(rows, marker)
+    if target is None or label is None:
+        raise GateError("approved existing target is missing")
+    ident = base.instance_id(target)
+    if ident is None or not base.is_2x3060(target):
+        raise GateError("target GPU inventory does not match")
     spent = base.project_charges()
     bootstrap_hours = _bootstrap_remaining_hours(started_at_epoch)
-    if target is not None:
-        ident = base.instance_id(target)
-        if ident is None or not base.is_2x3060(target):
-            raise GateError("target GPU inventory does not match")
-        if not _validate_bootstrap_budget(
-            target, spent, rows, ident, active_hours=bootstrap_hours
-        ):
-            raise GateError("the bounded pilot budget gate is closed")
-        state = base.probe.observed_state(target)
-        if state not in {"running", "stopped", "exited"}:
-            target = _wait_for_exact_instance(ident, label, deadline)
-            state = base.probe.observed_state(target)
-        if state in {"stopped", "exited"}:
-            target, label = _activate_stopped_target(
-                target, label, fresh_label, deadline, started_at_epoch
-            )
-        elif state != "running":
-            raise GateError("exact target did not reach a usable state")
-        return target, label, False, spent
-
-    transitions = [
-        row for row in rows
-        if base.is_2x3060(row)
-        and base.probe.observed_state(row) not in {"stopped", "exited", "error", "offline"}
-    ]
-    if transitions:
-        raise GateError("another 2x3060 target is active or transitioning")
-    extra_storage = _other_storage_reserve(rows, None)
-    if extra_storage is None:
-        raise GateError("existing storage cost is unknown")
-    offers = base.offer_inventory()
-    selected = next(
-        (
-            offer for offer in offers
-            if bootstrap_budget_allows(
-                spent,
-                offer.get("dph_total"),
-                offer.get("storage_cost"),
-                active_hours=bootstrap_hours,
-                extra_storage_reserve=extra_storage,
-            )
-        ),
-        None,
-    )
-    if selected is None:
-        raise GateError("no verified 2x3060 offer fits the bounded pilot budget")
-    offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id") or "")
-    if not re.fullmatch(r"[0-9]{1,20}", offer_id):
-        raise GateError("selected offer identity is invalid")
-    target = base.create_once(offer_id, fresh_label)
-    ident = base.instance_id(target)
-    if ident is None or target.get("label") != fresh_label or not base.is_2x3060(target):
-        raise GateError("new target identity or GPU inventory is invalid")
+    if not _validate_bootstrap_budget(
+        target, spent, rows, ident, active_hours=bootstrap_hours
+    ):
+        raise GateError("the bounded pilot budget gate is closed")
     state = base.probe.observed_state(target)
     if state not in {"running", "stopped", "exited"}:
-        target = _wait_for_exact_instance(ident, fresh_label, deadline)
+        target = _wait_for_exact_instance(ident, label, deadline)
         state = base.probe.observed_state(target)
     if state in {"stopped", "exited"}:
-        target, _label = _activate_stopped_target(
-            target, fresh_label, fresh_label, deadline, started_at_epoch
+        target, label = _activate_stopped_target(
+            target, label, _fresh_label(run_id, attempt), deadline, started_at_epoch
         )
     elif state != "running":
-        raise GateError("new target did not reach a usable state")
-    return target, fresh_label, True, spent
+        raise GateError("exact target did not reach a usable state")
+    return target, label, False, spent
+
+
 
 def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     """Classify the pinned full-run budget without exposing financial values."""
@@ -618,24 +708,27 @@ def start() -> int:
     run_id = attempt = ""
     try:
         started_at_epoch = time.time()
+        startup_deadline = time.monotonic() + STARTUP_WAIT_SECONDS
         revision, run_id, attempt, root = _run_identity()
         holdout_revision, holdout_sha256 = _pin_status()
         marker = _marker()
         rows = base.instance_rows()
         row, label, _created, _spend_before = _start_target(
-            rows, marker, run_id, attempt, started_at_epoch
+            rows, marker, run_id, attempt, started_at_epoch,
+            deadline=startup_deadline,
         )
         ident = base.instance_id(row)
-        if ident is None or not base.is_2x3060(row):
+        if ident is None or ident != _approved_instance_id(marker) or not base.is_2x3060(row):
             outcome, status = "target_gpu_mismatch", "failed"
             raise GateError("running target identity or GPU differs")
         running_rows = base.instance_rows()
-        current = base.resolve_label(running_rows, label)
+        current, current_label = _row_for_approved_target(running_rows, marker)
         if (
-            current is None or base.instance_id(current) != ident
+            current is None or current_label != label
+            or base.instance_id(current) != ident
             or base.probe.observed_state(current) != "running"
         ):
-            outcome, status = "target_busy", "failed"
+            outcome, status = "target_busy", "unverified"
             raise GateError("exact target changed before remote launch")
         row = current
         spend_now = base.project_charges()
@@ -645,6 +738,15 @@ def start() -> int:
         ):
             outcome, status = "budget_gate", "budget_gate"
             raise GateError("post-start bounded pilot budget recheck failed")
+        if _has_active_supervisor(row, run_id, attempt):
+            outcome, status = "target_busy", "unverified"
+            raise GateError("an existing training supervisor already owns this target")
+        if time.monotonic() >= startup_deadline:
+            outcome, status = "target_busy", "unverified"
+            raise GateError("target startup wait reached its three-hour deadline")
+        startup_deadline_epoch = time.time() + max(
+            0.0, startup_deadline - time.monotonic()
+        )
         script = _launch_script(
             root,
             revision,
@@ -653,6 +755,7 @@ def start() -> int:
             started_at_epoch,
             spend_now,
             started_at_epoch + BOOTSTRAP_SECONDS,
+            startup_deadline_epoch,
             run_id,
             attempt,
             ident,
@@ -690,6 +793,7 @@ def start() -> int:
     except Exception:
         return 1
     return 0 if outcome == "accepted" else 1
+
 
 def _read_remote_status_full(
     row: dict, run_id: str, attempt: str, root: str,
@@ -890,37 +994,33 @@ PY
     except Exception:
         return False
 
-def _find_run_target(rows: list[dict], marker: dict, run_id: str, attempt: str) -> tuple[dict | None, str | None]:
-    old_label = marker["resume_existing_label"]
-    fresh_label = _fresh_label(run_id, attempt)
-    return _labels_for_run(rows, old_label, fresh_label)
+def _find_run_target(
+    rows: list[dict], marker: dict, run_id: str, attempt: str
+) -> tuple[dict | None, str | None]:
+    """Resolve the configured stable instance ID; labels are only consistency checks."""
+    return _row_for_approved_target(rows, marker)
 
 
 def _find_cleanup_target(
     marker: dict, run_id: str, attempt: str
 ) -> tuple[dict | None, str | None]:
-    """Wait for a run-specific label to become visible before falling back.
-
-    A start/create API response can be accepted just before its Actions process
-    is killed. Inventory may briefly still show the pre-start label, so cleanup
-    polls GET-only for the unique claim before considering the shared legacy
-    label. A legacy label never grants stop ownership by itself.
-    """
-    old_label = marker["resume_existing_label"]
+    """GET-only recovery by stable ID; a current-attempt label proves a start claim."""
+    ident = _approved_instance_id(marker)
     fresh_label = _fresh_label(run_id, attempt)
     deadline = time.monotonic() + CLAIM_VISIBILITY_WAIT_SECONDS
     while True:
         rows = base.instance_rows()
-        old = base.resolve_label(rows, old_label)
         fresh = base.resolve_label(rows, fresh_label)
-        if old is not None and fresh is not None:
-            raise GateError("run cleanup labels are ambiguous")
-        if fresh is not None:
-            return fresh, fresh_label
+        if fresh is not None and base.instance_id(fresh) != ident:
+            raise GateError("run cleanup label points to a different instance")
+        row, label = _row_for_approved_target(rows, marker)
+        if row is not None and label == fresh_label:
+            return row, label
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return (old, old_label) if old is not None else (None, None)
+            return row, label
         time.sleep(min(CLAIM_VISIBILITY_POLL_SECONDS, remaining))
+
 
 def _monitor_window(
     row: dict,
@@ -1094,15 +1194,13 @@ def budget_check() -> int:
     try:
         marker = _marker()
         rows = base.instance_rows()
-        targets = base.target_rows_for_label(rows, marker["resume_existing_label"])
-        if not targets:
+        target, _label = _row_for_approved_target(rows, marker)
+        if target is None:
             budget_status = bootstrap_status = "target_missing"
-        elif len(targets) != 1:
-            budget_status = bootstrap_status = "target_ambiguous"
         else:
             spend = base.project_charges()
-            budget_status = classify_full_run_budget(targets[0], rows, spend)
-            bootstrap_status = classify_bootstrap_budget(targets[0], rows, spend)
+            budget_status = classify_full_run_budget(target, rows, spend)
+            bootstrap_status = classify_bootstrap_budget(target, rows, spend)
         outcome = "success"
     except Exception:
         outcome, budget_status, bootstrap_status = "failed", "unavailable", "unavailable"
@@ -1129,39 +1227,35 @@ def cleanup() -> int:
             if ident is None:
                 outcome, status = "unverified", "unverified"
             else:
-                old_label = marker["resume_existing_label"]
                 run_claimed_label = _fresh_label(run_id, attempt)
                 actual_state = base.probe.observed_state(row)
                 owned = label == run_claimed_label
-                if label == old_label:
-                    # A shared historical label proves no ownership. Only the
-                    # run-specific private owner stamp proves this run launched
-                    # work on an already-running resumable target.
-                    if actual_state == "running":
-                        session = RemoteSession(row, run_id, attempt)
-                        owned = _read_remote_owner(
-                            row, run_id, attempt, root, revision, session=session
+                started_at = None
+                budget_baseline = None
+                if not owned and actual_state == "running":
+                    # Any non-current label, including a previous attempt's
+                    # label, needs the private run-and-workspace owner stamp.
+                    session = RemoteSession(row, run_id, attempt)
+                    owned = _read_remote_owner(
+                        row, run_id, attempt, root, revision, session=session
+                    )
+                    if owned:
+                        state, quality, started_at, budget_baseline = _read_remote_status(
+                            row, run_id, attempt, root, session=session
                         )
-                        if owned:
-                            state, quality, started_at, budget_baseline = _read_remote_status(
-                                row, run_id, attempt, root, session=session
-                            )
-                        else:
-                            outcome, status = "not_needed", "not_needed"
-                    else:
-                        outcome, status = "not_needed", "not_needed"
-                elif actual_state == "running":
+                elif not owned:
+                    outcome, status = "not_needed", "not_needed"
+                if owned and actual_state == "running" and session is None:
                     state, quality, started_at, budget_baseline = _read_remote_status(
                         row, run_id, attempt, root
                     )
-                else:
-                    started_at = None
-                    budget_baseline = None
                 if session is not None:
                     key_cleanup = session.close()
                     session = None
                     if key_cleanup not in {"detached", "not_found"}:
                         state, quality = "unavailable", "unavailable"
+                if not owned:
+                    outcome, status = "not_needed", "not_needed"
                 if owned:
                     rate = _finite(row.get("dph_total"))
                     stop_status, _key_status = base.stop_exact_label(
@@ -1171,10 +1265,15 @@ def cleanup() -> int:
                         outcome, status = "unverified", "unverified"
                     else:
                         final_rows = base.instance_rows()
-                        final_row = base.resolve_label(final_rows, label)
+                        final_row = next(
+                            (item for item in final_rows if base.instance_id(item) == ident),
+                            None,
+                        )
+                        labeled_row = base.resolve_label(final_rows, label)
                         if (
                             final_row is None
-                            or base.instance_id(final_row) != ident
+                            or final_row.get("label") != label
+                            or (labeled_row is not None and base.instance_id(labeled_row) != ident)
                             or base.probe.observed_state(final_row) not in {"stopped", "exited"}
                         ):
                             outcome, status = "unverified", "unverified"

@@ -38,4 +38,5 @@ jobs:
         id: monitor
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          CNOT103_APPROVED_TARGET_INSTANCE_ID: ${{ secrets.CNOT103_APPROVED_TARGET_INSTANCE_ID }}
         run: python3 .github/scripts/vast_full_training_controller.py monitor --window-seconds "${{ inputs.window_seconds }}"
