@@ -190,7 +190,8 @@ def compile_evidence(
                 code_value = None
             if code_value is not None or message.get("level") == "error":
                 area = _diagnostic_area(message, str(code_value or ""))
-                errors.append((code_value, area, _diagnostic_kind(message)))
+                kind = _diagnostic_kind(message) if code_value is None else ""
+                errors.append((code_value, area, kind))
 
     unique_executables = sorted(set(executables))
     if cargo_exit == 0 and len(unique_executables) == 1:
@@ -201,7 +202,9 @@ def compile_evidence(
         }
     if errors:
         return {
-            "status": f"compile_failed_{errors[0][1]}_{errors[0][2]}",
+            "status": f"compile_failed_{errors[0][1]}" + (
+                f"_{errors[0][2]}" if errors[0][2] else ""
+            ),
             "rustc_code": errors[0][0] or "none",
             "executable": None,
         }
