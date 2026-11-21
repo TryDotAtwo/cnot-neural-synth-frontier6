@@ -479,5 +479,91 @@ class ForecastMonitoringTests(unittest.TestCase):
         )
 
 
+class StableApprovedTargetTests(unittest.TestCase):
+    @staticmethod
+    def row(ident, label, state):
+        return {
+            "id": ident, "label": label, "gpu_name": "RTX 3060", "num_gpus": 2,
+            "actual_status": state, "dph_total": 0.20, "storage_cost": 0.15,
+        }
+
+    def test_retry_after_attempt_rename_and_stop_reuses_the_approved_id(self):
+        previous_label = "cnot103-fulltrain-100-a1"
+        current_label = "cnot103-fulltrain-200-a1"
+        target = self.row(123, previous_label, "stopped")
+        activated = {**target, "label": current_label, "actual_status": "running"}
+        with (
+            patch.dict(os.environ, {"CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}),
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller.base, "instance_id", side_effect=lambda row: row["id"]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "_validate_bootstrap_budget", return_value=True),
+            patch.object(controller, "_activate_stopped_target", return_value=(activated, current_label)),
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "create_once") as create,
+        ):
+            result = controller._start_target(
+                [target],
+                {"resume_existing_label": "cnot103-r10k-100-a1"},
+                "200",
+                "1",
+            )
+
+        self.assertEqual(controller.base.instance_id(result[0]), 123)
+        self.assertEqual(result[1], current_label)
+        offers.assert_not_called()
+        create.assert_not_called()
+
+    def test_missing_or_mismatched_approved_target_never_falls_back_to_rent(self):
+        label = "cnot103-r10k-100-a1"
+        replacement = self.row(456, label, "stopped")
+        with (
+            patch.dict(os.environ, {"CNOT103_APPROVED_TARGET_INSTANCE_ID": "123"}),
+            patch.object(controller.base, "project_charges", return_value=1.0),
+            patch.object(controller.base, "instance_id", side_effect=lambda row: row["id"]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "_activate_stopped_target") as activate,
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "create_once") as create,
+        ):
+            with self.assertRaises(controller.GateError):
+                controller._start_target(
+                    [replacement],
+                    {"resume_existing_label": label},
+                    "200",
+                    "1",
+                )
+
+        activate.assert_not_called()
+        offers.assert_not_called()
+        create.assert_not_called()
+
+    def test_wait_rejects_state_returned_at_or_after_monotonic_deadline(self):
+        label = "cnot103-fulltrain-200-a1"
+        running = self.row(123, label, "running")
+        with (
+            patch.object(controller.base, "instance_rows", return_value=[running]),
+            patch.object(controller.base, "resolve_label", return_value=running),
+            patch.object(controller.base, "instance_id", side_effect=lambda row: row["id"]),
+            patch.object(controller.base, "is_2x3060", return_value=True),
+            patch.object(controller.base.probe, "observed_state", return_value="running"),
+            patch.object(controller.time, "monotonic", side_effect=[9.0, 10.0]),
+        ):
+            with self.assertRaises(controller.GateError):
+                controller._wait_for_exact_instance(123, label, deadline=10.0)
+
+    def test_start_capable_workflow_serializes_runs_and_has_finalizer_headroom(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / "workflows"
+            / "vast-full-training.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("concurrency:\n  group:", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("timeout-minutes: 300", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,14 @@
+import hashlib
+import json
+import pathlib
+import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
+import run_full_training as training
 from run_full_training import (
+    Supervisor,
     RunError,
     quality_metrics,
     select_dev_indices,
@@ -267,6 +275,234 @@ class ForecastGateTests(unittest.TestCase):
         self.assertFalse(forecast_approval_matches(approval, "a" * 32, 1235.0))
         approval["authorized"] = False
         self.assertFalse(forecast_approval_matches(approval, "a" * 32, 1234.0))
+
+
+class QualityComparisonTests(unittest.TestCase):
+    @staticmethod
+    def solved(case_id, cost):
+        identity = [1, 2, 4]
+        gates = [[0, 1] for _ in range(cost)]
+        start = identity.copy()
+        for _control, _target in reversed(gates):
+            start[0] ^= start[1]
+        return {
+            "case_id": case_id,
+            "status": "solved",
+            "start_packed_rows": start,
+            "end_packed_rows": identity,
+            "word": {
+                "replayed": True,
+                "physical_cost": cost,
+                "control_target": gates,
+            },
+        }
+
+    @staticmethod
+    def unsolved(case_id):
+        return {
+            "case_id": case_id,
+            "status": "depth_limit",
+            "start_packed_rows": [3, 2, 4],
+            "end_packed_rows": None,
+            "word": None,
+        }
+
+    @staticmethod
+    def report(rows, *, search=None, panel="test"):
+        return {
+            "schema": "cnot103_panel_search_result_v2",
+            "panel": panel,
+            "panel_digest": "a" * 64,
+            "panel_ids": ["case-a", "case-b"],
+            "feature_model_inputs": 102,
+            "training_exposure_audit": {"strict_unseen": True},
+            "search": training.BEAM_CONFIG if search is None else search,
+            "head": "qhat",
+            "rows": rows,
+        }
+
+    def compare(self, baseline_rows, candidate_rows, *, baseline_search=None,
+                candidate_search=None):
+        return training.compare_quality(
+            self.report(baseline_rows, search=baseline_search),
+            self.report(candidate_rows, search=candidate_search),
+            expected_case_ids=["case-a", "case-b"],
+            expected_panel="test",
+            expected_search=training.BEAM_CONFIG,
+        )
+
+    def test_valid_candidate_passes_and_rows_are_paired_by_case_id(self):
+        result = self.compare(
+            [self.solved("case-a", 2), self.unsolved("case-b")],
+            [self.solved("case-b", 1), self.solved("case-a", 1)],
+        )
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["baseline_solved"], 1)
+        self.assertEqual(result["candidate_solved"], 2)
+
+    def test_valid_but_worse_candidate_fails(self):
+        result = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            [self.solved("case-a", 3), self.unsolved("case-b")],
+        )
+        self.assertEqual(result["status"], "failed")
+
+    def test_previously_solved_case_cannot_become_unsolved(self):
+        result = self.compare(
+            [self.solved("case-a", 2), self.unsolved("case-b")],
+            [self.unsolved("case-a"), self.solved("case-b", 1)],
+        )
+        self.assertEqual(result["status"], "failed")
+
+    def test_same_solved_count_on_different_cases_fails(self):
+        result = self.compare(
+            [self.solved("case-a", 2), self.unsolved("case-b")],
+            [self.unsolved("case-a"), self.solved("case-b", 2)],
+        )
+        self.assertEqual(result["status"], "failed")
+
+    def test_zero_solved_baseline_is_inconclusive(self):
+        result = self.compare(
+            [self.unsolved("case-a"), self.unsolved("case-b")],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+        )
+        self.assertEqual(result["status"], "inconclusive")
+
+    def test_duplicate_or_missing_case_ids_are_invalid(self):
+        duplicate = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-a")],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+        )
+        missing = self.compare(
+            [self.solved("case-a", 1)],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+        )
+        self.assertEqual(duplicate["status"], "invalid")
+        self.assertEqual(missing["status"], "invalid")
+
+    def test_search_budget_mismatch_is_invalid(self):
+        other = dict(training.BEAM_CONFIG)
+        other["max_depth"] += 1
+        result = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            candidate_search=other,
+        )
+        self.assertEqual(result["status"], "invalid")
+
+    def test_replay_and_physical_cost_are_checked_per_original_case(self):
+        broken_replay = self.solved("case-a", 1)
+        broken_replay["word"]["replayed"] = False
+        mismatch = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            [broken_replay, self.unsolved("case-b")],
+        )
+        broken_cost = self.solved("case-a", 1)
+        broken_cost["word"]["physical_cost"] = 2
+        cost_mismatch = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            [broken_cost, self.unsolved("case-b")],
+        )
+        self.assertEqual(mismatch["status"], "invalid")
+        self.assertEqual(cost_mismatch["status"], "invalid")
+
+
+class CleanBootstrapTests(unittest.TestCase):
+    class ReachedCoverage(Exception):
+        pass
+
+    def _run_to_coverage(self, *, validation_ok):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        parent = pathlib.Path(temporary.name)
+        root = parent / "run"
+        source = root / "source"
+        source.mkdir(parents=True)
+        real_resolve = pathlib.Path.resolve
+
+        def map_workspace(path, *args, **kwargs):
+            resolved = real_resolve(path, *args, **kwargs)
+            try:
+                relative = resolved.relative_to(parent)
+            except ValueError:
+                return resolved
+            return pathlib.Path("/workspace") / relative
+
+        started = time.time()
+        with patch.object(pathlib.Path, "resolve", autospec=True, side_effect=map_workspace):
+            supervisor = Supervisor(
+                root, "a" * 40, "b" * 40, "c" * 64,
+                started, 0.0, started + 10_000,
+            )
+
+        stages = []
+        coverage_calls = []
+
+        def run_stage(name, command, **_kwargs):
+            stages.append(name)
+            if name == "fetch_holdout":
+                (root / training.HOLDOUT_RELATIVE).write_bytes(b"tiny-holdout")
+            elif name == "build_frozen_dataset":
+                data_path = root / training.DATA_RELATIVE
+                data_path.write_bytes(b"tiny-candidate")
+                digest = hashlib.sha256(data_path.read_bytes()).hexdigest()
+                (root / training.DATA_SHA_RELATIVE).write_text(digest + "\n", encoding="ascii")
+                (root / training.DATA_RECEIPT_RELATIVE).write_text(
+                    json.dumps({"complete": False, "validation_status": "pending",
+                                "dataset_sha256": digest}),
+                    encoding="utf-8",
+                )
+            elif name == "cargo_release_build":
+                validator = supervisor._runner("cnot103-validate-data")
+                validator.parent.mkdir(parents=True, exist_ok=True)
+                validator.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                validator.chmod(0o700)
+            elif name == "validate_frozen_dataset":
+                if not pathlib.Path(command[0]).is_file():
+                    raise AssertionError("Rust validator was invoked before cargo build")
+                if not validation_ok:
+                    raise training.RunError("synthetic Rust validation rejection")
+            elif name == "finalize_frozen_dataset":
+                receipt_path = root / training.DATA_RECEIPT_RELATIVE
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt.update({"complete": True, "validation_status": "rust_loader_accepted"})
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            return None
+
+        def coverage(_dataset_sha):
+            coverage_calls.append(True)
+            raise self.ReachedCoverage()
+
+        with (
+            patch.object(supervisor, "_check_source"),
+            patch.object(supervisor, "_hardware", return_value={"torch_cuda_devices": 2}),
+            patch.object(supervisor, "_free_gib", return_value=100.0),
+            patch.object(supervisor, "_ensure_cargo"),
+            patch.object(supervisor, "_run", side_effect=run_stage),
+            patch.object(supervisor, "_feature_coverage", side_effect=coverage),
+        ):
+            result = supervisor.run()
+        return result, stages, coverage_calls, root
+
+    def test_public_run_builds_validator_then_validates_seals_and_reaches_coverage(self):
+        result, stages, coverage, root = self._run_to_coverage(validation_ok=True)
+
+        self.assertEqual(result, 1)  # stopped deliberately at the coverage boundary
+        self.assertLess(stages.index("cargo_release_build"), stages.index("validate_frozen_dataset"))
+        self.assertLess(stages.index("validate_frozen_dataset"), stages.index("finalize_frozen_dataset"))
+        self.assertTrue(coverage)
+        receipt = json.loads((root / training.DATA_RECEIPT_RELATIVE).read_text(encoding="utf-8"))
+        self.assertTrue(receipt["complete"])
+
+    def test_failed_rust_validation_never_seals_receipt_or_reaches_coverage(self):
+        result, stages, coverage, root = self._run_to_coverage(validation_ok=False)
+
+        self.assertEqual(result, 1)
+        self.assertLess(stages.index("cargo_release_build"), stages.index("validate_frozen_dataset"))
+        self.assertNotIn("finalize_frozen_dataset", stages)
+        self.assertFalse(coverage)
+        receipt = json.loads((root / training.DATA_RECEIPT_RELATIVE).read_text(encoding="utf-8"))
+        self.assertFalse(receipt["complete"])
 
 
 if __name__ == "__main__":
