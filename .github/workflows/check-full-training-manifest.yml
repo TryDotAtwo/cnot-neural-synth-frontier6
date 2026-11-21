@@ -97,7 +97,17 @@ jobs:
           set -euo pipefail
           runtime_log="$RUNNER_TEMP/cnot103-torch-runtime.log"
           if ! cargo test --locked --features torch --lib device_search::runtime::tests >"$runtime_log" 2>&1; then
-            echo 'cpu_torch_runtime=failed'
+            if grep -Eq 'error\[E[0-9]+\]:' "$runtime_log"; then
+              echo 'cpu_torch_runtime=compile_failed'
+            elif grep -Fq 'compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=pinned_v13_fixture_failed'
+            elif grep -Fq 'compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=gl2_replay_regression'
+            elif grep -Fq 'cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=hamming_control_regression'
+            else
+              echo 'cpu_torch_runtime=runtime_test_failed'
+            fi
             exit 1
           fi
           for name in \
@@ -253,7 +263,7 @@ jobs:
                 echo toolchain_missing >"$status"
                 exit 11
               fi
-              if ! python -c "import torch; assert torch.__version__.split('+')[0] == '2.9.0'" >/dev/null 2>&1; then
+              if ! python -c "import torch; assert torch.__version__.startswith('2.9.0')" >/dev/null 2>&1; then
                 echo torch_version_mismatch >"$status"
                 exit 12
               fi

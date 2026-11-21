@@ -36,7 +36,7 @@ class FullTrainingSupervisorTests(unittest.TestCase):
         report = {
             "schema": "cnot103_dev_search_result_v1",
             "feature_model_inputs": 102,
-            "feature_execution": "not_used_by_hamming" if head == "hamming" else "used_for_model_scoring",
+            "feature_execution": "used_for_model_scoring",
             "training_exposure_audit": {"strict_unseen": True},
             "rows": [
                 {"status": "solved", "word": {"physical_cost": 3, "replayed": True}},
@@ -363,6 +363,7 @@ class QualityComparisonTests(unittest.TestCase):
             "panel_digest": "a" * 64,
             "panel_ids": ["case-a", "case-b"],
             "feature_model_inputs": 102,
+            "feature_execution": "not_used_by_hamming" if head == "hamming" else "used_for_model_scoring",
             "training_exposure_audit": {"strict_unseen": True},
             "search": training.BEAM_CONFIG if search is None else search,
             "head": head,
@@ -548,7 +549,9 @@ class BaselineGateTests(unittest.TestCase):
         )
 
     def test_zero_solved_hamming_baseline_is_inconclusive(self):
-        report, case_ids, digest = self.panel_report(solved_by_width={})
+        report, case_ids, digest = self.panel_report(
+            solved_by_width={}, widths=[10, 13]
+        )
         result = self.gate(report, case_ids, digest)
         self.assertEqual(result["status"], "inconclusive")
 

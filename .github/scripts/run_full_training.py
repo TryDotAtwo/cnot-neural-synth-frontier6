@@ -329,6 +329,8 @@ def _panel_search_metrics(
         raise RunError("panel search digest differs from its frozen cohort")
     if report.get("panel_ids") != expected_case_ids:
         raise RunError("panel search case identities differ from the frozen cohort")
+    if not expected_case_ids:
+        raise RunError("frozen panel is empty")
     if len(expected_case_ids) != len(set(expected_case_ids)):
         raise RunError("frozen panel contains duplicate case identities")
     expected_backend = "cpu_hamming" if expected_head == "hamming" else "cuda_model"
