@@ -1,19 +1,13 @@
 name: Rebuild frozen 10k dataset on existing Vast disk
 
 on:
-  push:
-    branches:
-      - codex/2x3060-full-feature-training
-    paths:
-      - .github/scripts/vast_rebuild_remote_dataset.py
-      - .github/scripts/fetch_public_holdout.py
-      - .github/workflows/vast-rebuild-remote-dataset.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tqp-remote-dataset-rebuild
+  group: cnot103-existing-2x3060-target
   cancel-in-progress: false
 
 jobs:
