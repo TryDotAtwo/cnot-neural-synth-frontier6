@@ -412,5 +412,72 @@ class FullRunBudgetDiagnosisTests(unittest.TestCase):
         offers.assert_not_called()
         stop.assert_not_called()
 
+class ForecastMonitoringTests(unittest.TestCase):
+    @staticmethod
+    def _monitor_result(allow_budget: bool):
+        row = {
+            "id": 123,
+            "label": "cnot103-fulltrain-123-a1",
+            "actual_status": "running",
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "dph_total": 0.30,
+            "storage_cost": 0.06,
+        }
+        session = object()
+        with (
+            patch.object(
+                controller,
+                "_read_remote_status_full",
+                return_value=("baseline", "measured", 900.0, 0.0, 3600.0, "a" * 32),
+            ),
+            patch.object(controller.base, "instance_rows", return_value=[row]),
+            patch.object(controller.base, "resolve_label", return_value=row),
+            patch.object(controller.base, "instance_id", side_effect=lambda value: value["id"]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "full_run_budget_allows", return_value=allow_budget) as budget,
+            patch.object(controller, "_write_forecast_authorization", return_value=True) as authorize,
+            patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
+            patch.object(controller.time, "monotonic", side_effect=[0.0, 0.0, 2.0]),
+            patch.object(controller.time, "time", return_value=1000.0),
+        ):
+            result = controller._monitor_window(
+                row=row,
+                label=row["label"],
+                ident=123,
+                run_id="123",
+                attempt="1",
+                root="/workspace/tqp_full_training_123_aaaaaaaa_a1",
+                window_seconds=1,
+                session=session,
+            )
+
+        return result, budget, authorize, stop, row, session
+
+    def test_monitor_authorizes_forecast_before_training_can_continue(self):
+        result, budget, authorize, stop, row, session = self._monitor_result(True)
+
+        self.assertEqual(result, (0, "running", "running"))
+        self.assertTrue(budget.called)
+        authorize.assert_called_once_with(
+            session,
+            "/workspace/tqp_full_training_123_aaaaaaaa_a1",
+            "a" * 32,
+            3600.0,
+        )
+        stop.assert_not_called()
+
+    def test_monitor_stops_exact_target_when_forecast_exceeds_budget(self):
+        result, budget, authorize, stop, row, session = self._monitor_result(False)
+
+        self.assertEqual(result, (1, "budget_gate", "budget_gate"))
+        self.assertTrue(budget.called)
+        authorize.assert_not_called()
+        stop.assert_called_once_with(
+            row["label"], "123", "1", expected_id=123
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
