@@ -251,10 +251,9 @@ class ForecastGateTests(unittest.TestCase):
             remaining_updates=10,
             checkpoint_reserve_seconds=3.0,
             baseline_search_seconds=11.0,
-            final_search_reserve_seconds=11.0,
             forecast_safety_seconds=5.0,
         )
-        self.assertEqual(estimate, 137.0)
+        self.assertEqual(estimate, 126.0)
 
     def test_forecast_approval_must_match_run_token_and_estimate(self):
         approval = {

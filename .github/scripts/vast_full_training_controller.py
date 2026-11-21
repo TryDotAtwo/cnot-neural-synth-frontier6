@@ -26,9 +26,14 @@ STORAGE_HOURS = 168.0
 DISK_GB = 64
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 MAX_STOP_SECONDS = 300
+BUDGET_POLL_SECONDS = 5 * 60
 MONITOR_SECONDS = 5 * 60 * 60 + 30 * 60
 POLL_SECONDS = 60
 STARTUP_WAIT_SECONDS = 3 * 60 * 60
+BOOTSTRAP_HOURS = 8.0
+BOOTSTRAP_SECONDS = int(BOOTSTRAP_HOURS * 3600)
+FORECAST_APPROVAL_WAIT_SECONDS = 20 * 60
+FORECAST_APPROVAL_POLL_SECONDS = 5
 CLAIM_VISIBILITY_WAIT_SECONDS = 2 * 60
 CLAIM_VISIBILITY_POLL_SECONDS = 5
 PROFILE_PATH = ".github/training-profiles/n10-test-support-v1.json"
@@ -94,6 +99,39 @@ def full_run_budget_allows(
         spent_value + rate_value * active + storage + base.TRANSFER_RESERVE + extra
         <= BUDGET_CAP + 1e-9
     )
+
+
+
+def bootstrap_budget_allows(
+    spent: object,
+    rate: object,
+    storage_cost: object,
+    active_hours: object = BOOTSTRAP_HOURS,
+    storage_hours: object = STORAGE_HOURS,
+    extra_storage_reserve: object = 0.0,
+) -> bool:
+    """Reserve only the bounded preflight/pilot window plus verified stop headroom."""
+    active = _finite(active_hours)
+    if active is None or active < 0:
+        return False
+    return full_run_budget_allows(
+        spent,
+        rate,
+        storage_cost,
+        active_hours=active + (MAX_STOP_SECONDS + BUDGET_POLL_SECONDS) / 3600.0,
+        storage_hours=storage_hours,
+        extra_storage_reserve=extra_storage_reserve,
+    )
+
+
+def _bootstrap_remaining_hours(started_at_epoch: float | None) -> float:
+    if started_at_epoch is None:
+        return BOOTSTRAP_HOURS
+    started = _finite(started_at_epoch)
+    if started is None or started <= 0:
+        return 0.0
+    elapsed = max(0.0, time.time() - started)
+    return max(0.0, BOOTSTRAP_HOURS - elapsed / 3600.0)
 
 
 def run_workspace(run_id: str, revision: str, attempt: str) -> str:
@@ -214,6 +252,7 @@ def _launch_script(
     holdout_sha256: str,
     started_at_epoch: float,
     budget_baseline: float,
+    bootstrap_deadline_epoch: float,
     run_id: str,
     attempt: str,
     instance_id: int,
@@ -266,6 +305,7 @@ nohup setsid python3 {q(source + "/.github/scripts/run_full_training.py")} \\
   --holdout-sha256 {q(holdout_sha256)} \\
   --started-at-epoch {q(str(started_at_epoch))} \\
   --budget-baseline {q(str(budget_baseline))} \\
+  --bootstrap-deadline-epoch {q(str(bootstrap_deadline_epoch))} \\
   >"$ROOT/supervisor.private.log" 2>&1 </dev/null &
 PID=$!
 (umask 077; printf '%s\\n' "$PID" >"$ROOT/supervisor.pid")
@@ -365,6 +405,7 @@ def _activate_stopped_target(
     current_label: str,
     fresh_label: str,
     deadline: float,
+    started_at_epoch: float | None = None,
 ) -> tuple[dict, str]:
     ident = base.instance_id(target)
     if ident is None:
@@ -386,8 +427,11 @@ def _activate_stopped_target(
     if current_label != fresh_label and base.resolve_label(rows, fresh_label) is not None:
         raise GateError("run-specific start label is already occupied")
     spend = base.project_charges()
-    if not _validate_running_budget(current, spend, rows, ident):
-        raise GateError("the full-run budget gate is closed before start")
+    if not _validate_bootstrap_budget(
+        current, spend, rows, ident,
+        active_hours=_bootstrap_remaining_hours(started_at_epoch),
+    ):
+        raise GateError("the bounded pilot budget gate is closed before start")
     # Vast accepts state and label in one instance update. That label is the
     # recoverable proof that this run requested the start, even if Actions dies
     # before Python can publish any step output.
@@ -400,26 +444,30 @@ def _activate_stopped_target(
 
 
 def _start_target(
-    rows: list[dict], marker: dict, run_id: str, attempt: str
+    rows: list[dict], marker: dict, run_id: str, attempt: str,
+    started_at_epoch: float | None = None,
 ) -> tuple[dict, str, bool, float]:
     deadline = time.monotonic() + STARTUP_WAIT_SECONDS
     fresh_label = _fresh_label(run_id, attempt)
     old_label = marker["resume_existing_label"]
     target, label = _labels_for_run(rows, old_label, fresh_label)
     spent = base.project_charges()
+    bootstrap_hours = _bootstrap_remaining_hours(started_at_epoch)
     if target is not None:
         ident = base.instance_id(target)
         if ident is None or not base.is_2x3060(target):
             raise GateError("target GPU inventory does not match")
-        if not _validate_running_budget(target, spent, rows, ident):
-            raise GateError("the full-run budget gate is closed")
+        if not _validate_bootstrap_budget(
+            target, spent, rows, ident, active_hours=bootstrap_hours
+        ):
+            raise GateError("the bounded pilot budget gate is closed")
         state = base.probe.observed_state(target)
         if state not in {"running", "stopped", "exited"}:
             target = _wait_for_exact_instance(ident, label, deadline)
             state = base.probe.observed_state(target)
         if state in {"stopped", "exited"}:
             target, label = _activate_stopped_target(
-                target, label, fresh_label, deadline
+                target, label, fresh_label, deadline, started_at_epoch
             )
         elif state != "running":
             raise GateError("exact target did not reach a usable state")
@@ -439,17 +487,18 @@ def _start_target(
     selected = next(
         (
             offer for offer in offers
-            if full_run_budget_allows(
+            if bootstrap_budget_allows(
                 spent,
                 offer.get("dph_total"),
                 offer.get("storage_cost"),
+                active_hours=bootstrap_hours,
                 extra_storage_reserve=extra_storage,
             )
         ),
         None,
     )
     if selected is None:
-        raise GateError("no verified 2x3060 offer fits the full-run budget")
+        raise GateError("no verified 2x3060 offer fits the bounded pilot budget")
     offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id") or "")
     if not re.fullmatch(r"[0-9]{1,20}", offer_id):
         raise GateError("selected offer identity is invalid")
@@ -463,7 +512,7 @@ def _start_target(
         state = base.probe.observed_state(target)
     if state in {"stopped", "exited"}:
         target, _label = _activate_stopped_target(
-            target, fresh_label, fresh_label, deadline
+            target, fresh_label, fresh_label, deadline, started_at_epoch
         )
     elif state != "running":
         raise GateError("new target did not reach a usable state")
@@ -497,6 +546,42 @@ def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     return "run_projection_exceeds_cap"
 
 
+def classify_bootstrap_budget(
+    row: object,
+    rows: object,
+    spent: object,
+    active_hours: object = BOOTSTRAP_HOURS,
+) -> str:
+    """Classify the bounded pilot reserve without exposing financial values."""
+    if not isinstance(row, dict):
+        return "target_missing"
+    if not base.is_2x3060(row):
+        return "target_mismatch"
+    ident = base.instance_id(row)
+    spend_value = _finite(spent)
+    rate = _finite(row.get("dph_total"))
+    storage_monthly = _finite(row.get("storage_cost"))
+    extra = _other_storage_reserve(rows, ident) if isinstance(rows, list) and ident else None
+    active = _finite(active_hours)
+    if (
+        ident is None or spend_value is None or rate is None or storage_monthly is None
+        or extra is None or active is None or spend_value < 0 or rate < 0
+        or storage_monthly < 0 or extra < 0 or active < 0
+    ):
+        return "inputs_unknown"
+    if bootstrap_budget_allows(
+        spend_value, rate, storage_monthly, active_hours=active,
+        extra_storage_reserve=extra,
+    ):
+        return "within_cap"
+    if bootstrap_budget_allows(
+        0.0, rate, storage_monthly, active_hours=active,
+        extra_storage_reserve=extra,
+    ):
+        return "insufficient_remaining_budget"
+    return "run_projection_exceeds_cap"
+
+
 
 def _validate_running_budget(
     row: dict, spend: float, rows: list[dict], exclude_id: int | None = None
@@ -506,6 +591,23 @@ def _validate_running_budget(
         spend,
         row.get("dph_total"),
         row.get("storage_cost"),
+        extra_storage_reserve=extra,
+    )
+
+
+def _validate_bootstrap_budget(
+    row: dict,
+    spend: float,
+    rows: list[dict],
+    exclude_id: int | None = None,
+    active_hours: float = BOOTSTRAP_HOURS,
+) -> bool:
+    extra = _other_storage_reserve(rows, exclude_id)
+    return extra is not None and bootstrap_budget_allows(
+        spend,
+        row.get("dph_total"),
+        row.get("storage_cost"),
+        active_hours=active_hours,
         extra_storage_reserve=extra,
     )
 
@@ -520,7 +622,9 @@ def start() -> int:
         holdout_revision, holdout_sha256 = _pin_status()
         marker = _marker()
         rows = base.instance_rows()
-        row, label, _created, _spend_before = _start_target(rows, marker, run_id, attempt)
+        row, label, _created, _spend_before = _start_target(
+            rows, marker, run_id, attempt, started_at_epoch
+        )
         ident = base.instance_id(row)
         if ident is None or not base.is_2x3060(row):
             outcome, status = "target_gpu_mismatch", "failed"
@@ -535,9 +639,12 @@ def start() -> int:
             raise GateError("exact target changed before remote launch")
         row = current
         spend_now = base.project_charges()
-        if not _validate_running_budget(row, spend_now, running_rows, ident):
+        if not _validate_bootstrap_budget(
+            row, spend_now, running_rows, ident,
+            active_hours=_bootstrap_remaining_hours(started_at_epoch),
+        ):
             outcome, status = "budget_gate", "budget_gate"
-            raise GateError("post-start full-run budget recheck failed")
+            raise GateError("post-start bounded pilot budget recheck failed")
         script = _launch_script(
             root,
             revision,
@@ -545,6 +652,7 @@ def start() -> int:
             holdout_sha256,
             started_at_epoch,
             spend_now,
+            started_at_epoch + BOOTSTRAP_SECONDS,
             run_id,
             attempt,
             ident,
@@ -583,10 +691,10 @@ def start() -> int:
         return 1
     return 0 if outcome == "accepted" else 1
 
-def _read_remote_status(
+def _read_remote_status_full(
     row: dict, run_id: str, attempt: str, root: str,
     session: RemoteSession | None = None,
-) -> tuple[str, str, float | None, float | None]:
+) -> tuple[str, str, float | None, float | None, float | None, str | None]:
     q = shlex.quote
     remote = f"""set -euo pipefail
 FILE={q(root + "/status.private.json")}
@@ -597,6 +705,7 @@ fi
 python3 - "$FILE" <<'PY'
 import json
 import math
+import re
 import sys
 try:
     value = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -619,33 +728,115 @@ for name in ("started_at_epoch", "budget_baseline", "instance_rate", "storage_co
     item = number(name)
     if item is not None:
         print(name + "=" + str(item))
+forecast = number("forecast_total_seconds")
+if forecast is not None and forecast > 0:
+    print("forecast_total_seconds=" + str(forecast))
+token = value.get("forecast_token")
+if isinstance(token, str) and re.fullmatch(r"[0-9a-f]{32}", token):
+    print("forecast_token=" + token)
 PY
 """
     if session is None:
         proc, key_cleanup, _ident = _attach_and_remote(row, run_id, attempt, remote, 30)
         if proc is None or proc.returncode != 0 or key_cleanup not in {"detached", "not_found"}:
-            return "unavailable", "unavailable", None, None
+            return "unavailable", "unavailable", None, None, None, None
     else:
         proc = session.run(remote, 30)
         if proc is None or proc.returncode != 0:
-            return "unavailable", "unavailable", None, None
+            return "unavailable", "unavailable", None, None, None, None
     values = {}
     for line in proc.stdout.splitlines():
         key, separator, value = line.partition("=")
         if separator and key in {
             "run_state", "quality_status", "started_at_epoch",
             "budget_baseline", "instance_rate", "storage_cost",
+            "forecast_total_seconds", "forecast_token",
         }:
             values[key] = value
     state = values.get("run_state", "unavailable")
     quality = values.get("quality_status", "unavailable")
-    parsed = []
-    for key in ("started_at_epoch", "budget_baseline", "instance_rate", "storage_cost"):
+
+    def parsed_number(key):
         try:
-            parsed.append(float(values[key]))
+            value = float(values[key])
+            return value if math.isfinite(value) else None
         except (KeyError, ValueError):
-            parsed.append(None)
-    return state, quality, parsed[0], parsed[1]
+            return None
+
+    token = values.get("forecast_token")
+    if token is not None and not re.fullmatch(r"[0-9a-f]{32}", token):
+        token = None
+    return (
+        state,
+        quality,
+        parsed_number("started_at_epoch"),
+        parsed_number("budget_baseline"),
+        parsed_number("forecast_total_seconds"),
+        token,
+    )
+
+
+def _read_remote_status(
+    row: dict, run_id: str, attempt: str, root: str,
+    session: RemoteSession | None = None,
+) -> tuple[str, str, float | None, float | None]:
+    values = _read_remote_status_full(row, run_id, attempt, root, session=session)
+    return values[0], values[1], values[2], values[3]
+
+
+def _write_forecast_authorization(
+    session: RemoteSession, root: str, token: str, forecast_total_seconds: float
+) -> bool:
+    seconds = _finite(forecast_total_seconds)
+    if not re.fullmatch(r"[0-9a-f]{32}", token) or seconds is None or seconds <= 0:
+        return False
+    q = shlex.quote
+    path = root + "/forecast-approval.private.json"
+    remote = f"""set -euo pipefail
+python3 - {q(path)} {q(token)} {q(str(seconds))} <<'PY'
+import json
+import math
+import os
+import sys
+path, token, raw_seconds = sys.argv[1:]
+seconds = float(raw_seconds)
+if not math.isfinite(seconds) or seconds <= 0:
+    raise SystemExit(2)
+value = {{
+    "schema": "cnot103_full_training_forecast_approval_v1",
+    "authorized": True,
+    "forecast_token": token,
+    "forecast_total_seconds": seconds,
+}}
+try:
+    existing = json.load(open(path, encoding="utf-8"))
+except FileNotFoundError:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(value, output, sort_keys=True, separators=(",", ":"))
+        output.write("\\n")
+        output.flush()
+        os.fsync(output.fileno())
+except Exception:
+    raise SystemExit(3)
+else:
+    if (
+        existing.get("schema") != value["schema"]
+        or existing.get("authorized") is not True
+        or existing.get("forecast_token") != token
+        or existing.get("forecast_total_seconds") != seconds
+    ):
+        raise SystemExit(4)
+print("full_training=forecast_authorized")
+PY
+"""
+    proc = session.run(remote, 30)
+    return (
+        proc is not None
+        and proc.returncode == 0
+        and "full_training=forecast_authorized" in proc.stdout.splitlines()
+    )
 
 
 
@@ -743,8 +934,25 @@ def _monitor_window(
 ) -> tuple[int, str, str]:
     host_deadline = time.monotonic() + max(1, min(int(window_seconds), MONITOR_SECONDS))
     next_budget_check = 0.0
+    authorized_forecast_token: str | None = None
+
+    def stop_for_gate(outcome: str) -> tuple[int, str, str]:
+        stop_status, _key_status = base.stop_exact_label(
+            label, run_id, attempt, expected_id=ident
+        )
+        if stop_status not in {"verified", "not_needed"}:
+            return 1, "unverified", "unverified"
+        return 1, outcome, outcome
+
     while True:
-        state, quality, started_at, budget_baseline = _read_remote_status(
+        (
+            state,
+            quality,
+            started_at,
+            budget_baseline,
+            forecast_total_seconds,
+            forecast_token,
+        ) = _read_remote_status_full(
             row, run_id, attempt, root, session=session
         )
         if state == "completed":
@@ -759,37 +967,78 @@ def _monitor_window(
             return 1, "failed", "failed"
         if state == "unavailable":
             return 1, "remote_state_unavailable", "unavailable"
-        if time.monotonic() >= next_budget_check:
+
+        now_monotonic = time.monotonic()
+        if (
+            (forecast_total_seconds is None) != (forecast_token is None)
+            or (
+                forecast_token is not None
+                and not re.fullmatch(r"[0-9a-f]{32}", forecast_token)
+            )
+        ):
+            return stop_for_gate("unverified")
+
+        forecast_pending_authorization = (
+            forecast_token is not None
+            and forecast_token != authorized_forecast_token
+        )
+        if now_monotonic >= next_budget_check or forecast_pending_authorization:
             current_rows = base.instance_rows()
             current = base.resolve_label(current_rows, label)
-            if current is None or base.instance_id(current) != ident:
+            if (
+                current is None
+                or base.instance_id(current) != ident
+                or base.probe.observed_state(current) != "running"
+            ):
                 return 1, "unverified", "unverified"
             spend_now = base.project_charges()
             rate = _finite(current.get("dph_total"))
             extra_storage = _other_storage_reserve(current_rows, ident)
-            if rate is None or extra_storage is None or started_at is None:
-                base.stop_exact_label(label, run_id, attempt)
-                return 1, "budget_gate", "budget_gate"
-            elapsed_hours = max(0.0, (time.time() - started_at) / 3600.0)
-            baseline = budget_baseline if budget_baseline is not None else spend_now
-            projected_spend = max(spend_now, baseline + rate * elapsed_hours)
-            remaining_hours = max(
-                0.0, (MAX_RUNTIME_SECONDS / 3600.0) - elapsed_hours
-            )
+            if (
+                rate is None or extra_storage is None
+                or started_at is None or budget_baseline is None
+            ):
+                return stop_for_gate("budget_gate")
+            elapsed_seconds = max(0.0, time.time() - started_at)
+            elapsed_hours = elapsed_seconds / 3600.0
+            projected_spend = max(spend_now, budget_baseline + rate * elapsed_hours)
+            if forecast_total_seconds is None:
+                if elapsed_seconds >= BOOTSTRAP_SECONDS:
+                    return stop_for_gate("time_limit")
+                remaining_hours = (
+                    (BOOTSTRAP_SECONDS - elapsed_seconds) / 3600.0
+                    + (MAX_STOP_SECONDS + BUDGET_POLL_SECONDS) / 3600.0
+                )
+            else:
+                if (
+                    forecast_total_seconds > MAX_RUNTIME_SECONDS
+                    or elapsed_seconds >= forecast_total_seconds
+                ):
+                    return stop_for_gate("time_limit")
+                remaining_hours = (
+                    (forecast_total_seconds - elapsed_seconds) / 3600.0
+                    + (MAX_STOP_SECONDS + BUDGET_POLL_SECONDS) / 3600.0
+                )
             if not full_run_budget_allows(
                 projected_spend,
                 rate,
                 current.get("storage_cost"),
-                active_hours=remaining_hours + 0.25,
+                active_hours=remaining_hours,
                 extra_storage_reserve=extra_storage,
             ):
-                base.stop_exact_label(label, run_id, attempt)
-                return 1, "budget_gate", "budget_gate"
+                return stop_for_gate("budget_gate")
+            if forecast_token is not None:
+                if not _write_forecast_authorization(
+                    session, root, forecast_token, forecast_total_seconds
+                ):
+                    return stop_for_gate("unverified")
+                authorized_forecast_token = forecast_token
             row = current
-            next_budget_check = time.monotonic() + 15 * 60
-        if time.monotonic() >= host_deadline:
+            next_budget_check = now_monotonic + BUDGET_POLL_SECONDS
+        if now_monotonic >= host_deadline:
             return 0, "running", "running"
-        time.sleep(min(POLL_SECONDS, max(1.0, host_deadline - time.monotonic())))
+        time.sleep(min(POLL_SECONDS, max(1.0, host_deadline - now_monotonic)))
+
 
 
 def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
@@ -841,21 +1090,23 @@ def budget_check() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome = "failed"
     budget_status = "unavailable"
+    bootstrap_status = "unavailable"
     try:
         marker = _marker()
         rows = base.instance_rows()
         targets = base.target_rows_for_label(rows, marker["resume_existing_label"])
         if not targets:
-            budget_status = "target_missing"
+            budget_status = bootstrap_status = "target_missing"
         elif len(targets) != 1:
-            budget_status = "target_ambiguous"
+            budget_status = bootstrap_status = "target_ambiguous"
         else:
             spend = base.project_charges()
             budget_status = classify_full_run_budget(targets[0], rows, spend)
+            bootstrap_status = classify_bootstrap_budget(targets[0], rows, spend)
         outcome = "success"
     except Exception:
-        outcome, budget_status = "failed", "unavailable"
-    _summarize_budget(checked, outcome, budget_status)
+        outcome, budget_status, bootstrap_status = "failed", "unavailable", "unavailable"
+    _summarize_budget(checked, outcome, budget_status, bootstrap_status)
     return 0 if outcome == "success" else 1
 
 
@@ -1001,7 +1252,9 @@ def _summarize(
             pass
 
 
-def _summarize_budget(checked: str, outcome: str, budget_status: str) -> None:
+def _summarize_budget(
+    checked: str, outcome: str, budget_status: str, bootstrap_status: str = "unavailable"
+) -> None:
     allowed_statuses = {
         "within_cap", "insufficient_remaining_budget", "run_projection_exceeds_cap",
         "inputs_unknown", "target_missing", "target_ambiguous", "target_mismatch",
@@ -1011,9 +1264,12 @@ def _summarize_budget(checked: str, outcome: str, budget_status: str) -> None:
         outcome = "failed"
     if budget_status not in allowed_statuses:
         budget_status = "unavailable"
+    if bootstrap_status not in allowed_statuses:
+        bootstrap_status = "unavailable"
     print(f"checked_at={checked}")
     print(f"query_outcome={outcome}")
     print(f"training_budget={budget_status}")
+    print(f"bootstrap_budget={bootstrap_status}")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
@@ -1023,6 +1279,7 @@ def _summarize_budget(checked: str, outcome: str, budget_status: str) -> None:
                     f"- checked_at: {checked}\n"
                     f"- query_outcome: {outcome}\n"
                     f"- training_budget: {budget_status}\n"
+                    f"- bootstrap_budget: {bootstrap_status}\n"
                 )
         except OSError:
             pass

@@ -61,7 +61,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             events.append("clock")
             return 42.0
 
-        def fake_start_target(*_args):
+        def fake_start_target(*_args, **_kwargs):
             events.append("activate")
             return row, "cnot103-test", False, 1.0
 
@@ -78,7 +78,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             patch.object(controller.base, "instance_id", return_value=123),
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller, "_start_target", side_effect=fake_start_target),
-            patch.object(controller, "_validate_running_budget", return_value=True),
+            patch.object(controller, "_validate_bootstrap_budget", return_value=True),
             patch.object(controller, "_launch_script", return_value="remote script"),
             patch.object(controller, "_attach_and_remote", side_effect=fake_attach),
             patch.object(controller, "_summarize"),
@@ -439,7 +439,7 @@ class ForecastMonitoringTests(unittest.TestCase):
             patch.object(controller, "full_run_budget_allows", return_value=allow_budget) as budget,
             patch.object(controller, "_write_forecast_authorization", return_value=True) as authorize,
             patch.object(controller.base, "stop_exact_label", return_value=("verified", "detached")) as stop,
-            patch.object(controller.time, "monotonic", side_effect=[0.0, 0.0, 2.0]),
+            patch.object(controller.time, "monotonic", side_effect=[0.0, 2.0]),
             patch.object(controller.time, "time", return_value=1000.0),
         ):
             result = controller._monitor_window(

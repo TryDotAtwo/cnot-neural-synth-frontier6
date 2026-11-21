@@ -12,6 +12,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import secrets
 import time
 import traceback
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ EXPECTED_CHECKPOINT_FILES = 12
 CHECKPOINT_FREE_GIB = 24
 INITIAL_FREE_GIB = 40
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
+FORECAST_APPROVAL_WAIT_SECONDS = 20 * 60
+FORECAST_APPROVAL_POLL_SECONDS = 5
 FORECAST_SAFETY_SECONDS = 15 * 60
 CHECKPOINT_WRITE_RESERVE_SECONDS = 30 * 60
 PROFILE_RELATIVE = ".github/training-profiles/n10-test-support-v1.json"
@@ -53,6 +56,73 @@ class RunError(RuntimeError):
 
 class TimeLimit(RunError):
     pass
+
+
+
+def estimate_full_run_seconds(
+    *,
+    elapsed_before_full: float,
+    setup_seconds: float,
+    update_seconds: float,
+    remaining_updates: int,
+    checkpoint_reserve_seconds: float,
+    baseline_search_seconds: float,
+    forecast_safety_seconds: float,
+) -> float:
+    """Forecast end-to-end time, reserving one final search at baseline-search speed."""
+    values = (
+        elapsed_before_full,
+        setup_seconds,
+        update_seconds,
+        checkpoint_reserve_seconds,
+        baseline_search_seconds,
+        forecast_safety_seconds,
+    )
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not math.isfinite(value) or value < 0
+        for value in values
+    ):
+        raise RunError("runtime forecast contains invalid timing inputs")
+    if type(remaining_updates) is not int or remaining_updates < 0:
+        raise RunError("runtime forecast has an invalid remaining update count")
+    if update_seconds <= 0:
+        raise RunError("runtime forecast requires a positive update measurement")
+    return (
+        float(elapsed_before_full)
+        + float(setup_seconds)
+        + float(update_seconds) * remaining_updates
+        + float(checkpoint_reserve_seconds)
+        + float(baseline_search_seconds)
+        + float(forecast_safety_seconds)
+    )
+
+
+def forecast_approval_matches(
+    value: object, token: str, forecast_total_seconds: float
+) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if (
+        not isinstance(token, str)
+        or len(token) != 32
+        or any(character not in "0123456789abcdef" for character in token)
+        or isinstance(forecast_total_seconds, bool)
+        or not isinstance(forecast_total_seconds, (int, float))
+        or not math.isfinite(forecast_total_seconds)
+        or forecast_total_seconds <= 0
+    ):
+        return False
+    observed = value.get("forecast_total_seconds")
+    return (
+        value.get("schema") == "cnot103_full_training_forecast_approval_v1"
+        and value.get("authorized") is True
+        and value.get("forecast_token") == token
+        and not isinstance(observed, bool)
+        and isinstance(observed, (int, float))
+        and math.isfinite(observed)
+        and float(observed) == float(forecast_total_seconds)
+    )
 
 
 def select_dev_indices(records: object, per_width: int = 8) -> list[int]:
@@ -511,6 +581,7 @@ class Supervisor:
         holdout_sha256: str,
         started_at_epoch: float,
         budget_baseline: float,
+        bootstrap_deadline_epoch: float,
     ):
         self.root = root
         self.source = root / "source"
@@ -519,6 +590,10 @@ class Supervisor:
         self.holdout_sha256 = holdout_sha256
         self.started_at_epoch = started_at_epoch
         self.budget_baseline = budget_baseline
+        self.bootstrap_deadline_epoch = bootstrap_deadline_epoch
+        self.full_run_authorized = False
+        self.forecast_total_seconds: float | None = None
+        self.forecast_token: str | None = None
         self.status_path = root / "status.private.json"
         self.events_path = root / "events.private.jsonl"
         self.error_path = root / "error.private.json"
@@ -581,6 +656,9 @@ class Supervisor:
             "started_at_epoch": self.started_at_epoch,
             "budget_baseline": self.budget_baseline,
         }
+        if self.forecast_total_seconds is not None and self.forecast_token is not None:
+            value["forecast_total_seconds"] = self.forecast_total_seconds
+            value["forecast_token"] = self.forecast_token
         _atomic_private_json(self.status_path, value)
         event = {"at_utc": _now(), "state": state, "quality_status": self.quality_status}
         fd = os.open(self.events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -590,8 +668,38 @@ class Supervisor:
             os.fsync(output.fileno())
 
     def check_time(self) -> None:
-        if time.time() >= self.deadline:
+        now = time.time()
+        if now >= self.deadline:
             raise TimeLimit("48-hour wall-time guard reached")
+        if not self.full_run_authorized and now >= self.bootstrap_deadline_epoch:
+            raise TimeLimit("bounded bootstrap pilot deadline reached")
+
+    def _await_forecast_approval(self) -> None:
+        if self.forecast_total_seconds is None or self.forecast_token is None:
+            raise RunError("controller forecast is missing")
+        deadline = min(
+            self.bootstrap_deadline_epoch,
+            time.time() + FORECAST_APPROVAL_WAIT_SECONDS,
+        )
+        approval_path = self.root / "forecast-approval.private.json"
+        while time.time() < deadline:
+            self.check_time()
+            try:
+                value = json.loads(approval_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                value = None
+            if forecast_approval_matches(
+                value, self.forecast_token, self.forecast_total_seconds
+            ):
+                self.full_run_authorized = True
+                return
+            time.sleep(FORECAST_APPROVAL_POLL_SECONDS)
+        raise TimeLimit("controller did not approve the forecast within the pilot window")
+
+    def _active_deadline(self) -> float:
+        if self.full_run_authorized:
+            return self.deadline
+        return min(self.deadline, self.bootstrap_deadline_epoch)
 
     def _runner(self, name: str) -> pathlib.Path:
         return self.root / "cargo-target" / "release" / name
@@ -610,7 +718,12 @@ class Supervisor:
         stderr_path = self.root / "logs" / f"{name}.stderr.log"
         if stdout_path.exists() or stderr_path.exists():
             raise RunError("preserving existing stage output")
-        timeout = max(1, int(self.deadline - time.time()))
+        active_deadline = self._active_deadline()
+        remaining_seconds = active_deadline - time.time()
+        if remaining_seconds < 1:
+            self.check_time()
+            raise TimeLimit("runtime gate expired before stage launch")
+        timeout = int(remaining_seconds)
         with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
             os.chmod(stdout_path, 0o600)
             os.chmod(stderr_path, 0o600)
@@ -625,7 +738,7 @@ class Supervisor:
                     check=False,
                 )
             except subprocess.TimeoutExpired:
-                raise TimeLimit(f"{name} exceeded the 48-hour wall-time guard") from None
+                raise TimeLimit(f"{name} exceeded its active runtime gate") from None
         if result.returncode != 0:
             raise RunError(f"{name} failed with exit code {result.returncode}")
         if not json_stdout:
@@ -639,6 +752,7 @@ class Supervisor:
         return value
 
     def _ensure_cargo(self) -> None:
+        self.check_time()
         cargo = self.environment["CARGO_HOME"] + "/bin/cargo"
         if pathlib.Path(cargo).is_file():
             return
@@ -661,7 +775,7 @@ class Supervisor:
                 env=self.environment,
                 stdout=log,
                 stderr=log,
-                timeout=min(180, max(1, int(self.deadline - time.time()))),
+                timeout=min(180, max(1, int(self._active_deadline() - time.time()))),
                 check=False,
             )
             if download.returncode != 0:
@@ -675,7 +789,7 @@ class Supervisor:
                 env=self.environment,
                 stdout=log,
                 stderr=log,
-                timeout=min(1200, max(1, int(self.deadline - time.time()))),
+                timeout=min(1200, max(1, int(self._active_deadline() - time.time()))),
                 check=False,
             )
             if install.returncode != 0:
@@ -1123,17 +1237,21 @@ class Supervisor:
 
             elapsed_before_full = max(0.0, time.time() - self.started_at_epoch)
             remaining_updates = TARGET_ATTEMPTS - 2
-            estimated_full_update_seconds = update_seconds / PILOT_ATTEMPTS * remaining_updates
-            estimated_full_seconds = (
-                elapsed_before_full
-                + setup_seconds
-                + estimated_full_update_seconds
-                + CHECKPOINT_WRITE_RESERVE_SECONDS
-                + baseline_search_wall
-                + FORECAST_SAFETY_SECONDS
+            estimated_full_seconds = estimate_full_run_seconds(
+                elapsed_before_full=elapsed_before_full,
+                setup_seconds=setup_seconds,
+                update_seconds=update_seconds / PILOT_ATTEMPTS,
+                remaining_updates=remaining_updates,
+                checkpoint_reserve_seconds=CHECKPOINT_WRITE_RESERVE_SECONDS,
+                baseline_search_seconds=baseline_search_wall,
+                forecast_safety_seconds=FORECAST_SAFETY_SECONDS,
             )
             if estimated_full_seconds > MAX_RUNTIME_SECONDS:
                 raise TimeLimit("measured full-model speed misses the 48-hour end-to-end gate")
+            self.forecast_total_seconds = float(estimated_full_seconds)
+            self.forecast_token = secrets.token_hex(16)
+            self.status("baseline", "measured")
+            self._await_forecast_approval()
 
             full_manifest = self._build_manifest(
                 "full_resume", dataset_sha, remaining_updates, TARGET_ATTEMPTS, True
@@ -1229,6 +1347,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--holdout-sha256", required=True)
     parser.add_argument("--started-at-epoch", required=True, type=float)
     parser.add_argument("--budget-baseline", required=True, type=float)
+    parser.add_argument("--bootstrap-deadline-epoch", required=True, type=float)
     return parser.parse_args()
 
 
@@ -1243,8 +1362,11 @@ def main() -> int:
         or any(c not in "0123456789abcdef" for c in args.holdout_sha256)
         or not math.isfinite(args.started_at_epoch)
         or not math.isfinite(args.budget_baseline)
+        or not math.isfinite(args.bootstrap_deadline_epoch)
         or args.started_at_epoch <= 0
         or args.budget_baseline < 0
+        or args.bootstrap_deadline_epoch <= args.started_at_epoch
+        or args.bootstrap_deadline_epoch > args.started_at_epoch + MAX_RUNTIME_SECONDS
     ):
         return 2
     root = pathlib.Path(args.root)
@@ -1257,6 +1379,7 @@ def main() -> int:
         holdout_sha256=args.holdout_sha256,
         started_at_epoch=args.started_at_epoch,
         budget_baseline=args.budget_baseline,
+        bootstrap_deadline_epoch=args.bootstrap_deadline_epoch,
     )
     return supervisor.run()
 
