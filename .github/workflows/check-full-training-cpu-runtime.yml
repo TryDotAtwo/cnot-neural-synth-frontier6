@@ -63,8 +63,6 @@ jobs:
         working-directory: native
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
           cargo_json="$RUNNER_TEMP/cnot103-v13-cargo.json"
@@ -79,8 +77,6 @@ jobs:
         id: v13
         if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
         working-directory: native
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
@@ -103,8 +99,6 @@ jobs:
         working-directory: native
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
           cargo_json="$RUNNER_TEMP/cnot103-resume-cargo.json"
@@ -122,8 +116,6 @@ jobs:
         working-directory: native
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
           python3 ../.github/scripts/cnot_cpu_torch_ci.py run-tests \
@@ -136,8 +128,6 @@ jobs:
         id: compile_profile
         if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
         working-directory: native
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
@@ -155,8 +145,6 @@ jobs:
         id: profile
         if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
         working-directory: native
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
