@@ -72,6 +72,26 @@ class CpuTorchCiTests(unittest.TestCase):
         self.assertEqual(result["rustc_code"], "E0599")
         self.assertNotIn("compiler detail", json.dumps(result))
 
+    def test_nested_run_config_manifest_module_has_a_safe_area(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "code": {"code": "E0425"},
+                "message": "private compiler detail",
+                "spans": [
+                    {
+                        "file_name": "/runner/work/project/native/src/run_config/manifest/mod.rs",
+                        "line_start": 42,
+                        "is_primary": True,
+                    }
+                ],
+            },
+        }
+        result = compile_evidence(json.dumps(message), 101, "lib_test")
+        self.assertEqual(result["status"], "compile_failed_run_config_manifest")
+        self.assertNotIn("private compiler detail", json.dumps(result))
+
     def test_unresolved_name_without_a_source_span_has_a_safe_class(self):
         message = {
             "reason": "compiler-message",

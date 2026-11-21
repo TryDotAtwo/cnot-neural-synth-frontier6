@@ -43,13 +43,23 @@ def _area_for_span(span: dict[str, Any]) -> str:
         return "device_search"
     if "/run_config/execution/" in filename:
         return "run_config_execution"
-    if filename.endswith("/run_config/manifest.rs"):
+    if "/run_config/manifest/" in filename or filename.endswith("/run_config/manifest.rs"):
         return "run_config_manifest"
     if filename.endswith("/native/src/lib.rs") or filename == "src/lib.rs":
         return "crate_root"
     if filename.endswith("/native/build.rs") or filename == "build.rs":
         return "build_script"
-    if "/native/src/" in filename or filename.startswith("src/"):
+    if "/native/src/" in filename:
+        relative = filename.split("/native/src/", 1)[1]
+        top = relative.split("/", 1)[0]
+        if top in {"model", "objective", "nn_training", "training_session", "training_data", "frozen_data", "run_config"}:
+            return top
+        return "native_source_other"
+    if filename.startswith("src/"):
+        relative = filename.removeprefix("src/")
+        top = relative.split("/", 1)[0]
+        if top in {"model", "objective", "nn_training", "training_session", "training_data", "frozen_data", "run_config"}:
+            return top
         return "native_source_other"
     if "/.cargo/registry/" in filename or "/cargo/registry/" in filename:
         return "dependency_source"
