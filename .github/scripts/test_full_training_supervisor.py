@@ -353,7 +353,7 @@ class QualityComparisonTests(unittest.TestCase):
         }
 
     @staticmethod
-    def report(rows, *, search=None, panel="test"):
+    def report(rows, *, search=None, panel="test", head="qhat"):
         return {
             "schema": "cnot103_panel_search_result_v2",
             "panel": panel,
@@ -362,15 +362,15 @@ class QualityComparisonTests(unittest.TestCase):
             "feature_model_inputs": 102,
             "training_exposure_audit": {"strict_unseen": True},
             "search": training.BEAM_CONFIG if search is None else search,
-            "head": "qhat",
+            "head": head,
             "rows": rows,
         }
 
     def compare(self, baseline_rows, candidate_rows, *, baseline_search=None,
-                candidate_search=None):
+                candidate_search=None, baseline_head="qhat", candidate_head="qhat"):
         return training.compare_quality(
-            self.report(baseline_rows, search=baseline_search),
-            self.report(candidate_rows, search=candidate_search),
+            self.report(baseline_rows, search=baseline_search, head=baseline_head),
+            self.report(candidate_rows, search=candidate_search, head=candidate_head),
             expected_case_ids=["case-a", "case-b"],
             expected_panel="test",
             expected_panel_digest="a" * 64,
@@ -451,6 +451,122 @@ class QualityComparisonTests(unittest.TestCase):
         )
         self.assertEqual(mismatch["status"], "invalid")
         self.assertEqual(cost_mismatch["status"], "invalid")
+
+
+class BaselineGateTests(unittest.TestCase):
+    @staticmethod
+    def panel_report(*, solved_by_width, widths=None, invalid_replay=False):
+        widths = list(widths or sorted(solved_by_width))
+        rows = []
+        case_ids = []
+        panel_indices = []
+        index = 0
+        for width in widths:
+            solved_count = solved_by_width.get(width, 0)
+            for offset in range(2):
+                case_id = f"dev-n{width}-{offset}"
+                case_ids.append(case_id)
+                panel_indices.append(index)
+                identity = training._identity_packed_rows(width)
+                start = identity.copy()
+                start[1] ^= start[0]
+                solved = offset < solved_count
+                gate = [0, 1]
+                if invalid_replay and solved and not rows:
+                    gate = [0, 2]
+                rows.append({
+                    "case_id": case_id,
+                    "dimension": width,
+                    "width": width,
+                    "status": "solved" if solved else "depth_limit",
+                    "start_packed_rows": start,
+                    "end_packed_rows": identity if solved else None,
+                    "word": ({
+                        "replayed": True,
+                        "physical_cost": 1,
+                        "control_target": [gate],
+                    } if solved else None),
+                })
+                index += 1
+        return {
+            "schema": "cnot103_panel_search_result_v2",
+            "panel": "dev",
+            "panel_digest": training._panel_digest("dev", panel_indices, case_ids),
+            "panel_indices": panel_indices,
+            "panel_ids": case_ids,
+            "feature_model_inputs": 102,
+            "training_exposure_audit": {"strict_unseen": True},
+            "search": training.BEAM_CONFIG,
+            "head": "hamming",
+            "rows": rows,
+        }, case_ids, training._panel_digest("dev", panel_indices, case_ids)
+
+    def gate(self, report, case_ids, digest):
+        return training.evaluate_baseline_gate(
+            report,
+            expected_case_ids=case_ids,
+            expected_panel_digest=digest,
+            expected_search=training.BEAM_CONFIG,
+        )
+
+    def test_zero_solved_hamming_baseline_is_inconclusive(self):
+        report, case_ids, digest = self.panel_report(solved_by_width={})
+        result = self.gate(report, case_ids, digest)
+        self.assertEqual(result["status"], "inconclusive")
+
+    def test_trivial_hamming_baseline_below_frozen_solve_and_width_threshold_fails(self):
+        report, case_ids, digest = self.panel_report(
+            solved_by_width={10: 1, 13: 1}, widths=[10, 13]
+        )
+        result = self.gate(report, case_ids, digest)
+        self.assertEqual(result["status"], "failed")
+
+    def test_replay_invalid_hamming_baseline_is_rejected(self):
+        report, case_ids, digest = self.panel_report(
+            solved_by_width={10: 1}, widths=[10], invalid_replay=True
+        )
+        result = self.gate(report, case_ids, digest)
+        self.assertEqual(result["status"], "invalid")
+
+    def test_frozen_nontrivial_dev_baseline_passes(self):
+        widths = [10, 13, 16, 20, 24, 32, 40]
+        report, case_ids, digest = self.panel_report(
+            solved_by_width={width: 2 for width in widths}, widths=widths
+        )
+        result = self.gate(report, case_ids, digest)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["solved_count"], 14)
+        self.assertEqual(result["solved_width_count"], 7)
+
+    def test_hamming_baseline_and_qhat_candidate_pair_under_same_budget(self):
+        baseline = [self.solved_row("case-a", 3), self.unsolved_row("case-b")]
+        candidate = [self.solved_row("case-a", 1), self.solved_row("case-b", 1)]
+        result = QualityComparisonTests().compare(
+            baseline,
+            candidate,
+            baseline_head="hamming",
+            candidate_head="qhat",
+        )
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["paired_baseline_physical_cost"], 3)
+        self.assertEqual(result["paired_candidate_physical_cost"], 1)
+
+    def test_rejected_baseline_never_invokes_full_train_callback(self):
+        calls = []
+        with self.assertRaises(RunError):
+            training.train_after_baseline_gate(
+                {"status": "failed"},
+                lambda: calls.append("full_resume"),
+            )
+        self.assertEqual(calls, [])
+
+    @staticmethod
+    def solved_row(case_id, cost):
+        return QualityComparisonTests.solved(case_id, cost)
+
+    @staticmethod
+    def unsolved_row(case_id):
+        return QualityComparisonTests.unsolved(case_id)
 
 
 class CleanBootstrapTests(unittest.TestCase):

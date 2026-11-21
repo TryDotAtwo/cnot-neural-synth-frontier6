@@ -1,41 +1,24 @@
-name: CNOT full-training manifest checks
+name: CNOT full-training source and runtime checks
 
 on:
   push:
     branches:
       - codex/full-feature-train-workflow
     paths:
-      - .github/scripts/build_training_manifest.py
-      - .github/scripts/test_build_training_manifest.py
-      - .github/scripts/vast_full_training_controller.py
-      - .github/scripts/test_full_training_controller.py
-      - .github/scripts/run_full_training.py
-      - .github/scripts/test_full_training_supervisor.py
-      - .github/scripts/vast_rent_rebuild_dataset.py
-      - .github/scripts/test_vast_rent_rebuild_dataset.py
-      - .github/workflows/cnot-full-training-monitor.yml
-      - .github/workflows/vast-full-training.yml
-      - .github/workflows/vast-full-training-quote.yml
-      - .github/workflows/vast-rebuild-remote-dataset.yml
-      - .github/workflows/vast-authorized-2x3060-rebuild.yml
-      - .github/workflows/cnot-full-training-inventory.yml
-      - .github/paid-runs/2026-11-20-full-training.json
-      - .github/workflows/check-full-training-manifest.yml
-      - native/Cargo.toml
-      - native/src/device_search.rs
-      - native/src/device_search/**
-      - .github/workflows/validate-training-profile.yml
-      - native/src/bin/cnot103_validate_data.rs
-      - native/src/frozen_data.rs
-      - native/src/frozen_data/**
+      - '.github/scripts/**'
+      - '.github/training-profiles/**'
+      - '.github/workflows/**'
+      - 'native/**'
+      - Cargo.lock
+      - Cargo.toml
 
 permissions:
   contents: read
 
 jobs:
-  manifest:
+  source:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -50,36 +33,185 @@ jobs:
 
       - name: Validate the real CPU Rust loader on a clean synthetic fixture
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-cpu-target
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-source-target
           CNOT103_TEST_FIXTURE_PATH: ${{ runner.temp }}/cnot103-loader-fixture.json
         run: |
           set -euo pipefail
-          cargo test --manifest-path native/Cargo.toml --lib frozen_data::tests::export_cpu_validator_fixture_for_ci
-          cargo build --manifest-path native/Cargo.toml --bin cnot103-validate-data
-          fixture_sha256="$(cat "${CNOT103_TEST_FIXTURE_PATH%.json}.sha256")"
-          "${CARGO_TARGET_DIR}/debug/cnot103-validate-data" --test-fixture "$CNOT103_TEST_FIXTURE_PATH" "$fixture_sha256"
+          cargo test --locked --manifest-path native/Cargo.toml --lib frozen_data::tests::export_cpu_validator_fixture_for_ci
+          cargo build --locked --manifest-path native/Cargo.toml --bin cnot103-validate-data
+          fixture_sha256="$(cat "$RUNNER_TEMP/cnot103-loader-fixture.sha256")"
+          "$CARGO_TARGET_DIR/debug/cnot103-validate-data" --test-fixture "$CNOT103_TEST_FIXTURE_PATH" "$fixture_sha256"
 
-      - name: Test the training manifest contract
-        run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py' -v
-      - name: Test the full-run budget gate
-        run: python3 -m unittest discover -s .github/scripts -p 'test_full_training_controller.py' -v
-      - name: Test the existing Vast billing and ownership boundaries
-        run: python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
+      - name: Test source manifest, budget, ownership, supervisor, and quality gates
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_full_training_controller.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v
 
-      - name: Parse monitor, inventory, quote, rebuild, and training workflow YAML
-        run: ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' .github/workflows/cnot-full-training-monitor.yml .github/workflows/cnot-full-training-inventory.yml .github/workflows/vast-full-training-quote.yml .github/workflows/vast-rebuild-remote-dataset.yml .github/workflows/vast-authorized-2x3060-rebuild.yml .github/workflows/vast-full-training.yml
+      - name: Parse affected workflow YAML
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' \
+            .github/workflows/check-full-training-manifest.yml \
+            .github/workflows/validate-training-profile.yml \
+            .github/workflows/cnot-full-training-monitor.yml \
+            .github/workflows/cnot-full-training-inventory.yml \
+            .github/workflows/vast-full-training-quote.yml \
+            .github/workflows/vast-rebuild-remote-dataset.yml \
+            .github/workflows/vast-authorized-2x3060-rebuild.yml \
+            .github/workflows/vast-full-training.yml
 
+  cpu-torch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+      LIBTORCH_USE_PYTORCH: "1"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
 
-      - name: Test the compiled CUDA CNOT runtime on CPU tensors
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the pinned CPU PyTorch runtime for tch 0.22
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu 'torch==2.9.0'
+          torch_lib="$(python3 -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")')"
+          test -f "$torch_lib/libtorch_cpu.so"
+          echo "LD_LIBRARY_PATH=$torch_lib" >> "$GITHUB_ENV"
+
+      - name: Run the compiled v13 runtime on CPU tensors
+        working-directory: native
+        run: |
+          set -euo pipefail
+          runtime_log="$RUNNER_TEMP/cnot103-torch-runtime.log"
+          if ! cargo test --locked --features torch --lib device_search::runtime::tests >"$runtime_log" 2>&1; then
+            echo 'cpu_torch_runtime=failed'
+            exit 1
+          fi
+          for name in \
+            v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold \
+            v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution \
+            v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three \
+            v13_saturated_frontier_is_all_or_none_at_one_plus_b_minus_one_and_one_plus_b \
+            compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays \
+            compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle \
+            cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays; do
+            if ! grep -Fq "device_search::runtime::tests::$name: test" "$runtime_log"; then
+              echo 'cpu_torch_runtime=expected_test_missing'
+              exit 1
+            fi
+          done
+          if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed' "$runtime_log"; then
+            echo 'cpu_torch_runtime=no_passing_test_summary'
+            exit 1
+          fi
+          echo 'cpu_torch_runtime=passed'
+
+      - name: Validate the pinned 102-input profile with the real Rust parser
+        working-directory: native
+        run: |
+          set -euo pipefail
+          dataset="$RUNNER_TEMP/cnot103-parser-fixture.json"
+          manifest="$RUNNER_TEMP/cnot103-valid-manifest.json"
+          invalid="$RUNNER_TEMP/cnot103-invalid-manifest.json"
+          printf '{"schema":"cnot103_parser_smoke","records":[]}
+' >"$dataset"
+          dataset_sha="$(sha256sum "$dataset" | cut -d ' ' -f 1)"
+          python3 ../.github/scripts/build_training_manifest.py \
+            --profile ../.github/training-profiles/n10-test-support-v1.json \
+            --dataset-path "$dataset" \
+            --dataset-sha256 "$dataset_sha" \
+            --checkpoint-dir "$RUNNER_TEMP/cnot103-checkpoints" \
+            --attempts 1 --target-attempts 1 \
+            --output "$manifest" >"$RUNNER_TEMP/cnot103-manifest-builder.log" 2>&1
+          cargo build --locked --features torch --bin cnot103-validate-manifest \
+            >"$RUNNER_TEMP/cnot103-manifest-build.log" 2>&1
+          validator="$CARGO_TARGET_DIR/debug/cnot103-validate-manifest"
+          if ! "$validator" "$manifest" >"$RUNNER_TEMP/cnot103-manifest-valid.log" 2>&1; then
+            echo 'manifest_profile=rust_parser_rejected_pinned_profile'
+            exit 1
+          fi
+          if ! grep -Fq 'manifest_profile=valid' "$RUNNER_TEMP/cnot103-manifest-valid.log" \
+            || ! grep -Fq 'model_input_slots=102' "$RUNNER_TEMP/cnot103-manifest-valid.log"; then
+            echo 'manifest_profile=rust_parser_wrong_receipt'
+            exit 1
+          fi
+          python3 - "$manifest" "$invalid" <<'PY'
+          import json
+          import sys
+          source, target = sys.argv[1:]
+          with open(source, encoding="utf-8") as stream:
+              value = json.load(stream)
+          value["feature_policy"]["schema_id"] = ""
+          with open(target, "w", encoding="utf-8") as stream:
+              json.dump(value, stream)
+          PY
+          if "$validator" "$invalid" >"$RUNNER_TEMP/cnot103-manifest-invalid.log" 2>&1; then
+            echo 'manifest_profile=invalid_fixture_accepted'
+            exit 1
+          fi
+          echo 'manifest_profile=valid_102_slots_invalid_fixture_rejected'
+
+  cuda-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-cuda-target
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check Docker availability and runner disk
+        run: |
+          set -euo pipefail
+          if ! docker info >"$RUNNER_TEMP/cnot103-docker-info.log" 2>&1; then
+            echo 'cuda_build=docker_unavailable'
+            exit 1
+          fi
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          if [ -z "$available_kb" ] || [ "$available_kb" -lt 12582912 ]; then
+            echo 'cuda_build=insufficient_runner_disk'
+            exit 1
+          fi
+          echo 'cuda_build=docker_and_disk_ready'
+
+      - name: Pull the digest-pinned CUDA build image with a bounded timeout
+        run: |
+          set -euo pipefail
+          image='pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel@sha256:97ec2a667dd7560c615bf50a95b2fb85a673ae233a55da1706e8e04e6d6d518e'
+          if ! timeout --signal=TERM 25m docker pull "$image" >"$RUNNER_TEMP/cnot103-image-pull.log" 2>&1; then
+            result=container_pull_failed
+            if grep -Eiq 'timed out|timeout' "$RUNNER_TEMP/cnot103-image-pull.log"; then
+              result=container_pull_timeout
+            elif grep -Eiq 'toomanyrequests|429 too many requests|rate limit' "$RUNNER_TEMP/cnot103-image-pull.log"; then
+              result=container_registry_rate_limited
+            fi
+            echo "cuda_build=$result"
+            exit 1
+          fi
+          echo 'cuda_build=digest_pinned_image_ready'
+
+      - name: Verify toolchain and link all native CUDA binaries
         run: |
           set -euo pipefail
           cargo_home="$(dirname "$(dirname "$(command -v cargo)")")"
           rustup_home="$(rustup show home)"
-          if ! docker info >/dev/null 2>"$RUNNER_TEMP/cnot103-docker-info.stderr"; then
-            echo 'compiled_cnot_runtime=runner_docker_unavailable'
-            exit 1
-          fi
-          if ! docker run --rm \
+          image='pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel@sha256:97ec2a667dd7560c615bf50a95b2fb85a673ae233a55da1706e8e04e6d6d518e'
+          if ! docker run --pull=never --rm \
             --volume "$GITHUB_WORKSPACE:/workspace/project" \
             --volume "$RUNNER_TEMP:/runner_temp" \
             --volume "$cargo_home:/root/.cargo" \
@@ -87,62 +219,39 @@ jobs:
             --workdir /workspace/project/native \
             --env CARGO_HOME=/root/.cargo \
             --env RUSTUP_HOME=/root/.rustup \
-            --env PATH=/root/.cargo/bin:/usr/local/cuda/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            --env CARGO_TARGET_DIR=/runner_temp/cnot103-search-target \
+            --env PATH=/root/.cargo/bin:/opt/conda/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env CARGO_TARGET_DIR=/runner_temp/cnot103-cuda-target \
             --env CNOT103_CUDA_ARCHITECTURES=86 \
+            --env TORCH_CUDA_ARCH_LIST=8.6 \
             --env CUDA_HOME=/usr/local/cuda \
             --env LIBTORCH_USE_PYTORCH=1 \
-            --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
-            pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc '
-              if ! /root/.cargo/bin/cargo test --quiet --features cuda --lib device_search::runtime::tests \
-                >/runner_temp/cnot103-runtime-tests.stdout \
-                2>/runner_temp/cnot103-runtime-tests.stderr; then
-                if grep -Eq "test result: FAILED|panicked at|assertion .* failed" \
-                  /runner_temp/cnot103-runtime-tests.stdout /runner_temp/cnot103-runtime-tests.stderr; then
-                  echo runtime_regression_failed >/runner_temp/cnot103-runtime-status
-                else
-                  echo runtime_test_build_failed >/runner_temp/cnot103-runtime-status
-                fi
-                exit 1
+            "$image" bash -euc '
+              status=/runner_temp/cnot103-cuda-build.status
+              if ! command -v nvcc >/dev/null 2>&1 || ! command -v cmake >/dev/null 2>&1; then
+                echo toolchain_missing >"$status"
+                exit 11
               fi
-              if ! grep -Eq "test result: ok\. [1-9][0-9]* passed; 0 failed" \
-                /runner_temp/cnot103-runtime-tests.stdout /runner_temp/cnot103-runtime-tests.stderr; then
-                echo runtime_tests_not_executed >/runner_temp/cnot103-runtime-status
-                exit 1
+              if ! python -c "import pathlib, torch; assert torch.__version__.split('+')[0] == '2.9.0'; assert torch.version.cuda and torch.version.cuda.startswith('12.8'); p=pathlib.Path(torch.__file__).resolve().parent/'lib'; assert (p/'libtorch_cuda.so').is_file(); print(p)" > /runner_temp/cnot103-torch-lib.path 2>/dev/null; then
+                echo torch_abi_invalid >"$status"
+                exit 12
               fi
-              if ! /root/.cargo/bin/cargo build --quiet --features cuda --bin cnot103-search \
-                >/runner_temp/cnot103-search-build.stdout \
-                2>/runner_temp/cnot103-search-build.stderr; then
-                echo compiled_build_failed >/runner_temp/cnot103-runtime-status
-                exit 1
+              torch_lib="$(cat /runner_temp/cnot103-torch-lib.path)"
+              export LD_LIBRARY_PATH="$torch_lib:/usr/local/cuda/lib64"
+              if ! cargo build --locked --features cuda --bins >/runner_temp/cnot103-cuda-cargo.log 2>&1; then
+                echo cargo_cuda_build_failed >"$status"
+                exit 13
               fi
-              echo compiled_runtime_passed >/runner_temp/cnot103-runtime-status
-            ' \
-            >"$RUNNER_TEMP/cnot103-search.stdout" \
-            2>"$RUNNER_TEMP/cnot103-search.stderr"; then
-            runtime_status="$(cat "$RUNNER_TEMP/cnot103-runtime-status" 2>/dev/null || true)"
-            case "$runtime_status" in
-              runtime_regression_failed) echo 'compiled_cnot_runtime=regression_failed' ;;
-              runtime_test_build_failed) echo 'compiled_cnot_runtime=test_build_failed' ;;
-              runtime_tests_not_executed) echo 'compiled_cnot_runtime=no_tests_executed' ;;
-              compiled_build_failed) echo 'compiled_cnot_runtime=compiled_build_failed' ;;
-              runtime_test_passed) echo 'compiled_cnot_runtime=passed' ;;
-              *)
-                if grep -Eiq 'toomanyrequests|429 too many requests|rate limit exceeded' "$RUNNER_TEMP/cnot103-search.stderr"; then
-                  echo 'compiled_cnot_runtime=container_registry_rate_limited'
-                elif grep -Eiq 'Unable to find image|pull access denied|manifest unknown|no matching manifest|failed to resolve reference' "$RUNNER_TEMP/cnot103-search.stderr"; then
-                  echo 'compiled_cnot_runtime=container_image_unavailable'
-                elif grep -Eiq 'TLS handshake timeout|i/o timeout|connection reset|temporary failure in name resolution|network is unreachable' "$RUNNER_TEMP/cnot103-search.stderr"; then
-                  echo 'compiled_cnot_runtime=container_registry_transport_failed'
-                else
-                  echo 'compiled_cnot_runtime=execution_failed'
-                fi
-                ;;
+              echo cuda_bins_built >"$status"
+            ' >"$RUNNER_TEMP/cnot103-cuda-container.log" 2>&1; then
+            result="$(cat "$RUNNER_TEMP/cnot103-cuda-build.status" 2>/dev/null || true)"
+            case "$result" in
+              toolchain_missing) echo 'cuda_build=nvcc_or_cmake_missing' ;;
+              torch_abi_invalid) echo 'cuda_build=pytorch_abi_mismatch' ;;
+              cargo_cuda_build_failed) echo 'cuda_build=native_cuda_compile_failed' ;;
+              cuda_bins_built) echo 'cuda_build=passed' ;;
+              *) echo 'cuda_build=container_execution_failed' ;;
             esac
             exit 1
           fi
-          echo 'compiled_cnot_runtime=passed'
+          echo 'cuda_build=native_bins_linked'
 
-      - name: Test the remote supervisor acceptance gates
-        run: python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v
