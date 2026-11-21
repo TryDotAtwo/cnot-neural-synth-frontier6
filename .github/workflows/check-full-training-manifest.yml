@@ -15,6 +15,9 @@ on:
       - .github/scripts/test_vast_rent_rebuild_dataset.py
       - .github/workflows/cnot-full-training-monitor.yml
       - .github/workflows/vast-full-training.yml
+      - .github/workflows/vast-full-training-quote.yml
+      - .github/workflows/vast-rebuild-remote-dataset.yml
+      - .github/workflows/vast-authorized-2x3060-rebuild.yml
       - .github/workflows/cnot-full-training-inventory.yml
       - .github/paid-runs/2026-11-20-full-training.json
       - .github/workflows/check-full-training-manifest.yml
@@ -60,8 +63,8 @@ jobs:
       - name: Test the existing Vast billing and ownership boundaries
         run: python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
 
-      - name: Parse monitor, inventory, and paid-run workflow YAML
-        run: ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' .github/workflows/cnot-full-training-monitor.yml .github/workflows/cnot-full-training-inventory.yml .github/workflows/vast-full-training.yml
+      - name: Parse monitor, inventory, quote, rebuild, and training workflow YAML
+        run: ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' .github/workflows/cnot-full-training-monitor.yml .github/workflows/cnot-full-training-inventory.yml .github/workflows/vast-full-training-quote.yml .github/workflows/vast-rebuild-remote-dataset.yml .github/workflows/vast-authorized-2x3060-rebuild.yml .github/workflows/vast-full-training.yml
 
       - name: Test the remote supervisor acceptance gates
         run: python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v

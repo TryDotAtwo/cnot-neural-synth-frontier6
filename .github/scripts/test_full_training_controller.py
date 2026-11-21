@@ -509,7 +509,9 @@ class NewRentalBudgetDiagnosisTests(unittest.TestCase):
             "num_gpus": 2,
             "dph_total": 0.30,
             "storage_cost": 0.15,
-            "allocated_storage": 64,
+            "_quote_allocated_storage_gb": 64,
+            "_quote_min_duration_seconds": controller.base.MIN_OFFER_DURATION_SECONDS,
+            "disk_space": 512,
         }
         row.update(updates)
         return row
@@ -552,20 +554,20 @@ class NewRentalBudgetDiagnosisTests(unittest.TestCase):
         )
         self.assertEqual(
             controller.classify_new_rental_budget(
-                [self.offer(allocated_storage=None)], [], spent=0.0
+                [self.offer(_quote_allocated_storage_gb=None)], [], spent=0.0
             ),
             "inputs_unknown",
         )
         self.assertEqual(
             controller.classify_new_rental_budget(
-                [self.offer(allocated_storage=32)], [], spent=0.0
+                [self.offer(_quote_allocated_storage_gb=32)], [], spent=0.0
             ),
             "inputs_unknown",
         )
 
     def test_offer_without_allocation_echo_uses_pinned_search_contract(self):
         offer = self.offer()
-        del offer["allocated_storage"]
+        self.assertNotIn("allocated_storage", offer)
         self.assertEqual(
             controller.classify_new_rental_budget([offer], [], spent=0.0),
             "within_cap",
@@ -577,16 +579,109 @@ class NewRentalBudgetDiagnosisTests(unittest.TestCase):
             "no_eligible_offer",
         )
 
-    def test_missing_target_budget_path_is_get_only(self):
+
+    def test_full_run_exact_20_dollar_boundary_and_one_cent_over(self):
         offer = self.offer()
+        storage_hourly = controller._offer_storage_hourly_cost(offer)
+        self.assertIsNotNone(storage_hourly)
+        projected = (
+            offer["dph_total"] * (controller.ACTIVE_HOURS + controller.base.STOP_RESERVE_HOURS)
+            + storage_hourly * controller.STORAGE_HOURS
+            + controller.base.TRANSFER_RESERVE
+        )
+        exact_spend = controller.BUDGET_CAP - projected
+        self.assertEqual(
+            controller.classify_new_rental_budget([offer], [], spent=exact_spend),
+            "within_cap",
+        )
+        self.assertEqual(
+            controller.classify_new_rental_budget([offer], [], spent=exact_spend + 0.01),
+            "insufficient_remaining_budget",
+        )
+
+    def test_invalid_allocated_storage_marker_makes_offer_price_unknown(self):
+        for allocated in (None, 32, 64.5):
+            with self.subTest(allocated=allocated):
+                offer = self.offer(_quote_allocated_storage_gb=allocated)
+                self.assertEqual(
+                    controller.classify_new_rental_budget([offer], [], spent=0.0),
+                    "inputs_unknown",
+                )
+
+    def test_quote_check_separates_negative_full_projection_from_pilot(self):
+        import io
+        from contextlib import redirect_stdout
+
+        offer = self.offer(dph_total=0.50)
+        output = io.StringIO()
+        with (
+            patch.object(controller.base, "instance_rows", return_value=[]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller.base, "offer_quote", return_value=(False, [offer])),
+            patch.object(controller.base, "api_instance_id") as update,
+            patch.object(controller.base, "create_once") as create,
+            patch.object(controller.base, "stop_exact_label") as stop,
+            redirect_stdout(output),
+        ):
+            result = controller.quote_check()
+
+        self.assertEqual(result, 0)
+        text = output.getvalue()
+        self.assertIn("quote_outcome=negative_classification", text)
+        self.assertIn("full_run_budget=run_projection_exceeds_cap", text)
+        self.assertIn("bounded_pilot_budget=within_cap", text)
+        update.assert_not_called()
+        create.assert_not_called()
+        stop.assert_not_called()
+
+    def test_quote_check_distinguishes_empty_market_no_eligible_and_unknown(self):
+        import io
+        from contextlib import redirect_stdout
+
+        for quote, expected in (
+            ((True, []), "quote_outcome=empty_market"),
+            ((False, []), "quote_outcome=negative_classification"),
+        ):
+            output = io.StringIO()
+            with (
+                patch.object(controller.base, "instance_rows", return_value=[]),
+                patch.object(controller.base, "project_charges", return_value=0.0),
+                patch.object(controller.base, "offer_quote", return_value=quote),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(controller.quote_check(), 0)
+            self.assertIn(expected, output.getvalue())
+
+        output = io.StringIO()
+        with (
+            patch.object(controller.base, "instance_rows", return_value=[]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller.base, "offer_quote", side_effect=controller.base.GateError("unknown")),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(controller.quote_check(), 1)
+        self.assertIn("quote_outcome=inputs_unknown", output.getvalue())
+
+        output = io.StringIO()
+        with (
+            patch.object(controller.base, "instance_rows", return_value=[]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller.base, "offer_quote", side_effect=controller.base.TransportFailure("transport")),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(controller.quote_check(), 1)
+        self.assertIn("quote_outcome=transport_error", output.getvalue())
+
+    def test_missing_target_budget_path_is_get_only_and_never_quotes(self):
         with (
             patch.dict(os.environ, {}, clear=True),
             patch.object(controller, "_marker", return_value={
                 "resume_existing_label": "cnot103-r10k-123-a1",
             }),
             patch.object(controller.base, "instance_rows", return_value=[]),
-            patch.object(controller.base, "project_charges", return_value=0.0),
-            patch.object(controller.base, "offer_inventory", return_value=[offer]) as offers,
+            patch.object(controller.base, "project_charges") as charges,
+            patch.object(controller.base, "offer_inventory") as offers,
+            patch.object(controller.base, "offer_quote") as quote,
             patch.object(controller, "_summarize_budget") as summarize,
             patch.object(controller.base, "api_instance_id") as update,
             patch.object(controller.base, "create_once") as create,
@@ -594,10 +689,12 @@ class NewRentalBudgetDiagnosisTests(unittest.TestCase):
         ):
             self.assertEqual(controller.budget_check(), 0)
 
-        offers.assert_called_once()
+        charges.assert_not_called()
+        offers.assert_not_called()
+        quote.assert_not_called()
         self.assertEqual(
             summarize.call_args.args[1:],
-            ("success", "within_cap", "within_cap"),
+            ("success", "configuration_missing", "configuration_missing"),
         )
         update.assert_not_called()
         create.assert_not_called()
@@ -992,8 +1089,14 @@ class StableApprovedTargetTests(unittest.TestCase):
             / "workflows"
             / "vast-full-training.yml"
         ).read_text(encoding="utf-8")
-        self.assertTrue("concurrency:\n  group:" in workflow)
+        self.assertIn("group: cnot103-existing-2x3060-target", workflow)
         self.assertTrue("cancel-in-progress: false" in workflow)
+        for relative in ("vast-rebuild-remote-dataset.yml", "vast-authorized-2x3060-rebuild.yml"):
+            shared = Path(__file__).resolve().parents[1] / "workflows" / relative
+            self.assertIn(
+                "group: cnot103-existing-2x3060-target",
+                shared.read_text(encoding="utf-8"),
+            )
         self.assertTrue("timeout-minutes: 300" in workflow)
         self.assertTrue("  finalize:\n    if: always()" in workflow)
         self.assertFalse("needs.start.outputs.cleanup_needed" in workflow)

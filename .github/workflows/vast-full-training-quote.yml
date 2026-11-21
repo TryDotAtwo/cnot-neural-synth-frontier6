@@ -1,0 +1,36 @@
+name: CNOT read-only Vast quote
+run-name: Read-only 2x3060 offer quote
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/full-feature-train-workflow
+    paths:
+      - .github/diagnostics/cnot-full-training-quote.json
+
+permissions:
+  contents: read
+
+jobs:
+  quote:
+    if: github.repository == 'TryDotAtwo/cnot-neural-synth-frontier6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the pinned quote source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Vast CLI for historical charges
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          cli_venv="$RUNNER_TEMP/vast-readonly-venv"
+          python3 -m venv "$cli_venv"
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai==1.11.2
+          echo "$cli_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Query offers and classify the budget without changing resources
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python3 .github/scripts/vast_full_training_controller.py quote-check

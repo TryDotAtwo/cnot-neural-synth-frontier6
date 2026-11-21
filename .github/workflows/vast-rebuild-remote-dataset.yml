@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tqp-remote-dataset-rebuild
+  group: cnot103-existing-2x3060-target
   cancel-in-progress: false
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           cli_venv="$RUNNER_TEMP/vast-cli-venv"
           python3 -m venv "$cli_venv"
-          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai==1.11.2
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify pinned holdout metadata before Vast access

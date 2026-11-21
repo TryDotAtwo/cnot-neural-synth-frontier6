@@ -23,7 +23,6 @@ import vast_rent_rebuild_dataset as base
 BUDGET_CAP = 20.0
 ACTIVE_HOURS = 48.0
 STORAGE_HOURS = 168.0
-DISK_GB = 64
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 MAX_STOP_SECONDS = 300
 BUDGET_POLL_SECONDS = 5 * 60
@@ -218,7 +217,7 @@ def _marker() -> dict:
         or value.get("schema") != "cnot103_full_training_v1"
         or value.get("max_total_usd") != BUDGET_CAP
         or value.get("max_active_hours") != ACTIVE_HOURS
-        or value.get("disk_gb") != DISK_GB
+        or value.get("disk_gb") != base.DISK_GB
         or value.get("preserve_remote_disk") is not True
     ):
         raise GateError("paid-run marker does not match the full-run contract")
@@ -668,22 +667,60 @@ def _start_target(
 
 
 def _offer_storage_hourly_cost(row: object) -> float | None:
-    """Convert the offer's monthly per-GB tariff for the requested 64 GB disk."""
+    """Convert the quoted $/GB/month tariff using the exact request allocation."""
     if not isinstance(row, dict):
         return None
     monthly_per_gb = _finite(row.get("storage_cost"))
-    if "allocated_storage" in row:
-        disk_gb = _finite(row.get("allocated_storage"))
-        if disk_gb is None or disk_gb != DISK_GB:
-            return None
-    else:
-        # base.offer_inventory() queries allocated_storage=64, and the create
-        # request pins --disk 64. The offers API may omit the echoed request.
-        disk_gb = float(DISK_GB)
-    if monthly_per_gb is None or monthly_per_gb < 0:
+    disk_gb = _finite(row.get("_quote_allocated_storage_gb"))
+    duration = _finite(row.get("_quote_min_duration_seconds"))
+    if (
+        monthly_per_gb is None or monthly_per_gb < 0
+        or disk_gb != base.DISK_GB
+        or duration != base.MIN_OFFER_DURATION_SECONDS
+    ):
         return None
     hourly = monthly_per_gb * disk_gb / 720.0
     return hourly if math.isfinite(hourly) else None
+
+
+def _other_project_reserve(
+    rows: object,
+    exclude_id: int | None,
+    active_hours: object,
+) -> float | None:
+    if not isinstance(rows, list):
+        return None
+    active = _finite(active_hours)
+    if active is None or active < 0:
+        return None
+    active_states = {
+        "running", "starting", "stopping", "scheduling", "loading",
+        "created", "offline", "error",
+    }
+    stopped_states = {"stopped", "exited"}
+    total = 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        ident = base.instance_id(row)
+        label = str(row.get("label") or "").casefold()
+        if not (label.startswith("cnot103") or ident in base.OWNED_INSTANCE_IDS):
+            continue
+        if ident is not None and ident == exclude_id:
+            continue
+        storage_tail = _storage_reserve_for_row(row)
+        if storage_tail is None:
+            return None
+        state = base.probe.observed_state(row)
+        if state in active_states:
+            rate = _finite(row.get("dph_total"))
+            if rate is None or rate < 0:
+                return None
+            total += rate * (active + base.STOP_RESERVE_HOURS)
+        elif state not in stopped_states:
+            return None
+        total += storage_tail
+    return total if math.isfinite(total) else None
 
 
 def classify_new_rental_budget(
@@ -692,14 +729,14 @@ def classify_new_rental_budget(
     spent: object,
     active_hours: object = ACTIVE_HOURS,
 ) -> str:
-    """Classify a GET-only new-rental projection without exposing prices."""
+    """Classify an exact read-only quote without exposing prices or offer IDs."""
     if not isinstance(offers, list) or not isinstance(rows, list):
         return "inputs_unknown"
     if not offers:
         return "no_eligible_offer"
     spend_value = _finite(spent)
     active = _finite(active_hours)
-    extra = _other_storage_reserve(rows, exclude_id=None)
+    extra = _other_project_reserve(rows, exclude_id=None, active_hours=active)
     if (
         spend_value is None or spend_value < 0 or active is None or active < 0
         or extra is None or extra < 0
@@ -719,11 +756,12 @@ def classify_new_rental_budget(
             saw_unknown_offer = True
             continue
         saw_valid_offer = True
+        reserved_active = active + base.STOP_RESERVE_HOURS
         if full_run_budget_allows(
             spend_value,
             rate,
             storage_hourly,
-            active_hours=active,
+            active_hours=reserved_active,
             extra_storage_reserve=extra,
         ):
             return "within_cap"
@@ -731,7 +769,7 @@ def classify_new_rental_budget(
             0.0,
             rate,
             storage_hourly,
-            active_hours=active,
+            active_hours=reserved_active,
             extra_storage_reserve=extra,
         ):
             fits_without_prior_spend = True
@@ -754,7 +792,7 @@ def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     rate = _finite(row.get("dph_total"))
     storage_hourly = _finite(row.get("storage_cost"))
     storage_reserve = _storage_reserve_for_row(row)
-    extra = _other_storage_reserve(rows, ident) if isinstance(rows, list) and ident else None
+    extra = _other_project_reserve(rows, ident, ACTIVE_HOURS) if isinstance(rows, list) and ident else None
     if (
         ident is None or spend_value is None or rate is None or storage_hourly is None
         or storage_reserve is None or extra is None or spend_value < 0 or rate < 0
@@ -762,11 +800,19 @@ def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     ):
         return "inputs_unknown"
     if full_run_budget_allows(
-        spend_value, rate, storage_hourly, extra_storage_reserve=extra
+        spend_value,
+        rate,
+        storage_hourly,
+        active_hours=ACTIVE_HOURS + base.STOP_RESERVE_HOURS,
+        extra_storage_reserve=extra,
     ):
         return "within_cap"
     if full_run_budget_allows(
-        0.0, rate, storage_hourly, extra_storage_reserve=extra
+        0.0,
+        rate,
+        storage_hourly,
+        active_hours=ACTIVE_HOURS + base.STOP_RESERVE_HOURS,
+        extra_storage_reserve=extra,
     ):
         return "insufficient_remaining_budget"
     return "run_projection_exceeds_cap"
@@ -788,7 +834,7 @@ def classify_bootstrap_budget(
     rate = _finite(row.get("dph_total"))
     storage_hourly = _finite(row.get("storage_cost"))
     storage_reserve = _storage_reserve_for_row(row)
-    extra = _other_storage_reserve(rows, ident) if isinstance(rows, list) and ident else None
+    extra = _other_project_reserve(rows, ident, active_hours) if isinstance(rows, list) and ident else None
     active = _finite(active_hours)
     if (
         ident is None or spend_value is None or rate is None or storage_hourly is None
@@ -813,11 +859,12 @@ def classify_bootstrap_budget(
 def _validate_running_budget(
     row: dict, spend: float, rows: list[dict], exclude_id: int | None = None
 ) -> bool:
-    extra = _other_storage_reserve(rows, exclude_id)
+    extra = _other_project_reserve(rows, exclude_id, ACTIVE_HOURS)
     return extra is not None and full_run_budget_allows(
         spend,
         row.get("dph_total"),
         row.get("storage_cost"),
+        active_hours=ACTIVE_HOURS + base.STOP_RESERVE_HOURS,
         extra_storage_reserve=extra,
     )
 
@@ -829,7 +876,7 @@ def _validate_bootstrap_budget(
     exclude_id: int | None = None,
     active_hours: float = BOOTSTRAP_HOURS,
 ) -> bool:
-    extra = _other_storage_reserve(rows, exclude_id)
+    extra = _other_project_reserve(rows, exclude_id, active_hours)
     return (
         _storage_reserve_for_row(row) is not None
         and extra is not None
@@ -1394,7 +1441,7 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     return result_code
 
 def budget_check() -> int:
-    """Read-only, redacted classification for the full-run target or rental offers."""
+    """GET-only classification for the specifically approved existing target."""
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome = "failed"
     budget_status = "unavailable"
@@ -1418,12 +1465,8 @@ def budget_check() -> int:
             )
             if owned_3060:
                 raise
-            spend = base.project_charges()
-            offers = base.offer_inventory()
-            budget_status = classify_new_rental_budget(offers, rows, spend)
-            bootstrap_status = classify_new_rental_budget(
-                offers, rows, spend, active_hours=BOOTSTRAP_HOURS
-            )
+            # Market quotes use the separate quote-check mode and workflow.
+            budget_status = bootstrap_status = "configuration_missing"
         else:
             if target is None:
                 budget_status = bootstrap_status = "target_missing"
@@ -1450,6 +1493,82 @@ def budget_check() -> int:
         outcome, budget_status, bootstrap_status = "failed", "unavailable", "unavailable"
     _summarize_budget(checked, outcome, budget_status, bootstrap_status)
     return 0 if outcome == "success" else 1
+
+
+def _summarize_quote(
+    checked: str, outcome: str, full_run: str, pilot: str
+) -> None:
+    allowed_outcomes = {
+        "within_cap", "negative_classification", "empty_market",
+        "inputs_unknown", "transport_error",
+    }
+    allowed_statuses = {
+        "within_cap", "insufficient_remaining_budget",
+        "run_projection_exceeds_cap", "no_eligible_offer",
+        "inputs_unknown", "unavailable",
+    }
+    if outcome not in allowed_outcomes:
+        outcome = "inputs_unknown"
+    if full_run not in allowed_statuses:
+        full_run = "unavailable"
+    if pilot not in allowed_statuses:
+        pilot = "unavailable"
+    print(f"checked_at={checked}")
+    print(f"quote_outcome={outcome}")
+    print(f"full_run_budget={full_run}")
+    print(f"bounded_pilot_budget={pilot}")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(
+                    "## Read-only Vast offer quote\n"
+                    f"- checked_at: {checked}\n"
+                    f"- quote_outcome: {outcome}\n"
+                    f"- full_run_budget: {full_run}\n"
+                    f"- bounded_pilot_budget: {pilot}\n"
+                )
+        except OSError:
+            pass
+
+
+def quote_check() -> int:
+    """Read-only market quote and total-project budget classification."""
+    checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    outcome = "inputs_unknown"
+    full_run = pilot = "unavailable"
+    try:
+        rows = base.instance_rows()
+        spend = base.project_charges()
+        market_empty, offers = base.offer_quote()
+        if market_empty:
+            outcome = "empty_market"
+            full_run = pilot = "no_eligible_offer"
+        else:
+            full_run = classify_new_rental_budget(
+                offers, rows, spend, active_hours=ACTIVE_HOURS
+            )
+            pilot = classify_new_rental_budget(
+                offers, rows, spend, active_hours=BOOTSTRAP_HOURS
+            )
+            if "inputs_unknown" in {full_run, pilot}:
+                outcome = "inputs_unknown"
+            elif full_run == "within_cap":
+                outcome = "within_cap"
+            else:
+                outcome = "negative_classification"
+    except base.TransportFailure:
+        outcome = "transport_error"
+    except base.probe.ApiFailure as exc:
+        outcome = "transport_error" if exc.status is None or exc.status >= 500 or exc.status == 429 else "inputs_unknown"
+    except (GateError, base.GateError):
+        outcome = "inputs_unknown"
+    except Exception:
+        outcome = "inputs_unknown"
+    _summarize_quote(checked, outcome, full_run, pilot)
+    return 0 if outcome in {
+        "within_cap", "negative_classification", "empty_market"
+    } else 1
 
 
 
@@ -1658,7 +1777,7 @@ def _summarize_budget(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("start", "monitor", "cleanup", "budget-check"))
+    parser.add_argument("mode", choices=("start", "monitor", "cleanup", "budget-check", "quote-check"))
     parser.add_argument("--window-seconds", type=int, default=MONITOR_SECONDS)
     args = parser.parse_args()
     if args.mode == "start":
@@ -1667,6 +1786,8 @@ def main() -> int:
         return monitor(args.window_seconds)
     if args.mode == "cleanup":
         return cleanup()
+    if args.mode == "quote-check":
+        return quote_check()
     return budget_check()
 
 

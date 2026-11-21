@@ -19,7 +19,7 @@ import vast_probe_existing_2x3060 as probe  # noqa: E402
 import vast_rebuild_remote_dataset as dataset  # noqa: E402
 
 IMAGE = "pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel"
-DISK_GB = "64"
+DISK_GB = 64
 BUDGET_CAP = 20.0
 # This workflow rebuilds the dataset only; reserve its bounded 3h window, not future training.
 RUN_HOURS = 3.0
@@ -27,10 +27,14 @@ TRANSFER_RESERVE = 0.25  # only redacted status traffic; artifacts stay on Vast
 STOPPED_STORAGE_HOURS = 168.0
 MIN_RELIABILITY = 0.95
 MIN_GPU_MEMORY_MB = 12_000
-MIN_COMPUTE_CAPABILITY = 8.6
+MIN_COMPUTE_CAPABILITY = 860
+MIN_CUDA_VERSION = 12.8
 MAX_LABEL_WAIT_SECONDS = 1_200
 MAX_INSTANCE_START_SECONDS = 900
 MAX_STOP_SECONDS = 300
+BUDGET_POLL_SECONDS = 300
+STOP_RESERVE_HOURS = (MAX_STOP_SECONDS + BUDGET_POLL_SECONDS) / 3600.0
+MIN_OFFER_DURATION_SECONDS = int((48.0 + STOP_RESERVE_HOURS) * 3600.0)
 ALLOWED_OUTCOMES = {
     "accepted", "configuration_missing", "run_identity_invalid",
     "label_collision", "existing_2x3060_present", "offer_gate",
@@ -42,6 +46,10 @@ ALLOWED_OUTCOMES = {
 OWNED_INSTANCE_IDS = probe.OWNED_INSTANCE_IDS
 
 class GateError(RuntimeError):
+    pass
+
+
+class TransportFailure(GateError):
     pass
 
 
@@ -73,65 +81,160 @@ def budget_allows(spent: object, rate: object, run_hours: object = RUN_HOURS,
     return spent_value + rate_value * hours_value + reserve_value <= BUDGET_CAP + 1e-9
 
 
-def total_reserve(storage_cost: object) -> float | None:
-    monthly = finite_number(storage_cost)
-    if monthly is None or monthly < 0:
+def offer_storage_after_stop_reserve(
+    storage_cost_per_gb_month: object,
+    allocated_storage_gb: object = DISK_GB,
+) -> float | None:
+    monthly = finite_number(storage_cost_per_gb_month)
+    disk_gb = finite_number(allocated_storage_gb)
+    if (
+        monthly is None or disk_gb is None or monthly < 0
+        or disk_gb != DISK_GB
+    ):
         return None
-    stopped_storage = monthly * float(DISK_GB) * STOPPED_STORAGE_HOURS / 720.0
-    return TRANSFER_RESERVE + stopped_storage
+    return monthly * disk_gb * STOPPED_STORAGE_HOURS / 720.0
+
+
+def instance_storage_after_stop_reserve(
+    storage_cost_per_hour: object,
+    hours: object = STOPPED_STORAGE_HOURS,
+) -> float | None:
+    hourly = finite_number(storage_cost_per_hour)
+    reserve_hours = finite_number(hours)
+    if (
+        hourly is None or reserve_hours is None
+        or hourly < 0 or reserve_hours < 0
+    ):
+        return None
+    return hourly * reserve_hours
+
+
+def total_reserve(
+    storage_cost_per_gb_month: object,
+    allocated_storage_gb: object = DISK_GB,
+) -> float | None:
+    stopped_storage = offer_storage_after_stop_reserve(
+        storage_cost_per_gb_month, allocated_storage_gb
+    )
+    return None if stopped_storage is None else TRANSFER_RESERVE + stopped_storage
 
 
 def existing_rebuild_budget_allows(row: object, spent: object) -> bool:
     if not isinstance(row, dict):
         return False
-    reserve = total_reserve(row.get("storage_cost"))
+    stopped_storage = instance_storage_after_stop_reserve(row.get("storage_cost"))
+    if stopped_storage is None:
+        return False
     return budget_allows(
         spent,
         row.get("dph_total"),
-        run_hours=3.0,
-        reserve=reserve,
+        run_hours=RUN_HOURS + STOP_RESERVE_HOURS,
+        reserve=TRANSFER_RESERVE + stopped_storage,
     )
 
 
-def eligible_offers(rows: object) -> list[dict]:
+def offer_search_payload() -> dict:
+    """Exact read-only quote contract; allocated_storage controls price and create size."""
+    return {
+        "limit": 100,
+        "type": "on-demand",
+        "verified": {"eq": True},
+        "rentable": {"eq": True},
+        "rented": {"eq": False},
+        "gpu_name": {"eq": "RTX_3060"},
+        "num_gpus": {"eq": 2},
+        "gpu_ram": {"gte": MIN_GPU_MEMORY_MB},
+        "compute_cap": {"gte": MIN_COMPUTE_CAPABILITY},
+        "cuda_max_good": {"gte": MIN_CUDA_VERSION},
+        "reliability": {"gte": MIN_RELIABILITY},
+        "direct_port_count": {"gte": 1},
+        "disk_space": {"gte": DISK_GB},
+        "duration": {"gte": MIN_OFFER_DURATION_SECONDS},
+        "allocated_storage": DISK_GB,
+    }
+
+
+def eligible_offers(rows: object, query: object | None = None) -> list[dict]:
     if not isinstance(rows, list):
         raise GateError("offer inventory has an unknown shape")
+    contract = offer_search_payload() if query is None else query
+    if not isinstance(contract, dict):
+        raise GateError("offer quote request has an unknown shape")
+    allocated_storage = finite_number(contract.get("allocated_storage"))
+    duration_filter = contract.get("duration")
+    min_duration = (
+        finite_number(duration_filter.get("gte"))
+        if isinstance(duration_filter, dict) else None
+    )
+    if (
+        allocated_storage != DISK_GB
+        or min_duration != MIN_OFFER_DURATION_SECONDS
+    ):
+        raise GateError("offer quote does not pin the approved disk and duration")
+
     eligible = []
+    required = (
+        "gpu_name", "num_gpus", "gpu_ram", "compute_cap", "cuda_max_good",
+        "duration", "disk_space", "reliability", "rentable", "rented",
+        "direct_port_count", "dph_total", "storage_cost",
+    )
     for row in rows:
         if not isinstance(row, dict):
-            continue
+            raise GateError("offer inventory has an unknown row")
+        if any(key not in row or row.get(key) is None for key in required):
+            raise GateError("offer quote inputs are incomplete")
+        if not any(row.get(key) is not None for key in ("verified", "verification")):
+            raise GateError("offer verification input is incomplete")
+        if not any(row.get(key) is not None for key in ("ask_id", "ask_contract_id", "id", "offer_id")):
+            raise GateError("offer identity input is incomplete")
         gpu_name = str(row.get("gpu_name") or "").casefold().replace("_", "").replace(" ", "")
         gpu_count = finite_number(row.get("num_gpus"))
         memory = finite_number(row.get("gpu_ram"))
         capability = finite_number(row.get("compute_cap"))
+        cuda_max = finite_number(row.get("cuda_max_good"))
+        duration = finite_number(row.get("duration"))
+        capacity = finite_number(row.get("disk_space"))
         reliability = finite_number(row.get("reliability"))
         rate = finite_number(row.get("dph_total"))
         storage_cost = finite_number(row.get("storage_cost"))
         ports = finite_number(row.get("direct_port_count"))
-        offer_id = row.get("ask_id") or row.get("id") or row.get("offer_id")
+        offer_id = row.get("ask_id") or row.get("ask_contract_id") or row.get("id") or row.get("offer_id")
         offer_id_text = str(offer_id)
         verified = row.get("verified")
+        if verified is None:
+            verified = row.get("verification")
+        verified_ok = truth(verified) or (
+            isinstance(verified, str) and verified.strip().casefold() == "verified"
+        )
         checks = (
             "rtx3060" in gpu_name and "rtx3060ti" not in gpu_name,
             gpu_count == 2,
             memory is not None and memory >= MIN_GPU_MEMORY_MB,
             capability is not None and capability >= MIN_COMPUTE_CAPABILITY,
+            cuda_max is not None and cuda_max >= MIN_CUDA_VERSION,
+            duration is not None and duration >= MIN_OFFER_DURATION_SECONDS,
+            capacity is not None and capacity >= DISK_GB,
             reliability is not None and reliability >= MIN_RELIABILITY,
             truth(row.get("rentable")),
+            not truth(row.get("rented")),
             ports is not None and ports >= 1,
             rate is not None and rate > 0,
             storage_cost is not None and storage_cost >= 0,
             re.fullmatch(r"[0-9]{1,20}", offer_id_text) is not None,
-            verified is None or truth(verified),
+            verified_ok,
         )
         if all(checks):
-            eligible.append(row)
+            quoted = dict(row)
+            quoted["_quote_allocated_storage_gb"] = DISK_GB
+            quoted["_quote_min_duration_seconds"] = MIN_OFFER_DURATION_SECONDS
+            eligible.append(quoted)
     eligible.sort(
         key=lambda row: (
-            float(row["dph_total"]) * RUN_HOURS + float(total_reserve(row["storage_cost"])),
+            float(row["dph_total"]) * (RUN_HOURS + STOP_RESERVE_HOURS)
+            + float(total_reserve(row["storage_cost"], row["_quote_allocated_storage_gb"])),
             float(row["dph_total"]),
             -float(row["reliability"]),
-            int(row.get("ask_id") or row.get("id") or row.get("offer_id")),
+            int(row.get("ask_id") or row.get("ask_contract_id") or row.get("id") or row.get("offer_id")),
         )
     )
     return eligible
@@ -177,11 +280,14 @@ def vast_cli(args: list[str], timeout: int = 90) -> object:
     command = ["vastai", "--api-key", api_key(), *args]
     try:
         result = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
-        if result.returncode != 0:
-            raise GateError("Vast query did not succeed")
+    except (OSError, subprocess.TimeoutExpired):
+        raise TransportFailure("Vast query transport failed") from None
+    if result.returncode != 0:
+        raise TransportFailure("Vast query did not succeed")
+    try:
         return json.loads(result.stdout.decode("utf-8"))
-    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError, json.JSONDecodeError):
-        raise GateError("Vast query could not be verified") from None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise GateError("Vast response has an unknown shape") from None
 
 
 def project_charges() -> float:
@@ -230,17 +336,21 @@ def project_charges() -> float:
 def budget_gate_reason(spent: object, rows: object) -> str:
     if not isinstance(rows, list):
         return "offer_cost"
-    if any(
-        isinstance(row, dict)
-        and budget_allows(spent, row.get("dph_total"), reserve=total_reserve(row.get("storage_cost")))
-        for row in rows
-    ):
+    def fits(prior_spend: object, row: object) -> bool:
+        if not isinstance(row, dict):
+            return False
+        reserve = total_reserve(
+            row.get("storage_cost"), row.get("_quote_allocated_storage_gb", DISK_GB)
+        )
+        return budget_allows(
+            prior_spend,
+            row.get("dph_total"),
+            run_hours=RUN_HOURS + STOP_RESERVE_HOURS,
+            reserve=reserve,
+        )
+    if any(fits(spent, row) for row in rows):
         return "within_budget"
-    if any(
-        isinstance(row, dict)
-        and budget_allows(0.0, row.get("dph_total"), reserve=total_reserve(row.get("storage_cost")))
-        for row in rows
-    ):
+    if any(fits(0.0, row) for row in rows):
         return "prior_spend"
     return "offer_cost"
 
@@ -254,14 +364,23 @@ def is_2x3060(row: dict) -> bool:
     )
 
 
+def offer_quote() -> tuple[bool, list[dict]]:
+    """Return whether the raw market is empty and its eligible offers."""
+    query = offer_search_payload()
+    # Vast's offer search is a read-only POST. allocated_storage is a top-level
+    # price input; disk_space only requires enough free host capacity.
+    payload = probe.api_json(api_key(), "/bundles", "POST", query)
+    rows = payload if isinstance(payload, list) else (
+        payload.get("offers", payload.get("results"))
+        if isinstance(payload, dict) else None
+    )
+    if not isinstance(rows, list):
+        raise GateError("offer inventory has an unknown shape")
+    return not rows, eligible_offers(rows, query)
+
+
 def offer_inventory() -> list[dict]:
-    rows = vast_cli([
-        "search", "offers", "gpu_name=RTX_3060 num_gpus=2 verified=true allocated_storage=64",
-        "--order=dph_total", "--limit=100", "--raw",
-    ])
-    if isinstance(rows, dict):
-        rows = rows.get("offers", rows.get("results"))
-    return eligible_offers(rows)
+    return offer_quote()[1]
 
 
 def run_identity() -> tuple[str, str, str]:
@@ -326,7 +445,7 @@ def create_once(offer_id: str, label: str) -> dict:
     try:
         payload = vast_cli([
             "create", "instance", str(offer_id),
-            "--image", IMAGE, "--disk", DISK_GB, "--ssh", "--direct",
+            "--image", IMAGE, "--disk", str(DISK_GB), "--ssh", "--direct",
             "--label", label, "--cancel-unavail", "--raw",
         ], timeout=120)
         expected_id = created_id(payload)
@@ -674,33 +793,8 @@ def run() -> int:
 
         label = configured_resume_label()
         if label is None:
-            if resolve_label(instance_rows(), fresh_label) is not None:
-                outcome = "label_collision"
-                raise GateError("stable label already exists")
-            before = instance_rows()
-            if any(is_2x3060(row) for row in before):
-                outcome = "existing_2x3060_present"
-                raise GateError("an RTX 3060 pair already exists")
-            spent = project_charges()
-            offers = offer_inventory()
-            if not offers:
-                outcome = "offer_gate"
-                raise GateError("no verified 2x3060 offer is available")
-            selected = next(
-                (row for row in offers if budget_allows(
-                    spent, row["dph_total"], reserve=total_reserve(row.get("storage_cost"))
-                )),
-                None,
-            )
-            if selected is None:
-                reason = budget_gate_reason(spent, offers)
-                outcome = "budget_gate_prior_spend" if reason == "prior_spend" else "budget_gate_offer_cost"
-                raise GateError("the $20 budget gate is closed")
-            offer_id = str(selected.get("ask_id") or selected.get("id") or selected.get("offer_id"))
-            outcome = "create_uncertain"
-            row = create_once(offer_id, label)
-            outcome = "instance_start_failed"
-            row = wait_until_running(label)
+            outcome = "resume_target_missing"
+            raise GateError("an exact approved existing target label is required")
         else:
             rows = instance_rows()
             matches = target_rows_for_label(rows, label)
@@ -724,12 +818,8 @@ def run() -> int:
             outcome = "instance_start_failed"
             row = wait_until_running(label)
 
-        rate = finite_number(row.get("dph_total"))
         spent_after_start = project_charges()
-        reserve = total_reserve(row.get("storage_cost"))
-        if rate is None or reserve is None or not budget_allows(
-            spent_after_start, rate, run_hours=RUN_HOURS, reserve=reserve
-        ):
+        if not existing_rebuild_budget_allows(row, spent_after_start):
             outcome = "budget_gate"
             raise GateError("post-start budget recheck failed")
         if not is_2x3060(row):

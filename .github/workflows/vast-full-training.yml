@@ -8,7 +8,7 @@ on:
       - .github/paid-runs/2026-11-20-full-training.json
 
 concurrency:
-  group: cnot103-full-training-target
+  group: cnot103-existing-2x3060-target
   cancel-in-progress: false
 
 permissions:
@@ -72,7 +72,7 @@ jobs:
           set -euo pipefail
           cli_venv="$RUNNER_TEMP/vast-cli-venv"
           python3 -m venv "$cli_venv"
-          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai==1.11.2
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
       - name: Start the budget-gated full training run

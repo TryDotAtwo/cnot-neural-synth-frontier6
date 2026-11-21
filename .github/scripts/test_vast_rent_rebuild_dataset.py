@@ -10,12 +10,16 @@ def offer(offer_id, **updates):
         "gpu_name": "RTX 3060",
         "num_gpus": 2,
         "gpu_ram": 12288,
-        "compute_cap": 8.6,
+        "compute_cap": 860,
+        "cuda_max_good": 12.8,
+        "duration": controller.MIN_OFFER_DURATION_SECONDS,
+        "disk_space": 512,
         "reliability": 0.99,
         "dph_total": 0.2,
         "storage_cost": 0.15,
         "direct_port_count": 1,
         "rentable": True,
+        "rented": False,
         "verified": True,
     }
     row.update(updates)
@@ -33,7 +37,7 @@ class OfferAndBudgetTests(unittest.TestCase):
             offer(15, direct_port_count=0),
             offer(16, rentable=False),
             offer(17, gpu_ram=8192),
-            offer(18, compute_cap=8.0),
+            offer(18, compute_cap=800),
             offer(19, gpu_name="RTX 3060 Ti"),
         ]
 
@@ -111,9 +115,9 @@ class OfferAndBudgetTests(unittest.TestCase):
             hasattr(controller, "existing_rebuild_budget_allows"),
             "existing-target rebuild must use the shared total-spend gate",
         )
-        target = offer(33, dph_total=0.2, storage_cost=0.15)
+        target = offer(33, dph_total=0.2, storage_cost=0.001, disk_space=64)
         self.assertTrue(controller.existing_rebuild_budget_allows(target, 16.5))
-        self.assertFalse(controller.existing_rebuild_budget_allows(target, 17.0))
+        self.assertFalse(controller.existing_rebuild_budget_allows(target, 19.0))
 
     def test_target_scope_ignores_other_2x3060_rows(self):
         wanted = offer(20, label="cnot103-2x3060-rebuild-v1", actual_status="running")
@@ -152,6 +156,76 @@ class OfferAndBudgetTests(unittest.TestCase):
             self.assertAlmostEqual(controller.project_charges(), 0.25)
 
 
+
+
+class ExactOfferQuoteContractTests(unittest.TestCase):
+    def test_market_search_prices_64_gib_and_uses_free_capacity_only_as_a_gate(self):
+        from unittest.mock import patch
+
+        row = offer(71)
+        row.pop("allocated_storage", None)
+        with (
+            patch.object(controller, "api_key", return_value="masked"),
+            patch.object(controller.probe, "api_json", return_value={"offers": [row]}) as api,
+        ):
+            market_empty, selected = controller.offer_quote()
+
+        self.assertFalse(market_empty)
+        self.assertEqual([item["ask_id"] for item in selected], [71])
+        self.assertEqual(api.call_args.args[:3], ("masked", "/bundles", "POST"))
+        query = api.call_args.args[3]
+        self.assertEqual(query["allocated_storage"], 64)
+        self.assertEqual(query["disk_space"], {"gte": 64})
+        self.assertEqual(query["duration"], {"gte": controller.MIN_OFFER_DURATION_SECONDS})
+        self.assertEqual(query["compute_cap"], {"gte": 860})
+        self.assertEqual(query["gpu_ram"], {"gte": 12_000})
+        self.assertEqual(query["cuda_max_good"], {"gte": 12.8})
+        self.assertEqual(controller.MIN_OFFER_DURATION_SECONDS, 48 * 3600 + 10 * 60)
+
+    def test_empty_market_and_known_nonmatching_offer_are_distinct(self):
+        self.assertEqual(controller.eligible_offers([]), [])
+        short = offer(72, duration=controller.MIN_OFFER_DURATION_SECONDS - 1)
+        self.assertEqual(controller.eligible_offers([short]), [])
+
+    def test_unknown_offer_fields_fail_closed_instead_of_becoming_no_market(self):
+        incomplete = offer(73)
+        del incomplete["duration"]
+        with self.assertRaises(controller.GateError):
+            controller.eligible_offers([incomplete])
+
+        unverified = offer(74)
+        del unverified["verified"]
+        del unverified["verification"]
+        with self.assertRaises(controller.GateError):
+            controller.eligible_offers([unverified])
+
+        unidentified = offer(75)
+        del unidentified["ask_id"]
+        del unidentified["id"]
+        with self.assertRaises(controller.GateError):
+            controller.eligible_offers([unidentified])
+
+    def test_wrong_quote_allocation_is_rejected(self):
+        query = controller.offer_search_payload()
+        query["allocated_storage"] = 32
+        with self.assertRaises(controller.GateError):
+            controller.eligible_offers([offer(76)], query)
+
+    def test_create_disk_uses_the_same_64_gib_constant(self):
+        from unittest.mock import patch
+
+        row = offer(77, id=78, label="cnot103-test")
+        controller.CREATE_ATTEMPTED = False
+        with (
+            patch.object(controller, "vast_cli", return_value={"new_contract": 78}) as cli,
+            patch.object(controller, "wait_for_label", return_value=row),
+        ):
+            self.assertEqual(controller.create_once("77", "cnot103-test"), row)
+
+        args = cli.call_args.args[0]
+        self.assertEqual(args[args.index("--disk") + 1], "64")
+
+
 class ResumeExistingTargetTests(unittest.TestCase):
     def _environment(self, label):
         return {
@@ -170,7 +244,7 @@ class ResumeExistingTargetTests(unittest.TestCase):
         from unittest.mock import patch
 
         label = "cnot103-r10k-44749514754-a1"
-        row = offer(40, id=42, label=label, actual_status="stopped")
+        row = offer(40, id=42, label=label, actual_status="stopped", storage_cost=0.001, disk_space=64)
         output = io.StringIO()
         with (
             patch.dict(os.environ, self._environment(label), clear=True),
@@ -199,12 +273,12 @@ class ResumeExistingTargetTests(unittest.TestCase):
         from unittest.mock import patch
 
         label = "cnot103-r10k-44749514754-a1"
-        row = offer(41, id=43, label=label, actual_status="stopped")
+        row = offer(41, id=43, label=label, actual_status="stopped", storage_cost=0.001, disk_space=64)
         output = io.StringIO()
         with (
             patch.dict(os.environ, self._environment(label), clear=True),
             patch.object(controller, "instance_rows", return_value=[row]),
-            patch.object(controller, "project_charges", return_value=17.0),
+            patch.object(controller, "project_charges", return_value=19.0),
             patch.object(controller, "wait_until_running") as start,
             patch.object(controller, "create_once") as create,
             patch.object(controller, "offer_inventory") as offers,

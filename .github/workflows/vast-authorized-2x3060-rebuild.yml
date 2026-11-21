@@ -13,7 +13,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: tqp-authorized-2x3060-rebuild
+  group: cnot103-existing-2x3060-target
   cancel-in-progress: false
 
 jobs:
@@ -86,7 +86,7 @@ jobs:
           set -euo pipefail
           cli_venv="$RUNNER_TEMP/vast-cli-venv"
           python3 -m venv "$cli_venv"
-          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai
+          "$cli_venv/bin/python" -m pip install --quiet --disable-pip-version-check vastai==1.11.2
           echo "$cli_venv/bin" >> "$GITHUB_PATH"
 
       - name: Resume exact stopped target and rebuild on its disk
