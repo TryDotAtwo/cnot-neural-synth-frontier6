@@ -5,9 +5,12 @@ on:
   push:
     branches:
       - codex/2x3060-full-feature-training
+      - codex/full-feature-train-workflow
     paths:
       - .github/training-profiles/*.json
       - .github/workflows/validate-training-profile.yml
+      - native/src/device_search.rs
+      - native/src/device_search/**
 
 permissions:
   contents: read
@@ -58,7 +61,7 @@ jobs:
             --env LIBTORCH_USE_PYTORCH=1 \
             --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
             pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc '/root/.cargo/bin/cargo run --quiet --features cuda --bin cnot103-validate-manifest -- /runner_temp/cnot103-training-profile-manifest.json' \
+            bash -euc '/root/.cargo/bin/cargo run --quiet --features cuda --bin cnot103-validate-manifest -- /runner_temp/cnot103-training-profile-manifest.json && /root/.cargo/bin/cargo test --quiet --features cuda --lib device_search::runtime::tests && /root/.cargo/bin/cargo build --quiet --features cuda --bin cnot103-search' \
             >"$RUNNER_TEMP/cnot103-profile-docker.stdout" \
             2>"$RUNNER_TEMP/cnot103-profile-docker.stderr"; then
             if grep -Fq 'manifest validation failed: invalid run manifest' "$RUNNER_TEMP/cnot103-profile-docker.stderr"; then

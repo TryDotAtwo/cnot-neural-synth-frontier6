@@ -22,6 +22,9 @@ on:
       - .github/paid-runs/2026-11-20-full-training.json
       - .github/workflows/check-full-training-manifest.yml
       - native/Cargo.toml
+      - native/src/device_search.rs
+      - native/src/device_search/**
+      - .github/workflows/validate-training-profile.yml
       - native/src/bin/cnot103_validate_data.rs
       - native/src/frozen_data.rs
       - native/src/frozen_data/**

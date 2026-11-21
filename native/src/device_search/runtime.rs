@@ -275,3 +275,192 @@ pub(super) fn run(
         log.rejected_state,
     ))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, VecDeque};
+
+    fn identity(n: usize) -> Vec<u64> {
+        (0..n).map(|row| 1u64 << row).collect()
+    }
+
+    /// Independent scalar replay for the row_target ^= row_control convention.
+    fn apply_action(rows: &mut [u64], n: usize, action: usize) {
+        let control = action / (n - 1);
+        let slot = action % (n - 1);
+        let target = slot + usize::from(slot >= control);
+        rows[target] ^= rows[control];
+    }
+
+    fn replay(mut rows: Vec<u64>, n: usize, actions: &[i64]) -> Vec<u64> {
+        for &action in actions {
+            assert!(action >= 0);
+            apply_action(&mut rows, n, action as usize);
+        }
+        rows
+    }
+
+    fn state_at_distance(n: usize, wanted: usize) -> Vec<u64> {
+        let start = identity(n);
+        let mut distances = HashMap::from([(start.clone(), 0usize)]);
+        let mut queue = VecDeque::from([start]);
+        while let Some(rows) = queue.pop_front() {
+            let distance = distances[&rows];
+            if distance == wanted {
+                return rows;
+            }
+            for action in 0..n * (n - 1) {
+                let mut next = rows.clone();
+                apply_action(&mut next, n, action);
+                if !distances.contains_key(&next) {
+                    distances.insert(next.clone(), distance + 1);
+                    queue.push_back(next);
+                }
+            }
+        }
+        panic!("no CNOT state exists at distance {wanted}");
+    }
+
+    fn shortest_distance(start: Vec<u64>, goal: &[u64], n: usize) -> Option<usize> {
+        let mut distances = HashMap::from([(start.clone(), 0usize)]);
+        let mut queue = VecDeque::from([start]);
+        while let Some(rows) = queue.pop_front() {
+            let distance = distances[&rows];
+            if rows == goal {
+                return Some(distance);
+            }
+            for action in 0..n * (n - 1) {
+                let mut next = rows.clone();
+                apply_action(&mut next, n, action);
+                if !distances.contains_key(&next) {
+                    distances.insert(next.clone(), distance + 1);
+                    queue.push_back(next);
+                }
+            }
+        }
+        None
+    }
+
+    fn packed(rows: &[u64]) -> Tensor {
+        let signed: Vec<i64> = rows.iter().map(|&row| row as i64).collect();
+        Tensor::from_slice(&signed).view([1, rows.len() as i64, 1])
+    }
+
+    fn run_case(
+        root_rows: &[u64],
+        max_depth: i64,
+        max_expanded: i64,
+        beam_width: i64,
+        shortlist: i64,
+    ) -> (Vec<i64>, Schedule) {
+        let n = root_rows.len() as i64;
+        let actions = n * (n - 1);
+        let cfg = BeamConfig {
+            beam_width,
+            shortlist,
+            max_depth,
+            max_expanded,
+            inference_batch: 64,
+        };
+        let schedule = Schedule::new(cfg, actions, n, 64).unwrap();
+        let root = packed(root_rows);
+        let goal = packed(&identity(n as usize));
+        let mut action_scores = |rows: &Tensor| {
+            Ok((
+                Tensor::zeros([rows.size()[0], actions], (Kind::Double, Device::Cpu)),
+                Tensor::zeros([rows.size()[0]], (Kind::Int64, Device::Cpu)),
+            ))
+        };
+        let mut value_scores = |rows: &Tensor| {
+            Ok((
+                Tensor::zeros([rows.size()[0]], (Kind::Double, Device::Cpu)),
+                Tensor::zeros([rows.size()[0]], (Kind::Int64, Device::Cpu)),
+            ))
+        };
+        let (receipt, _) = run(
+            &root,
+            &goal,
+            cfg,
+            &schedule,
+            &mut action_scores,
+            &mut value_scores,
+        )
+        .unwrap();
+        (receipt, schedule)
+    }
+
+    fn solved_word(receipt: &[i64], layers: i64) -> Vec<i64> {
+        receipt[7..7 + layers as usize]
+            .iter()
+            .copied()
+            .take_while(|&action| action >= 0)
+            .collect()
+    }
+
+    fn trace_row(receipt: &[i64], layers: i64, row: usize) -> &[i64] {
+        let start = 7 + layers as usize + row * 6;
+        &receipt[start..start + 6]
+    }
+
+    #[test]
+    fn one_step_goal_wins_before_the_next_full_frontier_exceeds_exact_budget() {
+        let root = vec![0b10, 0b11];
+        let goal = identity(2);
+        assert_eq!(shortest_distance(root.clone(), &goal, 2), Some(2));
+
+        let (receipt, schedule) = run_case(&root, 2, 1, 2, 2);
+        assert_eq!(receipt[0], 1, "reachable depth-2 goal must be solved");
+        assert_eq!(receipt[1], 1, "only the root was expanded");
+        let word = solved_word(&receipt, schedule.layers);
+        assert_eq!(word.len(), 2);
+        assert_eq!(replay(root, 2, &word), goal);
+        assert_eq!(trace_row(&receipt, schedule.layers, 0)[1], 1);
+    }
+
+    #[test]
+    fn chain_at_last_allowed_depth_is_checked_without_spending_another_expansion() {
+        let root = state_at_distance(3, 3);
+        let goal = identity(3);
+        assert_eq!(shortest_distance(root.clone(), &goal, 3), Some(3));
+
+        // One root expansion and one complete B=6 frontier consume the cap.
+        // The exact one-step goal check at depth 2 must run before the next gate.
+        let (receipt, schedule) = run_case(&root, 3, 7, 36, 6);
+        assert_eq!(receipt[0], 1, "depth-3 solution must beat resource_limit");
+        assert_eq!(receipt[1], 7, "goal recognition consumes no extra expansions");
+        let word = solved_word(&receipt, schedule.layers);
+        assert_eq!(word.len(), 3);
+        assert_eq!(replay(root, 3, &word), goal);
+        assert_eq!(trace_row(&receipt, schedule.layers, 0)[1], 1);
+        assert_eq!(trace_row(&receipt, schedule.layers, 1)[1], 6);
+    }
+
+    #[test]
+    fn saturated_frontier_is_all_or_none_at_one_plus_b_minus_one_and_one_plus_b() {
+        let root = state_at_distance(3, 4);
+        let goal = identity(3);
+        assert_eq!(shortest_distance(root.clone(), &goal, 3), Some(4));
+
+        let (short_receipt, short_schedule) = run_case(&root, 3, 6, 6, 6);
+        assert_eq!(short_receipt[0], 3, "1+B-1 cannot expand a B=6 frontier");
+        assert_eq!(short_receipt[1], 1, "no partial frontier is charged");
+        assert!(solved_word(&short_receipt, short_schedule.layers).is_empty());
+        assert_eq!(trace_row(&short_receipt, short_schedule.layers, 0)[1], 1);
+        assert_eq!(trace_row(&short_receipt, short_schedule.layers, 1)[0], 6);
+        assert_eq!(trace_row(&short_receipt, short_schedule.layers, 1)[1], 0);
+        assert_eq!(trace_row(&short_receipt, short_schedule.layers, 1)[5], 3);
+
+        let (exact_receipt, exact_schedule) = run_case(&root, 3, 7, 6, 6);
+        assert_eq!(exact_receipt[0], 3, "the next whole frontier still cannot fit");
+        assert_eq!(exact_receipt[1], 7, "1+B admits exactly one complete B=6 layer");
+        assert!(solved_word(&exact_receipt, exact_schedule.layers).is_empty());
+        assert_eq!(trace_row(&exact_receipt, exact_schedule.layers, 0)[1], 1);
+        assert_eq!(trace_row(&exact_receipt, exact_schedule.layers, 1)[0], 6);
+        assert_eq!(trace_row(&exact_receipt, exact_schedule.layers, 1)[1], 6);
+        assert_eq!(trace_row(&exact_receipt, exact_schedule.layers, 2)[0], 6);
+        assert_eq!(trace_row(&exact_receipt, exact_schedule.layers, 2)[1], 0);
+        assert_eq!(trace_row(&exact_receipt, exact_schedule.layers, 2)[5], 3);
+    }
+}
