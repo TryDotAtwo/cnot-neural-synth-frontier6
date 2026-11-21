@@ -30,10 +30,17 @@ class CpuTorchCiTests(unittest.TestCase):
                 "level": "error",
                 "code": {"code": "E0425"},
                 "message": "private compiler detail is not part of the receipt",
+                "spans": [
+                    {
+                        "file_name": "native/src/device_search/runtime.rs",
+                        "line_start": 861,
+                        "is_primary": True,
+                    }
+                ],
             },
         }
         result = compile_evidence(json.dumps(message), 101, "lib_test")
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "compile_failed_runtime_tests")
         self.assertEqual(result["rustc_code"], "E0425")
         self.assertNotIn("private compiler detail", json.dumps(result))
 

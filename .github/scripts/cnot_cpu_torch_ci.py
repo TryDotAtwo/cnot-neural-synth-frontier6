@@ -37,7 +37,7 @@ def compile_evidence(
     target_name: str | None = None,
 ) -> dict[str, str | None]:
     executables: list[str] = []
-    codes: list[str] = []
+    errors: list[tuple[str, str]] = []
     for line in cargo_json.splitlines():
         try:
             item = json.loads(line)
@@ -62,7 +62,28 @@ def compile_evidence(
             code = message.get("code")
             code_value = code.get("code") if isinstance(code, dict) else None
             if isinstance(code_value, str) and RUSTC_CODE.fullmatch(code_value):
-                codes.append(code_value)
+                spans = message.get("spans")
+                area = "unknown"
+                if isinstance(spans, list):
+                    for span in spans:
+                        if not isinstance(span, dict) or span.get("is_primary") is not True:
+                            continue
+                        filename = str(span.get("file_name", "")).replace("\\", "/")
+                        line = span.get("line_start")
+                        if filename.endswith("/device_search/runtime.rs"):
+                            area = "runtime_tests" if isinstance(line, int) and line >= 280 else "runtime_core"
+                        elif filename.endswith("/device_search/scoring.rs"):
+                            area = "scoring"
+                        elif filename.endswith("/device_search.rs"):
+                            area = "device_search"
+                        elif "/run_config/execution/" in filename:
+                            area = "run_config_execution"
+                        elif "/run_config/" in filename:
+                            area = "run_config_manifest"
+                        elif filename.endswith("/tch_training_resume.rs"):
+                            area = "resume_fixture"
+                        break
+                errors.append((code_value, area))
 
     unique_executables = sorted(set(executables))
     if cargo_exit == 0 and len(unique_executables) == 1:
@@ -71,9 +92,15 @@ def compile_evidence(
             "rustc_code": "none",
             "executable": unique_executables[0],
         }
+    if errors:
+        return {
+            "status": f"compile_failed_{errors[0][1]}",
+            "rustc_code": errors[0][0],
+            "executable": None,
+        }
     return {
-        "status": "failed",
-        "rustc_code": codes[0] if codes else "none",
+        "status": "compile_failed_without_rustc_code",
+        "rustc_code": "none",
         "executable": None,
     }
 
