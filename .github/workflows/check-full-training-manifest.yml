@@ -35,7 +35,7 @@ permissions:
 jobs:
   manifest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -68,6 +68,30 @@ jobs:
 
       - name: Parse monitor, inventory, quote, rebuild, and training workflow YAML
         run: ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' .github/workflows/cnot-full-training-monitor.yml .github/workflows/cnot-full-training-inventory.yml .github/workflows/vast-full-training-quote.yml .github/workflows/vast-rebuild-remote-dataset.yml .github/workflows/vast-authorized-2x3060-rebuild.yml .github/workflows/vast-full-training.yml
+
+
+      - name: Test the compiled CUDA CNOT runtime on CPU tensors
+        run: |
+          set -euo pipefail
+          cargo_home="$(dirname "$(dirname "$(command -v cargo)")")"
+          rustup_home="$(rustup show home)"
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/project" \
+            --volume "$RUNNER_TEMP:/runner_temp" \
+            --volume "$cargo_home:/root/.cargo" \
+            --volume "$rustup_home:/root/.rustup" \
+            --workdir /workspace/project/native \
+            --env CARGO_HOME=/root/.cargo \
+            --env RUSTUP_HOME=/root/.rustup \
+            --env PATH=/root/.cargo/bin:/usr/local/cuda/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env CARGO_TARGET_DIR=/runner_temp/cnot103-search-target \
+            --env CNOT103_CUDA_ARCHITECTURES=86 \
+            --env CUDA_HOME=/usr/local/cuda \
+            --env LIBTORCH_USE_PYTORCH=1 \
+            --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
+            pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
+            bash -euc '/root/.cargo/bin/cargo test --quiet --features cuda --lib device_search::runtime::tests && /root/.cargo/bin/cargo build --quiet --features cuda --bin cnot103-search'
+          echo 'compiled_cnot_runtime=passed'
 
       - name: Test the remote supervisor acceptance gates
         run: python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v
