@@ -32,7 +32,7 @@ CHECKPOINT_FREE_GIB = 24
 INITIAL_FREE_GIB = 40
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 MAX_TOTAL_USD = 20.0
-MEASUREMENT_SPEC_RELATIVE = ".github/training-experiments/learning-curve-first-v1.json"
+MEASUREMENT_SPEC_RELATIVE = ".github/training-experiments/learning-curve-complete-dev-v2.json"
 FORECAST_CLEANUP_RESERVE_SECONDS = 10 * 60
 FORECAST_AUTHORIZATION_MAX_AGE_SECONDS = 6 * 60
 FORECAST_APPROVAL_WAIT_SECONDS = 20 * 60
@@ -200,7 +200,7 @@ def _validated_progress(value: object, label: str) -> dict[str, int]:
 
 
 def validate_measurement_spec(spec: object) -> dict[str, Any]:
-    if not isinstance(spec, dict) or spec.get("schema") != "cnot103_measurement_experiment_v1":
+    if not isinstance(spec, dict) or spec.get("schema") != "cnot103_measurement_experiment_v2":
         raise RunError("measurement experiment schema is invalid")
     experiment_id = spec.get("experiment_id")
     if (
@@ -222,7 +222,7 @@ def validate_measurement_spec(spec: object) -> dict[str, Any]:
         or splits.get("policy") != "stratified_per_width"
         or splits.get("cases_per_width") != 8
         or splits.get("order") != ["train", "dev", "test"]
-        or splits.get("locked_test") != "after_first_dev_gain"
+        or splits.get("locked_test") != "after_complete_dev_sweep"
     ):
         raise RunError("measurement experiment split policy differs")
     model = spec.get("model")
@@ -286,7 +286,7 @@ def load_measurement_spec(path: pathlib.Path | str | None = None) -> dict[str, A
         if path is not None
         else pathlib.Path(__file__).resolve().parents[1]
         / "training-experiments"
-        / "learning-curve-first-v1.json"
+        / "learning-curve-complete-dev-v2.json"
     )
     try:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
@@ -422,22 +422,22 @@ def run_measurement_sweep(
         persist_receipt(receipt)
         measurements.append(receipt)
         current = end
-        if comparison_status in QUALITY_GAIN_STATUSES:
+        if selected is None and comparison_status in QUALITY_GAIN_STATUSES:
             selected = receipt
-            test_result = locked_test(selected)
-            if not isinstance(test_result, dict):
-                raise RunError("locked-test callback returned a malformed result")
-            break
+
+    if selected is not None:
+        test_result = locked_test(selected)
+        if not isinstance(test_result, dict):
+            raise RunError("locked-test callback returned a malformed result")
 
     return {
-        "schema": "cnot103_learning_curve_v1",
+        "schema": "cnot103_learning_curve_v2",
         "status": "gain_selected" if selected is not None else "no_practical_gain",
         "measurements": measurements,
         "selected": selected,
         "locked_test": test_result,
         "final_progress": current,
     }
-
 
 def estimate_measurement_remaining_work_seconds(
     *,

@@ -1,0 +1,60 @@
+{
+  "schema": "cnot103_measurement_experiment_v2",
+  "experiment_id": "learning-curve-complete-dev-v2",
+  "bindings": {
+    "source": "workflow_head_sha",
+    "dataset": "sealed_dataset_sha256",
+    "holdout": [
+      "holdout_revision",
+      "holdout_sha256"
+    ],
+    "panels": "cnot103_panel_cohorts_v1"
+  },
+  "splits": {
+    "policy": "stratified_per_width",
+    "cases_per_width": 8,
+    "order": [
+      "train",
+      "dev",
+      "test"
+    ],
+    "locked_test": "after_complete_dev_sweep"
+  },
+  "model": {
+    "parameters": 136421807,
+    "structural_blocks": 8,
+    "input_slots": 102,
+    "batch_size": 4,
+    "feature_schema": "runtime_packet_layout_v25"
+  },
+  "training": {
+    "seed": 202611200001,
+    "max_attempts": 512,
+    "accepted_milestones": [
+      8,
+      32,
+      128,
+      512
+    ]
+  },
+  "search": {
+    "beam_width": 36,
+    "shortlist": 4,
+    "max_depth": 8,
+    "max_expanded": 201,
+    "inference_batch": 32
+  },
+  "hardware": {
+    "selection": "controller_approved_target",
+    "gpu_count": 2,
+    "record_actual_devices": true
+  },
+  "resource_limits": {
+    "max_active_seconds": 171900,
+    "max_total_usd": 20
+  },
+  "quality": {
+    "minimum_solved_rate_gain": 0.05,
+    "minimum_relative_paired_cost_reduction": 0.05
+  }
+}

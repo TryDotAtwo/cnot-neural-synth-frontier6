@@ -922,8 +922,8 @@ class MeasurementCurveTests(unittest.TestCase):
     @staticmethod
     def valid_spec():
         return {
-            "schema": "cnot103_measurement_experiment_v1",
-            "experiment_id": "learning-curve-first-v1",
+            "schema": "cnot103_measurement_experiment_v2",
+            "experiment_id": "learning-curve-complete-dev-v2",
             "bindings": {
                 "source": "workflow_head_sha",
                 "dataset": "sealed_dataset_sha256",
@@ -934,7 +934,7 @@ class MeasurementCurveTests(unittest.TestCase):
                 "policy": "stratified_per_width",
                 "cases_per_width": 8,
                 "order": ["train", "dev", "test"],
-                "locked_test": "after_first_dev_gain",
+                "locked_test": "after_complete_dev_sweep",
             },
             "model": {
                 "parameters": 136_421_807,
@@ -968,7 +968,18 @@ class MeasurementCurveTests(unittest.TestCase):
         loader = getattr(training, "load_measurement_spec", None)
         self.assertTrue(callable(loader), "measurement spec loader is missing")
         spec = loader()
-        self.assertEqual(spec["schema"], "cnot103_measurement_experiment_v1")
+        self.assertEqual(spec["schema"], "cnot103_measurement_experiment_v2")
+        self.assertEqual(spec["experiment_id"], "learning-curve-complete-dev-v2")
+        self.assertEqual(spec["splits"]["locked_test"], "after_complete_dev_sweep")
+        historical_spec = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "training-experiments"
+            / "learning-curve-first-v1.json"
+        )
+        self.assertEqual(
+            json.loads(historical_spec.read_text(encoding="utf-8"))["schema"],
+            "cnot103_measurement_experiment_v1",
+        )
         self.assertEqual(spec["training"]["max_attempts"], 512)
         self.assertEqual(spec["training"]["accepted_milestones"], [8, 32, 128, 512])
         self.assertNotEqual(spec["training"]["max_attempts"], 250_000)
@@ -1010,25 +1021,24 @@ class MeasurementCurveTests(unittest.TestCase):
             "rejected_examples": 4,
         })
 
-    def test_three_checkpoints_resume_in_order_and_run_locked_test_only_after_first_gain(self):
+    def test_all_dev_checkpoints_run_before_one_locked_test_and_keep_first_gain(self):
         sweep = getattr(training, "run_measurement_sweep", None)
         self.assertTrue(callable(sweep), "measurement sweep runner is missing")
         events = []
-        statuses = {8: "tie", 32: "tie", 128: "length_gain"}
+        statuses = {8: "length_gain", 32: "coverage_gain", 128: "tie", 512: "no_practical_gain"}
         initial = {"attempted": 2, "accepted": 2, "rejected": 0}
+        checkpoints = {milestone: str(milestone % 10) * 64 for milestone in statuses}
+        previous_progress = [initial]
 
         def train_to(milestone, prior_progress):
             events.append(("train", milestone))
-            self.assertEqual(prior_progress, initial if milestone == 8 else {
-                "attempted": milestone // 4,
-                "accepted": milestone // 4,
-                "rejected": 0,
-            })
+            self.assertEqual(prior_progress, previous_progress[0])
             end = {"attempted": milestone, "accepted": milestone, "rejected": 0}
+            previous_progress[0] = end
             return {
                 "start_progress": prior_progress,
                 "end_progress": end,
-                "checkpoint": {"sha256": str(milestone % 10) * 64},
+                "checkpoint": {"sha256": checkpoints[milestone]},
                 "training_wall_seconds": float(milestone),
             }
 
@@ -1046,11 +1056,12 @@ class MeasurementCurveTests(unittest.TestCase):
             events.append(("persist", receipt["accepted_updates"]))
 
         def locked_test(selected):
-            events.append(("test", selected["accepted_updates"]))
+            events.append(("test", selected["accepted_updates"], selected["checkpoint_sha256"]))
             return {"status": "evaluated", "checkpoint_sha256": selected["checkpoint_sha256"]}
 
+        milestones = [8, 32, 128, 512]
         result = sweep(
-            [8, 32, 128],
+            milestones,
             initial_progress=initial,
             max_attempts=512,
             train_to=train_to,
@@ -1059,12 +1070,16 @@ class MeasurementCurveTests(unittest.TestCase):
             persist_receipt=persist,
             locked_test=locked_test,
         )
-        self.assertEqual([row["accepted_updates"] for row in result["measurements"]], [8, 32, 128])
-        self.assertEqual(result["selected"]["accepted_updates"], 128)
+        self.assertEqual([row["accepted_updates"] for row in result["measurements"]], milestones)
+        self.assertEqual(result["schema"], "cnot103_learning_curve_v2")
+        self.assertEqual(result["selected"]["accepted_updates"], 8)
+        self.assertEqual(result["selected"]["checkpoint_sha256"], checkpoints[8])
         self.assertEqual(result["locked_test"]["status"], "evaluated")
         self.assertEqual(sum(1 for event in events if event[0] == "test"), 1)
-        self.assertGreater(events.index(("test", 128)), events.index(("compare", 128)))
-        self.assertEqual([event[1] for event in events if event[0] == "train"], [8, 32, 128])
+        self.assertGreater(events.index(("test", 8, checkpoints[8])), events.index(("persist", 512)))
+        self.assertEqual([event[1] for event in events if event[0] == "train"], milestones)
+        self.assertEqual([event[1] for event in events if event[0] == "compare"], milestones)
+        self.assertEqual(result["final_progress"]["accepted"], 512)
 
     def test_measurement_sweep_withholds_locked_test_when_no_dev_checkpoint_gains(self):
         sweep = getattr(training, "run_measurement_sweep", None)
