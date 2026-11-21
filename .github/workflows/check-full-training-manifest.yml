@@ -120,7 +120,21 @@ jobs:
             elif grep -Fq 'undefined symbol' "$runtime_log"; then
               echo 'cpu_torch_runtime=libtorch_symbol_mismatch'
             elif grep -Fq 'could not compile' "$runtime_log"; then
-              echo 'cpu_torch_runtime=rust_compile_failed'
+              rust_error_code="$(grep -oE 'error\\[E[0-9]+\\]:' "$runtime_log" | head -n 1 | tr -d 'error[]:' || true)"
+              case "$rust_error_code" in
+                E0308) echo 'cpu_torch_runtime=rust_type_mismatch' ;;
+                E0425) echo 'cpu_torch_runtime=rust_name_resolution_failed' ;;
+                E0432|E0433) echo 'cpu_torch_runtime=rust_import_resolution_failed' ;;
+                E0599) echo 'cpu_torch_runtime=rust_method_resolution_failed' ;;
+                E0277) echo 'cpu_torch_runtime=rust_trait_bound_failed' ;;
+                E0061) echo 'cpu_torch_runtime=rust_call_signature_mismatch' ;;
+                E0609) echo 'cpu_torch_runtime=rust_field_resolution_failed' ;;
+                E0502|E0499|E0382|E0507) echo 'cpu_torch_runtime=rust_borrow_or_move_failed' ;;
+                E0282|E0283) echo 'cpu_torch_runtime=rust_type_inference_failed' ;;
+                E0583) echo 'cpu_torch_runtime=rust_module_resolution_failed' ;;
+                E0658) echo 'cpu_torch_runtime=rust_feature_gate_failed' ;;
+                *) echo 'cpu_torch_runtime=rust_compiler_error' ;;
+              esac
             elif grep -Fq 'failed to run custom build command' "$runtime_log"; then
               echo 'cpu_torch_runtime=torch_build_script_failed'
             elif grep -Fq 'exit successfully' "$runtime_log"; then
