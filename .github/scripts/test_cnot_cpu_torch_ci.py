@@ -44,6 +44,49 @@ class CpuTorchCiTests(unittest.TestCase):
         self.assertEqual(result["rustc_code"], "E0425")
         self.assertNotIn("private compiler detail", json.dumps(result))
 
+    def test_compile_receipt_walks_child_and_macro_expansion_spans(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "code": {"code": "E0599"},
+                "message": "compiler detail remains private",
+                "spans": [],
+                "children": [
+                    {
+                        "level": "note",
+                        "message": "nested compiler detail remains private",
+                        "spans": [
+                            {
+                                "file_name": "/runner/work/project/native/src/device_search.rs",
+                                "line_start": 88,
+                                "is_primary": True,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        result = compile_evidence(json.dumps(message), 101, "lib_test")
+        self.assertEqual(result["status"], "compile_failed_device_search")
+        self.assertEqual(result["rustc_code"], "E0599")
+        self.assertNotIn("compiler detail", json.dumps(result))
+
+    def test_unresolved_name_without_a_source_span_has_a_safe_class(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "code": {"code": "E0425"},
+                "message": "cannot find private_name in this scope",
+                "spans": [],
+            },
+        }
+        result = compile_evidence(json.dumps(message), 101, "lib_test")
+        self.assertEqual(result["status"], "compile_failed_unresolved_name")
+        self.assertEqual(result["rustc_code"], "E0425")
+        self.assertNotIn("private_name", json.dumps(result))
+
     def test_one_failed_check_does_not_hide_other_executed_results(self):
         outcomes = {
             "torch": "success",

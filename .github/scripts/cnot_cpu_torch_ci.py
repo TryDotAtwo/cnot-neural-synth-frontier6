@@ -30,6 +30,69 @@ def _target_matches(target: dict[str, Any], target_name: str | None, artifact_ki
     raise ValueError("unknown artifact kind")
 
 
+def _area_for_span(span: dict[str, Any]) -> str:
+    filename = str(span.get("file_name", "")).replace("\\\\", "/").lower()
+    line_start = span.get("line_start")
+    if filename.endswith("/device_search/runtime.rs"):
+        return "runtime_tests" if isinstance(line_start, int) and line_start >= 280 else "runtime_core"
+    if filename.endswith("/device_search/frontier.rs"):
+        return "frontier"
+    if filename.endswith("/device_search/scoring.rs"):
+        return "scoring"
+    if filename.endswith("/device_search.rs"):
+        return "device_search"
+    if "/run_config/execution/" in filename:
+        return "run_config_execution"
+    if filename.endswith("/run_config/manifest.rs"):
+        return "run_config_manifest"
+    if filename.endswith("/native/src/lib.rs") or filename == "src/lib.rs":
+        return "crate_root"
+    if filename.endswith("/native/build.rs") or filename == "build.rs":
+        return "build_script"
+    if "/native/src/" in filename or filename.startswith("src/"):
+        return "native_source_other"
+    if "/.cargo/registry/" in filename or "/cargo/registry/" in filename:
+        return "dependency_source"
+    return "unknown"
+
+
+def _diagnostic_spans(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect source spans from the main diagnostic, children, and macro expansion."""
+    found: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = [message]
+    while pending:
+        node = pending.pop(0)
+        spans = node.get("spans")
+        if isinstance(spans, list):
+            for span in spans:
+                if not isinstance(span, dict):
+                    continue
+                found.append(span)
+                expansion = span.get("expansion")
+                if isinstance(expansion, dict):
+                    expanded_span = expansion.get("span")
+                    if isinstance(expanded_span, dict):
+                        found.append(expanded_span)
+        children = node.get("children")
+        if isinstance(children, list):
+            pending.extend(child for child in children if isinstance(child, dict))
+    return found
+
+
+def _diagnostic_area(message: dict[str, Any], code: str) -> str:
+    spans = _diagnostic_spans(message)
+    ordered = [span for span in spans if span.get("is_primary") is True]
+    ordered.extend(span for span in spans if span.get("is_primary") is not True)
+    for span in ordered:
+        area = _area_for_span(span)
+        if area != "unknown":
+            return area
+    # E0425 is a stable Rust error class. Keep the missing identifier private.
+    if code == "E0425":
+        return "unresolved_name"
+    return "rustc_without_source_span"
+
+
 def compile_evidence(
     cargo_json: str,
     cargo_exit: int,
@@ -62,27 +125,7 @@ def compile_evidence(
             code = message.get("code")
             code_value = code.get("code") if isinstance(code, dict) else None
             if isinstance(code_value, str) and RUSTC_CODE.fullmatch(code_value):
-                spans = message.get("spans")
-                area = "unknown"
-                if isinstance(spans, list):
-                    for span in spans:
-                        if not isinstance(span, dict) or span.get("is_primary") is not True:
-                            continue
-                        filename = str(span.get("file_name", "")).replace("\\", "/")
-                        line = span.get("line_start")
-                        if filename.endswith("/device_search/runtime.rs"):
-                            area = "runtime_tests" if isinstance(line, int) and line >= 280 else "runtime_core"
-                        elif filename.endswith("/device_search/scoring.rs"):
-                            area = "scoring"
-                        elif filename.endswith("/device_search.rs"):
-                            area = "device_search"
-                        elif "/run_config/execution/" in filename:
-                            area = "run_config_execution"
-                        elif "/run_config/" in filename:
-                            area = "run_config_manifest"
-                        elif filename.endswith("/tch_training_resume.rs"):
-                            area = "resume_fixture"
-                        break
+                area = _diagnostic_area(message, code_value)
                 errors.append((code_value, area))
 
     unique_executables = sorted(set(executables))
