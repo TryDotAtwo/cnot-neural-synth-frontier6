@@ -94,22 +94,52 @@ jobs:
             --env LIBTORCH_USE_PYTORCH=1 \
             --env LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib:/usr/local/cuda/lib64 \
             pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel \
-            bash -euc '/root/.cargo/bin/cargo test --quiet --features cuda --lib device_search::runtime::tests && /root/.cargo/bin/cargo build --quiet --features cuda --bin cnot103-search' \
+            bash -euc '
+              if ! /root/.cargo/bin/cargo test --quiet --features cuda --lib device_search::runtime::tests \
+                >/runner_temp/cnot103-runtime-tests.stdout \
+                2>/runner_temp/cnot103-runtime-tests.stderr; then
+                if grep -Eq "test result: FAILED|panicked at|assertion .* failed" \
+                  /runner_temp/cnot103-runtime-tests.stdout /runner_temp/cnot103-runtime-tests.stderr; then
+                  echo runtime_regression_failed >/runner_temp/cnot103-runtime-status
+                else
+                  echo runtime_test_build_failed >/runner_temp/cnot103-runtime-status
+                fi
+                exit 1
+              fi
+              if ! grep -Eq "test result: ok\. [1-9][0-9]* passed; 0 failed" \
+                /runner_temp/cnot103-runtime-tests.stdout /runner_temp/cnot103-runtime-tests.stderr; then
+                echo runtime_tests_not_executed >/runner_temp/cnot103-runtime-status
+                exit 1
+              fi
+              if ! /root/.cargo/bin/cargo build --quiet --features cuda --bin cnot103-search \
+                >/runner_temp/cnot103-search-build.stdout \
+                2>/runner_temp/cnot103-search-build.stderr; then
+                echo compiled_build_failed >/runner_temp/cnot103-runtime-status
+                exit 1
+              fi
+              echo compiled_runtime_passed >/runner_temp/cnot103-runtime-status
+            ' \
             >"$RUNNER_TEMP/cnot103-search.stdout" \
             2>"$RUNNER_TEMP/cnot103-search.stderr"; then
-            if grep -Eq 'test result: FAILED|panicked at|assertion .* failed' "$RUNNER_TEMP/cnot103-search.stdout" "$RUNNER_TEMP/cnot103-search.stderr"; then
-              echo 'compiled_cnot_runtime=regression_failed'
-            elif grep -Eiq 'toomanyrequests|429 too many requests|rate limit exceeded' "$RUNNER_TEMP/cnot103-search.stderr"; then
-              echo 'compiled_cnot_runtime=container_registry_rate_limited'
-            elif grep -Eiq 'Unable to find image|pull access denied|manifest unknown|no matching manifest|failed to resolve reference' "$RUNNER_TEMP/cnot103-search.stderr"; then
-              echo 'compiled_cnot_runtime=container_image_unavailable'
-            elif grep -Eiq 'TLS handshake timeout|i/o timeout|connection reset|temporary failure in name resolution|network is unreachable' "$RUNNER_TEMP/cnot103-search.stderr"; then
-              echo 'compiled_cnot_runtime=container_registry_transport_failed'
-            elif grep -Eq 'error\\[E[0-9]+\\]|failed to run custom build command' "$RUNNER_TEMP/cnot103-search.stderr"; then
-              echo 'compiled_cnot_runtime=compiled_build_failed'
-            else
-              echo 'compiled_cnot_runtime=execution_failed'
-            fi
+            runtime_status="$(cat "$RUNNER_TEMP/cnot103-runtime-status" 2>/dev/null || true)"
+            case "$runtime_status" in
+              runtime_regression_failed) echo 'compiled_cnot_runtime=regression_failed' ;;
+              runtime_test_build_failed) echo 'compiled_cnot_runtime=test_build_failed' ;;
+              runtime_tests_not_executed) echo 'compiled_cnot_runtime=no_tests_executed' ;;
+              compiled_build_failed) echo 'compiled_cnot_runtime=compiled_build_failed' ;;
+              runtime_test_passed) echo 'compiled_cnot_runtime=passed' ;;
+              *)
+                if grep -Eiq 'toomanyrequests|429 too many requests|rate limit exceeded' "$RUNNER_TEMP/cnot103-search.stderr"; then
+                  echo 'compiled_cnot_runtime=container_registry_rate_limited'
+                elif grep -Eiq 'Unable to find image|pull access denied|manifest unknown|no matching manifest|failed to resolve reference' "$RUNNER_TEMP/cnot103-search.stderr"; then
+                  echo 'compiled_cnot_runtime=container_image_unavailable'
+                elif grep -Eiq 'TLS handshake timeout|i/o timeout|connection reset|temporary failure in name resolution|network is unreachable' "$RUNNER_TEMP/cnot103-search.stderr"; then
+                  echo 'compiled_cnot_runtime=container_registry_transport_failed'
+                else
+                  echo 'compiled_cnot_runtime=execution_failed'
+                fi
+                ;;
+            esac
             exit 1
           fi
           echo 'compiled_cnot_runtime=passed'

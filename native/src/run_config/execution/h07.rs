@@ -1,7 +1,7 @@
 //! Read-only, post-forward H07 with an actual frozen training checkpoint.
 use super::{
     artifacts,
-    evaluation::{load_dev_checkpoint, DevCheckpoint},
+    evaluation::{load_dev_checkpoint, PanelCheckpoint},
 };
 use crate::{run_config::manifest::PinnedArtifact, view_diagnostic::resident, CheckpointManifest};
 use serde::Deserialize;
@@ -31,7 +31,7 @@ pub fn execute_dev_h07_manifest(path: &Path) -> Result<Value, String> {
     if spec.schema != "cnot103_dev_h07_v1" {
         return Err("unknown dev H07 manifest schema".into());
     }
-    let DevCheckpoint {
+    let PanelCheckpoint {
         field,
         receipt,
         audit,
