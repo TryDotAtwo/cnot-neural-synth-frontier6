@@ -97,9 +97,7 @@ jobs:
           set -euo pipefail
           runtime_log="$RUNNER_TEMP/cnot103-torch-runtime.log"
           if ! cargo test --locked --features torch --lib device_search::runtime::tests >"$runtime_log" 2>&1; then
-            if grep -Eq 'error\[E[0-9]+\]:' "$runtime_log"; then
-              echo 'cpu_torch_runtime=compile_failed'
-            elif grep -Fq 'v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold ... FAILED' "$runtime_log"; then
+            if grep -Fq 'v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold ... FAILED' "$runtime_log"; then
               echo 'cpu_torch_runtime=budget_or_identity_semantics_failed'
             elif grep -Fq 'v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution ... FAILED' "$runtime_log"; then
               echo 'cpu_torch_runtime=terminal_scan_failed'
@@ -113,12 +111,20 @@ jobs:
               echo 'cpu_torch_runtime=gl2_replay_regression'
             elif grep -Fq 'cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays ... FAILED' "$runtime_log"; then
               echo 'cpu_torch_runtime=hamming_control_regression'
+            elif grep -Fq 'test result: FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=unit_test_failed'
+            elif grep -Eiq '(^|[[:space:]])error(:|\[E[0-9]+\]:)' "$runtime_log"; then
+              echo 'cpu_torch_runtime=compile_or_link_failed'
+            elif grep -Fq 'No space left on device' "$runtime_log"; then
+              echo 'cpu_torch_runtime=runner_storage_exhausted'
+            elif grep -Fq 'signal: 9' "$runtime_log"; then
+              echo 'cpu_torch_runtime=runner_resource_exhausted'
             else
-              echo 'cpu_torch_runtime=runtime_test_failed'
+              echo 'cpu_torch_runtime=runtime_test_or_build_failed'
             fi
             exit 1
           fi
-          for name in \
+                    for name in \
             v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold \
             v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution \
             v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three \
