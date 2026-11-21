@@ -16,8 +16,11 @@ CHECK_NAMES = ("v13", "resume", "profile")
 
 
 def _target_matches(target: dict[str, Any], target_name: str | None, artifact_kind: str) -> bool:
-    if target_name is not None and target.get("name") != target_name:
-        return False
+    if target_name is not None:
+        cargo_name = target.get("name")
+        accepted_names = {target_name, target_name.replace("-", "_")}
+        if cargo_name not in accepted_names:
+            return False
     kind = target.get("kind")
     if not isinstance(kind, list):
         return False
