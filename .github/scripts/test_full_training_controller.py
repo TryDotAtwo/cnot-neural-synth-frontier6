@@ -893,6 +893,19 @@ class ForecastMonitoringTests(unittest.TestCase):
             3600.0,
             3500.0,
             1000.0,
+            billing_snapshot={
+                "schema": "cnot103_campaign_billing_snapshot_v1",
+                "instance_id": "123",
+                "billing_baseline_project_spend_usd": 0.0,
+                "projected_project_spend_usd": 0.30833333333333335,
+                "billing_baseline_epoch": 900.0,
+                "captured_at_epoch": 1000.0,
+                "active_rate_usd_per_hour": 0.3,
+                "post_stop_storage_reserve_usd": 10.08,
+                "other_storage_reserve_usd": 0.0,
+                "transfer_reserve_usd": 0.25,
+                "stop_poll_reserve_usd": 0.05,
+            },
         )
         stop.assert_not_called()
 

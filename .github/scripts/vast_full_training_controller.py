@@ -62,6 +62,9 @@ class GateError(RuntimeError):
     pass
 
 
+def _completed_quality_receipt(quality: object) -> bool:
+    return isinstance(quality, str) and quality in {"passed", "no_practical_gain"}
+
 
 def _finite(value: object) -> float | None:
     return base.finite_number(value)
