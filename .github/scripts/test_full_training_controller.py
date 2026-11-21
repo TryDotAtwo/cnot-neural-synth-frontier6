@@ -563,6 +563,14 @@ class NewRentalBudgetDiagnosisTests(unittest.TestCase):
             "inputs_unknown",
         )
 
+    def test_offer_without_allocation_echo_uses_pinned_search_contract(self):
+        offer = self.offer()
+        del offer["allocated_storage"]
+        self.assertEqual(
+            controller.classify_new_rental_budget([offer], [], spent=0.0),
+            "within_cap",
+        )
+
     def test_no_eligible_offer_has_its_own_status(self):
         self.assertEqual(
             controller.classify_new_rental_budget([], [], spent=0.0),
