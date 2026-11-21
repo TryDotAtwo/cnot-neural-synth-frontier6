@@ -99,6 +99,14 @@ jobs:
           if ! cargo test --locked --features torch --lib device_search::runtime::tests >"$runtime_log" 2>&1; then
             if grep -Eq 'error\[E[0-9]+\]:' "$runtime_log"; then
               echo 'cpu_torch_runtime=compile_failed'
+            elif grep -Fq 'v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=budget_or_identity_semantics_failed'
+            elif grep -Fq 'v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=terminal_scan_failed'
+            elif grep -Fq 'v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=depth_three_budget_failed'
+            elif grep -Fq 'v13_saturated_frontier_is_all_or_none_at_one_plus_b_minus_one_and_one_plus_b ... FAILED' "$runtime_log"; then
+              echo 'cpu_torch_runtime=saturated_frontier_failed'
             elif grep -Fq 'compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle ... FAILED' "$runtime_log"; then
               echo 'cpu_torch_runtime=pinned_v13_fixture_failed'
             elif grep -Fq 'compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays ... FAILED' "$runtime_log"; then
@@ -263,7 +271,14 @@ jobs:
                 echo toolchain_missing >"$status"
                 exit 11
               fi
-              if ! python -c "import torch; assert torch.__version__.startswith('2.9.0')" >/dev/null 2>&1; then
+              if ! timeout --signal=TERM --kill-after=15s 20m python -m pip install \
+                --disable-pip-version-check --no-cache-dir --force-reinstall --no-deps \
+                --index-url https://download.pytorch.org/whl/cu128 'torch==2.9.0' \
+                >/runner_temp/cnot103-pytorch-wheel-install.log 2>&1; then
+                echo pytorch_cuda_wheel_install_failed >"$status"
+                exit 12
+              fi
+              if ! python -c "import torch; assert torch.__version__.split('+')[0] == '2.9.0'" >/dev/null 2>&1; then
                 echo torch_version_mismatch >"$status"
                 exit 12
               fi
@@ -290,6 +305,7 @@ jobs:
             result="$(cat "$RUNNER_TEMP/cnot103-cuda-build.status" 2>/dev/null || true)"
             case "$result" in
               toolchain_missing) echo 'cuda_build=nvcc_or_cmake_missing' ;;
+              pytorch_cuda_wheel_install_failed) echo 'cuda_build=pytorch_cuda_wheel_install_failed' ;;
               torch_version_mismatch) echo 'cuda_build=pytorch_version_mismatch' ;;
               cuda_version_mismatch) echo 'cuda_build=cuda_version_mismatch' ;;
               torch_abi_metadata_missing) echo 'cuda_build=pytorch_abi_metadata_missing' ;;
