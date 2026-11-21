@@ -16,7 +16,6 @@ on:
       - .github/workflows/cnot-full-training-monitor.yml
       - .github/workflows/vast-full-training.yml
       - .github/workflows/cnot-full-training-inventory.yml
-      - .github/diagnostics/cnot-full-training-inventory.json
       - .github/paid-runs/2026-11-20-full-training.json
       - .github/workflows/check-full-training-manifest.yml
 
