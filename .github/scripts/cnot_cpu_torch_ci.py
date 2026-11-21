@@ -136,6 +136,21 @@ def _diagnostic_area(message: dict[str, Any], code: str) -> str:
     return "rustc_without_source_span"
 
 
+
+def _diagnostic_test_site(message: dict[str, Any]) -> str:
+    """Map an uncoded runtime diagnostic to an allowlisted test family."""
+    for span in _diagnostic_spans(message):
+        filename = str(span.get("file_name", "")).replace("\\\\", "/").lower()
+        line_start = span.get("line_start")
+        if filename.endswith("/device_search/runtime.rs") and isinstance(line_start, int):
+            if line_start >= 861:
+                return "hamming_control_test"
+            if line_start >= 630:
+                return "v13_regression_test"
+            return "runtime_test_support"
+    return "unknown_test_site"
+
+
 def _cargo_failure_area(cargo_json: str) -> str:
     text = cargo_json.lower()
     if "linking with" in text and "failed" in text:
@@ -191,6 +206,8 @@ def compile_evidence(
             if code_value is not None or message.get("level") == "error":
                 area = _diagnostic_area(message, str(code_value or ""))
                 kind = _diagnostic_kind(message) if code_value is None else ""
+                if code_value is None and kind == "compiler_error":
+                    kind = _diagnostic_test_site(message)
                 errors.append((code_value, area, kind))
 
     unique_executables = sorted(set(executables))
