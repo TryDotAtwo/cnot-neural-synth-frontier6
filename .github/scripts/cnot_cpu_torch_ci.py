@@ -49,18 +49,24 @@ def _area_for_span(span: dict[str, Any]) -> str:
         return "crate_root"
     if filename.endswith("/native/build.rs") or filename == "build.rs":
         return "build_script"
-    if "/native/src/" in filename:
-        relative = filename.split("/native/src/", 1)[1]
-        top = relative.split("/", 1)[0]
-        if top in {"model", "objective", "nn_training", "training_session", "training_data", "frozen_data", "run_config"}:
-            return top
-        return "native_source_other"
-    if filename.startswith("src/"):
-        relative = filename.removeprefix("src/")
-        top = relative.split("/", 1)[0]
-        if top in {"model", "objective", "nn_training", "training_session", "training_data", "frozen_data", "run_config"}:
-            return top
-        return "native_source_other"
+    source_prefixes = ("/native/src/", "src/")
+    for prefix in source_prefixes:
+        if prefix in filename:
+            relative = filename.split(prefix, 1)[1]
+            top = relative.split("/", 1)[0]
+            source_areas = {
+                "device_search", "features", "model", "objective", "nn_training",
+                "training_session", "training_data", "frozen_data", "run_config",
+                "cuda", "torch_device", "bellman", "stage_profile", "device_state",
+                "device_feature_plan", "checkpoint", "state", "alphabet",
+            }
+            if top in source_areas:
+                return top
+            if top.endswith(".rs"):
+                root = top.removesuffix(".rs")
+                if root in source_areas:
+                    return f"{root}_root"
+            return "native_source_other"
     if "/.cargo/registry/" in filename or "/cargo/registry/" in filename:
         return "dependency_source"
     return "unknown"
