@@ -23,6 +23,104 @@ from run_full_training import (
 
 
 class FullTrainingSupervisorTests(unittest.TestCase):
+    def test_multigpu_handoff_pins_locked_panel_checkpoint_and_search(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            manifests = root / "manifests"
+            reports = root / "reports"
+            manifests.mkdir()
+            reports.mkdir()
+            training_manifest = manifests / "training.json"
+            training_manifest.write_text('{"schema":"test"}', encoding="utf-8")
+
+            checkpoint_sha = "a" * 64
+            dataset_sha = "d" * 64
+            training_result = reports / "training-result.json"
+            training_result.write_text(
+                json.dumps({
+                    "schema": "cnot103_training_result_v1",
+                    "end_progress": {"accepted": 8},
+                    "checkpoint": {"sha256": checkpoint_sha},
+                    "model_parameters": training.MODEL_PARAMETERS,
+                    "feature_model_inputs": training.MODEL_INPUTS,
+                    "dataset_sha256": dataset_sha,
+                }),
+                encoding="utf-8",
+            )
+            indices = [3, 9]
+            case_ids = ["test-case-a", "test-case-b"]
+            panel_digest = training._panel_digest("test", indices, case_ids)
+            search = dict(training.BEAM_CONFIG)
+            search_manifest = manifests / "locked-test-search.json"
+            search_manifest.write_text(
+                json.dumps({
+                    "schema": "cnot103_panel_search_v2",
+                    "training_manifest": {
+                        "path": str(training_manifest),
+                        "sha256": hashlib.sha256(training_manifest.read_bytes()).hexdigest(),
+                    },
+                    "training_result": {
+                        "path": str(training_result),
+                        "sha256": hashlib.sha256(training_result.read_bytes()).hexdigest(),
+                    },
+                    "panel": "test",
+                    "panel_indices": indices,
+                    "panel_ids": case_ids,
+                    "panel_digest": panel_digest,
+                    "search": search,
+                    "head": "qhat",
+                }),
+                encoding="utf-8",
+            )
+
+            kwargs = {
+                "root": root,
+                "source_revision": "e" * 40,
+                "accepted_updates": 8,
+                "checkpoint_sha256": checkpoint_sha,
+                "training_manifest_path": training_manifest,
+                "training_result_path": training_result,
+                "search_manifest_path": search_manifest,
+                "expected_panel": "test",
+                "expected_panel_indices": indices,
+                "expected_panel_ids": case_ids,
+                "expected_panel_digest": panel_digest,
+                "expected_search": search,
+                "locked_test_comparison": {"status": "length_gain"},
+            }
+            handoff = training.build_multigpu_beam_handoff(**kwargs)
+            self.assertEqual(handoff["schema"], "cnot103_multigpu_beam_handoff_v1")
+            self.assertEqual(handoff["accepted_updates"], 8)
+            self.assertEqual(handoff["checkpoint_sha256"], checkpoint_sha)
+            self.assertEqual(handoff["dataset_sha256"], dataset_sha)
+            self.assertEqual(handoff["model"]["structural_blocks"], 8)
+            self.assertEqual(handoff["model"]["parameters"], 136_421_807)
+            self.assertEqual(handoff["model"]["input_slots"], 102)
+            self.assertEqual(handoff["panel_indices"], indices)
+            self.assertEqual(handoff["panel_ids"], case_ids)
+            self.assertEqual(handoff["locked_test_status"], "length_gain")
+            self.assertEqual(
+                handoff["search_manifest"]["sha256"],
+                hashlib.sha256(search_manifest.read_bytes()).hexdigest(),
+            )
+
+            wrong_checkpoint = dict(kwargs)
+            wrong_checkpoint["checkpoint_sha256"] = "b" * 64
+            with self.assertRaises(RunError):
+                training.build_multigpu_beam_handoff(**wrong_checkpoint)
+
+            changed_search = json.loads(search_manifest.read_text(encoding="utf-8"))
+            changed_search["panel_ids"] = list(reversed(case_ids))
+            search_manifest.write_text(json.dumps(changed_search), encoding="utf-8")
+            with self.assertRaises(RunError):
+                training.build_multigpu_beam_handoff(**kwargs)
+
+            outside = dict(kwargs)
+            outside["training_manifest_path"] = root.parent / "outside.json"
+            (root.parent / "outside.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(RunError):
+                training.build_multigpu_beam_handoff(**outside)
+
     def test_holdout_sample_is_deterministic_and_stratified_by_width(self):
         records = [
             {"state": {"n": n}}

@@ -604,6 +604,163 @@ def _panel_digest(panel: str, indices: list[int], case_ids: list[str]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def build_multigpu_beam_handoff(
+    *,
+    root: pathlib.Path,
+    source_revision: str,
+    accepted_updates: int,
+    checkpoint_sha256: str,
+    training_manifest_path: pathlib.Path,
+    training_result_path: pathlib.Path,
+    search_manifest_path: pathlib.Path,
+    expected_panel: str,
+    expected_panel_indices: list[int],
+    expected_panel_ids: list[str],
+    expected_panel_digest: str,
+    expected_search: dict[str, Any],
+    locked_test_comparison: dict[str, Any],
+) -> dict[str, Any]:
+    if (
+        not isinstance(source_revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+        or type(accepted_updates) is not int or accepted_updates < 1
+        or not isinstance(checkpoint_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", checkpoint_sha256) is None
+        or expected_panel != "test"
+        or not isinstance(expected_panel_indices, list)
+        or not expected_panel_indices
+        or any(type(index) is not int or index < 0 for index in expected_panel_indices)
+        or len(expected_panel_indices) != len(set(expected_panel_indices))
+        or not isinstance(expected_panel_ids, list)
+        or len(expected_panel_ids) != len(expected_panel_indices)
+        or any(not isinstance(case_id, str) or not case_id.strip() for case_id in expected_panel_ids)
+        or len(expected_panel_ids) != len(set(expected_panel_ids))
+        or expected_panel_digest != _panel_digest(
+            expected_panel, expected_panel_indices, expected_panel_ids
+        )
+        or not isinstance(expected_search, dict)
+        or not isinstance(locked_test_comparison, dict)
+        or locked_test_comparison.get("status")
+            not in QUALITY_GAIN_STATUSES | {"tie", "no_practical_gain"}
+    ):
+        raise RunError("MultiGPUBeamSearch handoff inputs are malformed")
+
+    try:
+        root_path = root.resolve(strict=True)
+    except OSError:
+        raise RunError("handoff root is unavailable") from None
+
+    def artifact_ref(path: pathlib.Path, name: str) -> tuple[pathlib.Path, dict[str, str]]:
+        try:
+            resolved = pathlib.Path(path).resolve(strict=True)
+            relative = resolved.relative_to(root_path)
+            raw = resolved.read_bytes()
+        except (OSError, ValueError):
+            raise RunError(f"{name} is unavailable or outside the private run root") from None
+        if not resolved.is_file():
+            raise RunError(f"{name} is not a regular file")
+        return resolved, {
+            "path": relative.as_posix(),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    def read_json(path: pathlib.Path, name: str) -> dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise RunError(f"{name} JSON is unreadable") from None
+        if not isinstance(value, dict):
+            raise RunError(f"{name} JSON is malformed")
+        return value
+
+    def resolve_pinned_path(value: object, base: pathlib.Path, name: str) -> pathlib.Path:
+        if not isinstance(value, str) or not value:
+            raise RunError(f"{name} path pin is missing")
+        candidate = pathlib.Path(value)
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        try:
+            return candidate.resolve(strict=True)
+        except OSError:
+            raise RunError(f"{name} path pin cannot be resolved") from None
+
+    train_manifest_path, train_manifest_ref = artifact_ref(
+        training_manifest_path, "training manifest"
+    )
+    train_result_path, train_result_ref = artifact_ref(
+        training_result_path, "training result"
+    )
+    search_path, search_ref = artifact_ref(search_manifest_path, "panel search manifest")
+    result = read_json(train_result_path, "training result")
+    search_manifest = read_json(search_path, "panel search manifest")
+
+    progress = result.get("end_progress")
+    checkpoint = result.get("checkpoint")
+    if (
+        result.get("schema") != "cnot103_training_result_v1"
+        or not isinstance(progress, dict)
+        or type(progress.get("accepted")) is not int
+        or progress["accepted"] != accepted_updates
+        or not isinstance(checkpoint, dict)
+        or checkpoint.get("sha256") != checkpoint_sha256
+        or result.get("model_parameters") != MODEL_PARAMETERS
+        or result.get("feature_model_inputs") != MODEL_INPUTS
+        or not isinstance(result.get("dataset_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", result.get("dataset_sha256", "")) is None
+    ):
+        raise RunError("training result does not pin the selected full-model checkpoint")
+
+    train_pin = search_manifest.get("training_manifest")
+    result_pin = search_manifest.get("training_result")
+    if (
+        search_manifest.get("schema") != "cnot103_panel_search_v2"
+        or search_manifest.get("panel") != expected_panel
+        or search_manifest.get("panel_indices") != expected_panel_indices
+        or search_manifest.get("panel_ids") != expected_panel_ids
+        or search_manifest.get("panel_digest") != expected_panel_digest
+        or search_manifest.get("search") != expected_search
+        or search_manifest.get("head") != "qhat"
+        or not isinstance(train_pin, dict)
+        or train_pin.get("sha256") != train_manifest_ref["sha256"]
+        or not isinstance(result_pin, dict)
+        or result_pin.get("sha256") != train_result_ref["sha256"]
+        or resolve_pinned_path(train_pin.get("path"), search_path.parent, "training manifest")
+            != train_manifest_path
+        or resolve_pinned_path(result_pin.get("path"), search_path.parent, "training result")
+            != train_result_path
+    ):
+        raise RunError("panel-v2 search manifest differs from the locked test or training pins")
+
+    comparison_raw = json.dumps(
+        locked_test_comparison, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return {
+        "schema": "cnot103_multigpu_beam_handoff_v1",
+        "consumer": "MultiGPUBeamSearch",
+        "producer_source_revision": source_revision,
+        "accepted_updates": accepted_updates,
+        "checkpoint_sha256": checkpoint_sha256,
+        "model": {
+            "structural_blocks": STRUCTURAL_BLOCKS,
+            "parameters": MODEL_PARAMETERS,
+            "feature_schema": "runtime_packet_layout_v25",
+            "input_slots": MODEL_INPUTS,
+        },
+        "dataset_sha256": result["dataset_sha256"],
+        "training_manifest": train_manifest_ref,
+        "training_result": train_result_ref,
+        "search_manifest": search_ref,
+        "panel": expected_panel,
+        "panel_indices": list(expected_panel_indices),
+        "panel_ids": list(expected_panel_ids),
+        "panel_digest": expected_panel_digest,
+        "search": dict(expected_search),
+        "head": "qhat",
+        "locked_test_status": locked_test_comparison["status"],
+        "locked_test_comparison_sha256": hashlib.sha256(comparison_raw).hexdigest(),
+    }
+
+
 def _packed_state_rows(state: object) -> tuple[int, str, list[int]]:
     if not isinstance(state, dict):
         raise RunError("frozen panel state is malformed")
@@ -2705,11 +2862,27 @@ class Supervisor:
                     candidate_receipt_pins=candidate_test_metrics["receipt_pins"],
                     baseline_head="hamming", candidate_head="qhat",
                 )
+                consumer_handoff = build_multigpu_beam_handoff(
+                    root=self.root,
+                    source_revision=self.source_revision,
+                    accepted_updates=milestone,
+                    checkpoint_sha256=selected["checkpoint_sha256"],
+                    training_manifest_path=record["manifest"],
+                    training_result_path=record["result_path"],
+                    search_manifest_path=candidate_manifest,
+                    expected_panel="test",
+                    expected_panel_indices=test_cohort["indices"],
+                    expected_panel_ids=test_cohort["case_ids"],
+                    expected_panel_digest=test_cohort["digest"],
+                    expected_search=measurement_spec["search"],
+                    locked_test_comparison=paired_test_comparison,
+                )
                 return {
                     "status": "evaluated",
                     "accepted_updates": milestone,
                     "checkpoint_sha256": selected["checkpoint_sha256"],
                     "comparison": paired_test_comparison,
+                    "consumer_handoff": consumer_handoff,
                 }
 
             curve_result = run_measurement_sweep(
@@ -2763,6 +2936,10 @@ class Supervisor:
                 "measurements": curve_result["measurements"],
                 "selected": curve_result["selected"],
                 "locked_test": curve_result["locked_test"],
+                "multi_gpu_beam_handoff": (
+                    curve_result["locked_test"].get("consumer_handoff")
+                    if isinstance(curve_result["locked_test"], dict) else None
+                ),
                 "locked_test_comparison": quality_comparison,
                 "dev_panel_digest": dev_cohort["digest"],
                 "locked_test_panel_digest": test_cohort["digest"],
@@ -2847,6 +3024,10 @@ class Supervisor:
                     "baseline_locked_test": baseline_test_metrics,
                     "candidate_locked_test": final_test_metrics,
                     "paired_locked_test_comparison": quality_comparison,
+                    "multi_gpu_beam_handoff": (
+                        curve_result["locked_test"].get("consumer_handoff")
+                        if isinstance(curve_result["locked_test"], dict) else None
+                    ),
                     "same_locked_cases_and_budget": True,
                 },
                 "hardware": hardware,
