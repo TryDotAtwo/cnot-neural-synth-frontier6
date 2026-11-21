@@ -23,6 +23,31 @@ class CpuTorchCiTests(unittest.TestCase):
         self.assertEqual(result["status"], "compiled")
         self.assertEqual(result["executable"], "/runner/tmp/cnot103-tests")
 
+    def test_lib_test_artifact_is_detected_by_executable_even_without_test_flag(self):
+        item = {
+            "reason": "compiler-artifact",
+            "target": {"name": "cnot103_native", "kind": ["lib"], "test": False},
+            "executable": "/runner/tmp/cnot103-tests",
+        }
+        result = compile_evidence(json.dumps(item), 0, "lib_test")
+        self.assertEqual(result["status"], "compiled")
+
+    def test_binary_target_name_accepts_cargo_hyphen_normalization(self):
+        item = {
+            "reason": "compiler-artifact",
+            "target": {"name": "cnot103_validate_manifest", "kind": ["bin"]},
+            "executable": "/runner/tmp/cnot103-validate-manifest",
+        }
+        result = compile_evidence(
+            json.dumps(item), 0, "bin", "cnot103-validate-manifest"
+        )
+        self.assertEqual(result["status"], "compiled")
+
+    def test_success_without_expected_artifact_is_not_reported_as_compiled(self):
+        result = compile_evidence("", 0, "bin", "missing-bin")
+        self.assertEqual(result["status"], "compile_failed_artifact_missing")
+        self.assertIsNone(result["executable"])
+
     def test_compile_receipt_exposes_only_rustc_code_when_compilation_fails(self):
         message = {
             "reason": "compiler-message",
@@ -110,6 +135,13 @@ class CpuTorchCiTests(unittest.TestCase):
         result = compile_evidence(json.dumps(message), 101, "lib_test")
         self.assertEqual(result["status"], "compile_failed_run_config_manifest")
         self.assertNotIn("private compiler detail", json.dumps(result))
+
+    def test_linker_failure_is_classified_without_exposing_diagnostics(self):
+        cargo = 'error: linking with cc failed: private linker detail'
+        result = compile_evidence(cargo, 101, "lib_test")
+        self.assertEqual(result["status"], "compile_failed_linker")
+        self.assertEqual(result["rustc_code"], "none")
+        self.assertNotIn("private linker detail", json.dumps(result))
 
     def test_unresolved_name_without_a_source_span_has_a_safe_class(self):
         message = {

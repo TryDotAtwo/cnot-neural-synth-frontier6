@@ -22,11 +22,13 @@ def _target_matches(target: dict[str, Any], target_name: str | None, artifact_ki
     if not isinstance(kind, list):
         return False
     if artifact_kind == "lib_test":
-        return target.get("test") is True and "lib" in kind
+        # Cargo's executable field is the reliable test-harness marker; metadata
+        # has varied in whether the target.test flag is present on artifacts.
+        return "lib" in kind
     if artifact_kind == "test":
         return target.get("test") is True
     if artifact_kind == "bin":
-        return target.get("test") is False and "bin" in kind
+        return "bin" in kind
     raise ValueError("unknown artifact kind")
 
 
@@ -104,9 +106,27 @@ def _diagnostic_area(message: dict[str, Any], code: str) -> str:
         if area != "unknown":
             return area
     # E0425 is a stable Rust error class. Keep the missing identifier private.
-    if code == "E0425":
+    message_text = str(message.get("message", "")).lower()
+    if code == "E0425" or message_text.startswith("cannot find "):
         return "unresolved_name"
     return "rustc_without_source_span"
+
+
+def _cargo_failure_area(cargo_json: str) -> str:
+    text = cargo_json.lower()
+    if "linking with" in text and "failed" in text:
+        return "linker"
+    if "undefined reference" in text or "undefined symbol" in text:
+        return "linker_symbol"
+    if "no space left on device" in text or "disk quota exceeded" in text:
+        return "disk_full"
+    if "signal 9" in text or "process didn't exit successfully" in text and "killed" in text:
+        return "process_killed"
+    if "could not find bin" in text or "no bin target" in text or "no test target" in text:
+        return "target_not_found"
+    if "error:" in text:
+        return "cargo_error_without_rustc_code"
+    return "cargo_failed_unknown"
 
 
 def compile_evidence(
@@ -116,7 +136,7 @@ def compile_evidence(
     target_name: str | None = None,
 ) -> dict[str, str | None]:
     executables: list[str] = []
-    errors: list[tuple[str, str]] = []
+    errors: list[tuple[str | None, str]] = []
     for line in cargo_json.splitlines():
         try:
             item = json.loads(line)
@@ -140,8 +160,12 @@ def compile_evidence(
                 continue
             code = message.get("code")
             code_value = code.get("code") if isinstance(code, dict) else None
-            if isinstance(code_value, str) and RUSTC_CODE.fullmatch(code_value):
-                area = _diagnostic_area(message, code_value)
+            if code_value is not None and not (
+                isinstance(code_value, str) and RUSTC_CODE.fullmatch(code_value)
+            ):
+                code_value = None
+            if code_value is not None or message.get("level") == "error":
+                area = _diagnostic_area(message, str(code_value or ""))
                 errors.append((code_value, area))
 
     unique_executables = sorted(set(executables))
@@ -154,11 +178,15 @@ def compile_evidence(
     if errors:
         return {
             "status": f"compile_failed_{errors[0][1]}",
-            "rustc_code": errors[0][0],
+            "rustc_code": errors[0][0] or "none",
             "executable": None,
         }
+    if cargo_exit == 0:
+        status = "compile_failed_artifact_missing" if not unique_executables else "compile_failed_artifact_ambiguous"
+    else:
+        status = f"compile_failed_{_cargo_failure_area(cargo_json)}"
     return {
-        "status": "compile_failed_without_rustc_code",
+        "status": status,
         "rustc_code": "none",
         "executable": None,
     }
