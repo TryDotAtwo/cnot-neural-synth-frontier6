@@ -499,9 +499,16 @@ class StableApprovedTargetTests(unittest.TestCase):
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller, "_other_storage_reserve", return_value=0.0),
             patch.object(controller, "_validate_bootstrap_budget", return_value=True),
+            patch.object(controller, "bootstrap_budget_allows", return_value=True),
             patch.object(controller, "_activate_stopped_target", return_value=(activated, current_label)),
-            patch.object(controller.base, "offer_inventory") as offers,
-            patch.object(controller.base, "create_once") as create,
+            patch.object(controller.base.probe, "observed_state", return_value="running"),
+            patch.object(controller.base, "offer_inventory", return_value=[{
+                "ask_id": "9", "dph_total": 0.20, "storage_cost": 0.15,
+            }]) as offers,
+            patch.object(controller.base, "create_once", return_value={
+                "id": 456, "label": current_label, "gpu_name": "RTX 3060",
+                "num_gpus": 2, "actual_status": "running",
+            }) as create,
         ):
             result = controller._start_target(
                 [target],
@@ -524,7 +531,8 @@ class StableApprovedTargetTests(unittest.TestCase):
             patch.object(controller.base, "instance_id", side_effect=lambda row: row["id"]),
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller, "_other_storage_reserve", return_value=0.0),
-            patch.object(controller, "_activate_stopped_target") as activate,
+            patch.object(controller, "_validate_bootstrap_budget", return_value=True),
+            patch.object(controller, "_activate_stopped_target", return_value=(replacement, label)) as activate,
             patch.object(controller.base, "offer_inventory") as offers,
             patch.object(controller.base, "create_once") as create,
         ):
