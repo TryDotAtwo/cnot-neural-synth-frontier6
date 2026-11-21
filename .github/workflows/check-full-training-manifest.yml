@@ -125,8 +125,7 @@ jobs:
           dataset="$RUNNER_TEMP/cnot103-parser-fixture.json"
           manifest="$RUNNER_TEMP/cnot103-valid-manifest.json"
           invalid="$RUNNER_TEMP/cnot103-invalid-manifest.json"
-          printf '{"schema":"cnot103_parser_smoke","records":[]}
-' >"$dataset"
+          printf '%s' '{"schema":"cnot103_parser_smoke","records":[]}' >"$dataset"
           dataset_sha="$(sha256sum "$dataset" | cut -d ' ' -f 1)"
           python3 ../.github/scripts/build_training_manifest.py \
             --profile ../.github/training-profiles/n10-test-support-v1.json \
