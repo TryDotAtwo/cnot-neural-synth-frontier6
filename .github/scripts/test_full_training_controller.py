@@ -500,6 +500,24 @@ class StorageReservationTests(unittest.TestCase):
             self.assertIsNone(controller._other_storage_reserve(rows, 123))
 
 
+class BudgetConfigurationDiagnosisTests(unittest.TestCase):
+    def test_missing_private_target_identity_is_reported_as_a_redacted_gate(self):
+        marker = {"resume_existing_label": "cnot103-r10k-123-a1"}
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(controller, "_marker", return_value=marker),
+            patch.object(controller.base, "instance_rows", return_value=[]),
+            patch.object(controller, "_summarize_budget") as summarize,
+        ):
+            self.assertEqual(controller.budget_check(), 1)
+
+        summarize.assert_called_once()
+        self.assertEqual(
+            summarize.call_args.args[1:],
+            ("failed", "configuration_missing", "configuration_missing"),
+        )
+
+
 class FullRunBudgetDiagnosisTests(unittest.TestCase):
     @staticmethod
     def target(**updates):

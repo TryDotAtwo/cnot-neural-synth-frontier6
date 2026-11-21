@@ -1334,6 +1334,20 @@ def budget_check() -> int:
             budget_status = classify_full_run_budget(target, rows, spend)
             bootstrap_status = classify_bootstrap_budget(target, rows, spend)
         outcome = "success"
+    except GateError as exc:
+        reason = str(exc)
+        if reason == "approved target configuration is missing or invalid":
+            classified = "configuration_missing"
+        elif reason in {
+            "approved target identity is ambiguous",
+            "approved target label is ambiguous",
+        }:
+            classified = "target_ambiguous"
+        elif reason == "approved target identity or GPU inventory mismatches":
+            classified = "target_mismatch"
+        else:
+            classified = "unavailable"
+        outcome, budget_status, bootstrap_status = "failed", classified, classified
     except Exception:
         outcome, budget_status, bootstrap_status = "failed", "unavailable", "unavailable"
     _summarize_budget(checked, outcome, budget_status, bootstrap_status)
@@ -1515,8 +1529,8 @@ def _summarize_budget(
 ) -> None:
     allowed_statuses = {
         "within_cap", "insufficient_remaining_budget", "run_projection_exceeds_cap",
-        "inputs_unknown", "target_missing", "target_ambiguous", "target_mismatch",
-        "unavailable",
+        "inputs_unknown", "configuration_missing", "target_missing",
+        "target_ambiguous", "target_mismatch", "unavailable",
     }
     if outcome not in {"success", "failed"}:
         outcome = "failed"
