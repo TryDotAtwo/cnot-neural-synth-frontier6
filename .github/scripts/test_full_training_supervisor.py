@@ -669,7 +669,7 @@ class BaselineGateTests(unittest.TestCase):
                 start = identity.copy()
                 start[1] ^= start[0]
                 alphabet_id = f"test-cnot-n{width}"
-                case_roots[case_id] = {
+                case_case_roots[case_id] = {
                     "panel_index": index,
                     "dimension": width,
                     "alphabet_id": alphabet_id,
