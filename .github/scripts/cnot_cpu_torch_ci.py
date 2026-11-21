@@ -220,6 +220,7 @@ def compile_evidence(
     cargo_exit: int,
     artifact_kind: str,
     target_name: str | None = None,
+    allow_missing_executable: bool = False,
 ) -> dict[str, str | None]:
     executables: list[str] = []
     errors: list[tuple[str | None, str, str]] = []
@@ -264,6 +265,8 @@ def compile_evidence(
             "rustc_code": "none",
             "executable": unique_executables[0],
         }
+    if cargo_exit == 0 and allow_missing_executable and not unique_executables:
+        return {"status": "compiled", "rustc_code": "none", "executable": None}
     if errors:
         return {
             "status": f"compile_failed_{errors[0][1]}" + (
@@ -350,7 +353,8 @@ def _emit(values: dict[str, str], output: str | None) -> None:
 def command_compile(args: argparse.Namespace) -> int:
     cargo_text = pathlib.Path(args.cargo_json).read_text(encoding="utf-8", errors="replace")
     evidence = compile_evidence(
-        cargo_text, args.cargo_exit, args.artifact_kind, args.target_name
+        cargo_text, args.cargo_exit, args.artifact_kind, args.target_name,
+        allow_missing_executable=args.allow_missing_executable,
     )
     if (
         evidence["status"] == "compile_failed_artifact_missing"
@@ -369,7 +373,7 @@ def command_compile(args: argparse.Namespace) -> int:
                 "executable": executable,
             }
     binary_file = pathlib.Path(args.binary_file)
-    if evidence["status"] == "compiled":
+    if evidence["status"] == "compiled" and evidence["executable"]:
         binary_file.write_text(str(evidence["executable"]), encoding="utf-8")
     else:
         binary_file.unlink(missing_ok=True)
@@ -387,6 +391,44 @@ def command_run_tests(args: argparse.Namespace) -> int:
         result = {"status": "failed", "code": "binary_missing"}
     else:
         result = run_named_tests(executable, args.tests)
+    _emit(result, args.output)
+    return 0
+
+
+def command_run_cargo_tests(args: argparse.Namespace) -> int:
+    base = [
+        "cargo", "test", "--locked", "--features", "torch",
+        "--manifest-path", args.manifest_path, "--lib",
+    ]
+    try:
+        listed = subprocess.run(
+            base + ["--", "--list"], cwd=args.cwd, capture_output=True,
+            text=True, timeout=1800, check=False,
+        )
+        if listed.returncode != 0:
+            result = {"status": "failed", "code": "test_list_failed"}
+        else:
+            available = {
+                line.rsplit(": ", 1)[0]
+                for line in listed.stdout.splitlines()
+                if line.endswith(": test")
+            }
+            if any(name not in available for name in args.tests):
+                result = {"status": "failed", "code": "expected_test_missing"}
+            else:
+                executed = subprocess.run(
+                    base + [args.filter], cwd=args.cwd, capture_output=True,
+                    text=True, timeout=3600, check=False,
+                )
+                passed = executed.returncode == 0 and all(
+                    f"test {name} ... ok" in executed.stdout for name in args.tests
+                )
+                result = {
+                    "status": "passed" if passed else "failed",
+                    "code": "none" if passed else "test_failed",
+                }
+    except (OSError, subprocess.TimeoutExpired):
+        result = {"status": "failed", "code": "test_runner_unavailable"}
     _emit(result, args.output)
     return 0
 
@@ -424,6 +466,7 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--artifact-dir")
     compile_parser.add_argument("--artifact-prefix")
     compile_parser.add_argument("--expected-test", nargs="+", default=[])
+    compile_parser.add_argument("--allow-missing-executable", action="store_true")
     compile_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
     compile_parser.set_defaults(run=command_compile)
 
@@ -432,6 +475,14 @@ def build_parser() -> argparse.ArgumentParser:
     tests_parser.add_argument("--tests", nargs="+", required=True)
     tests_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
     tests_parser.set_defaults(run=command_run_tests)
+
+    cargo_tests_parser = subparsers.add_parser("run-cargo-tests")
+    cargo_tests_parser.add_argument("--manifest-path", required=True)
+    cargo_tests_parser.add_argument("--cwd", required=True)
+    cargo_tests_parser.add_argument("--filter", required=True)
+    cargo_tests_parser.add_argument("--tests", nargs="+", required=True)
+    cargo_tests_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
+    cargo_tests_parser.set_defaults(run=command_run_cargo_tests)
 
     gate_parser = subparsers.add_parser("gate")
     for name in (

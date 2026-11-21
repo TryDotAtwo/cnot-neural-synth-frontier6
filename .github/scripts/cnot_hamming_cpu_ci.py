@@ -208,16 +208,16 @@ def main() -> int:
         output = "cpu_hamming=failed code=receipt_or_runtime"
         if args.output:
             with open(args.output, "a", encoding="utf-8") as stream:
-                stream.write("status=failed\n")
-                stream.write(output + "\n")
+                stream.write("status=failed\\n")
+                stream.write(output + "\\n")
         print("status=failed")
         print(output)
         return 1
     output = "cpu_hamming=passed bad_pin=rejected bad_index=rejected bad_root=rejected"
     if args.output:
         with open(args.output, "a", encoding="utf-8") as stream:
-            stream.write("status=passed\n")
-            stream.write(output + "\n")
+            stream.write("status=passed\\n")
+            stream.write(output + "\\n")
     print("status=passed")
     print(output)
     return 0

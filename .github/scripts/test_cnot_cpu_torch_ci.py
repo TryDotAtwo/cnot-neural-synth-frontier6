@@ -68,6 +68,13 @@ class CpuTorchCiTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "compiled")
 
+    def test_lib_compile_can_report_success_without_a_json_executable_path(self):
+        result = compile_evidence(
+            "", 0, "lib_test", allow_missing_executable=True
+        )
+        self.assertEqual(result["status"], "compiled")
+        self.assertIsNone(result["executable"])
+
     def test_success_without_expected_artifact_is_not_reported_as_compiled(self):
         result = compile_evidence("", 0, "bin", "missing-bin")
         self.assertEqual(result["status"], "compile_failed_artifact_missing")

@@ -74,7 +74,7 @@ jobs:
             --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
             --artifact-kind lib_test --binary-file "$binary_file" \
             --artifact-dir "$RUNNER_TEMP/cnot103-torch-target/debug/deps" \
-            --artifact-prefix cnot103_native- --expected-test device_search::runtime::tests::v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold --output "$GITHUB_OUTPUT"
+            --artifact-prefix cnot103_native- --allow-missing-executable --expected-test device_search::runtime::tests::v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold --output "$GITHUB_OUTPUT"
 
       - name: Run the named v13 runtime regressions on CPU tensors
         id: v13
@@ -84,8 +84,9 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
-          python3 ../.github/scripts/cnot_cpu_torch_ci.py run-tests \
-            --binary-file "$RUNNER_TEMP/cnot103-v13-executable" \
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py run-cargo-tests \
+            --manifest-path Cargo.toml --cwd "$GITHUB_WORKSPACE/native" \
+            --filter device_search::runtime::tests:: \
             --tests \
               device_search::runtime::tests::v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold \
               device_search::runtime::tests::v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution \

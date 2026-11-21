@@ -716,11 +716,11 @@ class BaselineGateTests(unittest.TestCase):
             "runtime_contract": pins["runtime_contract"],
             "panel_roots": [
                 {
-                    "panel_index": case_roots[case_id]["panel_index"],
+                    "panel_index": roots[case_id]["panel_index"],
                     "case_id": case_id,
-                    "dimension": case_roots[case_id]["dimension"],
-                    "alphabet_id": case_roots[case_id]["alphabet_id"],
-                    "start_packed_rows": case_roots[case_id]["start_packed_rows"],
+                    "dimension": roots[case_id]["dimension"],
+                    "alphabet_id": roots[case_id]["alphabet_id"],
+                    "start_packed_rows": roots[case_id]["start_packed_rows"],
                 }
                 for case_id in case_ids
             ],
