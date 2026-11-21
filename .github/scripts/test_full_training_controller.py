@@ -501,7 +501,7 @@ class StableApprovedTargetTests(unittest.TestCase):
             patch.object(controller, "_validate_bootstrap_budget", return_value=True),
             patch.object(controller, "bootstrap_budget_allows", return_value=True),
             patch.object(controller, "_activate_stopped_target", return_value=(activated, current_label)),
-            patch.object(controller.base.probe, "observed_state", return_value="running"),
+            patch.object(controller.base.probe, "observed_state", side_effect=lambda row: "stopped" if row["id"] == 123 else "running"),
             patch.object(controller.base, "offer_inventory", return_value=[{
                 "ask_id": "9", "dph_total": 0.20, "storage_cost": 0.15,
             }]) as offers,
@@ -568,9 +568,9 @@ class StableApprovedTargetTests(unittest.TestCase):
             / "workflows"
             / "vast-full-training.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("concurrency:\n  group:", workflow)
-        self.assertIn("cancel-in-progress: false", workflow)
-        self.assertIn("timeout-minutes: 300", workflow)
+        self.assertTrue("concurrency:\n  group:" in workflow)
+        self.assertTrue("cancel-in-progress: false" in workflow)
+        self.assertTrue("timeout-minutes: 300" in workflow)
 
 
 if __name__ == "__main__":
