@@ -109,6 +109,16 @@ fn sealed_fixture(path: &Path) -> String {
 }
 
 #[test]
+fn export_cpu_validator_fixture_for_ci() {
+    let Some(path) = std::env::var_os("CNOT103_TEST_FIXTURE_PATH") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    let digest = sealed_fixture(&path);
+    FrozenDataset::load_pinned(&path, &digest).unwrap();
+}
+
+#[test]
 fn pinned_load_verifies_split_artifact_and_rejects_wrong_pin() {
     let unique = format!(
         "tqp-frozen-{}-{}.json",

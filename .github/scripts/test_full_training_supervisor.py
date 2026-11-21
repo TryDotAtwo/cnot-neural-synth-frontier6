@@ -354,14 +354,14 @@ class QualityComparisonTests(unittest.TestCase):
 
     def test_previously_solved_case_cannot_become_unsolved(self):
         result = self.compare(
-            [self.solved("case-a", 2), self.unsolved("case-b")],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
             [self.unsolved("case-a"), self.solved("case-b", 1)],
         )
         self.assertEqual(result["status"], "failed")
 
     def test_same_solved_count_on_different_cases_fails(self):
         result = self.compare(
-            [self.solved("case-a", 2), self.unsolved("case-b")],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
             [self.unsolved("case-a"), self.solved("case-b", 3)],
         )
         self.assertEqual(result["status"], "failed")
@@ -449,8 +449,14 @@ class CleanBootstrapTests(unittest.TestCase):
                 (root / training.HOLDOUT_RELATIVE).write_bytes(b"tiny-holdout")
             elif name == "build_frozen_dataset":
                 data_path = root / training.DATA_RELATIVE
-                data_path.write_bytes(b"tiny-candidate")
-                digest = hashlib.sha256(data_path.read_bytes()).hexdigest()
+                candidate_bytes = json.dumps({
+                    "panels": {
+                        "dev": [{"lineage_id": "dev-case-1", "state": {"n": 2}}],
+                        "test": [{"lineage_id": "test-case-1", "state": {"n": 2}}],
+                    },
+                }, separators=(",", ":")).encode("utf-8")
+                data_path.write_bytes(candidate_bytes)
+                digest = hashlib.sha256(candidate_bytes).hexdigest()
                 (root / training.DATA_SHA_RELATIVE).write_text(digest + "\n", encoding="ascii")
                 (root / training.DATA_RECEIPT_RELATIVE).write_text(
                     json.dumps({
@@ -458,7 +464,7 @@ class CleanBootstrapTests(unittest.TestCase):
                     "complete": False,
                     "validation_status": "pending",
                     "dataset_sha256": digest,
-                    "dataset_bytes": len(b"tiny-candidate"),
+                    "dataset_bytes": len(candidate_bytes),
                     "holdout_sqlite_sha256": "c" * 64,
                     "heldout_source_revision": "b" * 40,
                     "builder_source_revision": "a" * 40,

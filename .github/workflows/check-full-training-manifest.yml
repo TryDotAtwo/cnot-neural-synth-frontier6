@@ -18,6 +18,10 @@ on:
       - .github/workflows/cnot-full-training-inventory.yml
       - .github/paid-runs/2026-11-20-full-training.json
       - .github/workflows/check-full-training-manifest.yml
+      - native/Cargo.toml
+      - native/src/bin/cnot103_validate_data.rs
+      - native/src/frozen_data.rs
+      - native/src/frozen_data/**
 
 permissions:
   contents: read
@@ -25,7 +29,7 @@ permissions:
 jobs:
   manifest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -34,6 +38,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate the real CPU Rust loader on a clean synthetic fixture
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-cpu-target
+          CNOT103_TEST_FIXTURE_PATH: ${{ runner.temp }}/cnot103-loader-fixture.json
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path native/Cargo.toml --lib frozen_data::tests::export_cpu_validator_fixture_for_ci
+          cargo build --manifest-path native/Cargo.toml --bin cnot103-validate-data
+          fixture_sha256="$(cat "${CNOT103_TEST_FIXTURE_PATH%.json}.sha256")"
+          "${CARGO_TARGET_DIR}/debug/cnot103-validate-data" --test-fixture "$CNOT103_TEST_FIXTURE_PATH" "$fixture_sha256"
 
       - name: Test the training manifest contract
         run: python3 -m unittest discover -s .github/scripts -p 'test_build_training_manifest.py' -v

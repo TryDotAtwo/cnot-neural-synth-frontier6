@@ -11,13 +11,25 @@ const WIDTHS: [u32; 14] = [8, 10, 13, 25, 26, 34, 45, 50, 58, 72, 90, 108, 122, 
 
 fn validate() -> Result<(), ()> {
     let mut args = std::env::args_os().skip(1);
-    let path = args.next().map(PathBuf::from).ok_or(())?;
+    let first = args.next().ok_or(())?;
+    let test_fixture = first == std::ffi::OsStr::new("--test-fixture");
+    if test_fixture && !cfg!(debug_assertions) {
+        return Err(());
+    }
+    let path = if test_fixture {
+        args.next().map(PathBuf::from).ok_or(())?
+    } else {
+        PathBuf::from(first)
+    };
     let sha256 = args.next().ok_or(())?.into_string().map_err(|_| ())?;
     if args.next().is_some() {
         return Err(());
     }
 
     let dataset = FrozenDataset::load_pinned(path, &sha256).map_err(|_| ())?;
+    if test_fixture {
+        return Ok(());
+    }
     if dataset.train.len() != 10_000 || dataset.dev.len() != 1_792 || dataset.test.len() != 1_792 {
         return Err(());
     }
