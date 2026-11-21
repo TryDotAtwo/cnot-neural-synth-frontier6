@@ -1,0 +1,5 @@
+{
+  "purpose": "one read-only 2x3060 quote after exact 64 GiB pricing fix",
+  "source_sha": "8946c77f32824f3a76bc3a400d24e574491f5cec",
+  "revision": 1
+}
