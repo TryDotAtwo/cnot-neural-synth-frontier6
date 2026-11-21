@@ -202,7 +202,7 @@ class ExactOfferQuoteContractTests(unittest.TestCase):
 
         unidentified = offer(75)
         del unidentified["ask_id"]
-        del unidentified["id"]
+        unidentified.pop("id", None)
         with self.assertRaises(controller.GateError):
             controller.eligible_offers([unidentified])
 
