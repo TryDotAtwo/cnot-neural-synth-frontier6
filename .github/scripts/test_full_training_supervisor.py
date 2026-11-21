@@ -716,8 +716,8 @@ class BaselineGateTests(unittest.TestCase):
             expected_panel_digest=digest,
             expected_search=training.BEAM_CONFIG,
             expected_receipt_pins=pins,
-            minimum_solved=2,
-            minimum_widths=2,
+            minimum_solved=training.BASELINE_MIN_SOLVED,
+            minimum_widths=training.BASELINE_MIN_WIDTHS,
         )
 
     def test_zero_solved_hamming_baseline_is_inconclusive(self):
