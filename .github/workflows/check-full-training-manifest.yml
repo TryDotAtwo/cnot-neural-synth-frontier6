@@ -67,7 +67,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
       LIBTORCH_USE_PYTORCH: "1"
       CARGO_BUILD_JOBS: "2"
     steps:
@@ -92,6 +91,8 @@ jobs:
 
       - name: Run the compiled v13 runtime on CPU tensors
         working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
           runtime_log="$RUNNER_TEMP/cnot103-torch-runtime.log"
@@ -120,6 +121,8 @@ jobs:
 
       - name: Validate the pinned 102-input profile with the real Rust parser
         working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
         run: |
           set -euo pipefail
           dataset="$RUNNER_TEMP/cnot103-parser-fixture.json"
@@ -165,8 +168,6 @@ jobs:
   cuda-build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-cuda-target
     steps:
       - name: Check out source
         uses: actions/checkout@v4
