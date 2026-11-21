@@ -672,13 +672,15 @@ def _offer_storage_hourly_cost(row: object) -> float | None:
     if not isinstance(row, dict):
         return None
     monthly_per_gb = _finite(row.get("storage_cost"))
-    disk_gb = _finite(row.get("allocated_storage"))
-    if disk_gb is None:
-        disk_gb = _finite(row.get("disk_space"))
-    if (
-        monthly_per_gb is None or disk_gb is None
-        or monthly_per_gb < 0 or disk_gb != DISK_GB
-    ):
+    if "allocated_storage" in row:
+        disk_gb = _finite(row.get("allocated_storage"))
+        if disk_gb is None or disk_gb != DISK_GB:
+            return None
+    else:
+        # base.offer_inventory() queries allocated_storage=64, and the create
+        # request pins --disk 64. The offers API may omit the echoed request.
+        disk_gb = float(DISK_GB)
+    if monthly_per_gb is None or monthly_per_gb < 0:
         return None
     hourly = monthly_per_gb * disk_gb / 720.0
     return hourly if math.isfinite(hourly) else None
