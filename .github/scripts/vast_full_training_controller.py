@@ -55,7 +55,7 @@ REMOTE_STATES = {
     "training", "final_quality", "completed", "failed", "budget_gate",
     "time_limit", "unavailable",
 }
-QUALITY_STATES = {"not_ready", "measured", "passed", "failed", "inconclusive", "invalid", "unavailable"}
+QUALITY_STATES = {"not_ready", "measured", "passed", "no_practical_gain", "failed", "inconclusive", "invalid", "unavailable"}
 
 
 class GateError(RuntimeError):
@@ -1087,6 +1087,7 @@ def _write_forecast_authorization(
     forecast_total_seconds: float,
     remaining_work_seconds: float | None = None,
     authorized_at_epoch: float | None = None,
+    billing_snapshot: dict | None = None,
 ) -> bool:
     seconds = _finite(forecast_total_seconds)
     remaining = _finite(remaining_work_seconds)
@@ -1098,17 +1099,45 @@ def _write_forecast_authorization(
         or authorized_at is None or authorized_at <= 0
     ):
         return False
+    snapshot = None
+    if billing_snapshot is not None:
+        if (
+            not isinstance(billing_snapshot, dict)
+            or billing_snapshot.get("schema") != "cnot103_campaign_billing_snapshot_v1"
+            or not isinstance(billing_snapshot.get("instance_id"), str)
+            or not billing_snapshot["instance_id"].isdigit()
+        ):
+            return False
+        snapshot = {"schema": billing_snapshot["schema"], "instance_id": billing_snapshot["instance_id"]}
+        for name in (
+            "billing_baseline_project_spend_usd", "projected_project_spend_usd",
+            "billing_baseline_epoch", "captured_at_epoch", "active_rate_usd_per_hour",
+            "post_stop_storage_reserve_usd", "other_storage_reserve_usd",
+            "transfer_reserve_usd", "stop_poll_reserve_usd",
+        ):
+            number = _finite(billing_snapshot.get(name))
+            if number is None or number < 0:
+                return False
+            snapshot[name] = number
+        if (
+            snapshot["active_rate_usd_per_hour"] <= 0
+            or snapshot["billing_baseline_epoch"] <= 0
+            or snapshot["captured_at_epoch"] < snapshot["billing_baseline_epoch"]
+        ):
+            return False
     q = shlex.quote
     path = root + "/forecast-approval.private.json"
+    raw_snapshot = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     remote = f"""set -euo pipefail
-python3 - {q(path)} {q(token)} {q(str(seconds))} {q(str(remaining))} {q(str(authorized_at))} <<'PY'
+python3 - {q(path)} {q(token)} {q(str(seconds))} {q(str(remaining))} {q(str(authorized_at))} {q(raw_snapshot)} <<'PY'
 import json
 import math
 import os
 import stat
 import sys
-path, token, raw_seconds, raw_remaining, raw_authorized_at = sys.argv[1:]
+path, token, raw_seconds, raw_remaining, raw_authorized_at, raw_snapshot = sys.argv[1:]
 seconds, remaining, authorized_at = map(float, (raw_seconds, raw_remaining, raw_authorized_at))
+snapshot = json.loads(raw_snapshot)
 if not all(math.isfinite(x) for x in (seconds, remaining, authorized_at)) or seconds <= 0 or remaining <= 0 or authorized_at <= 0:
     raise SystemExit(2)
 value = {{
@@ -1118,6 +1147,7 @@ value = {{
     "forecast_total_seconds": seconds,
     "remaining_work_seconds": remaining,
     "authorized_at_epoch": authorized_at,
+    "billing_snapshot": snapshot,
 }}
 try:
     existing = json.load(open(path, encoding="utf-8"))
@@ -1294,7 +1324,7 @@ def _monitor_window(
             row, run_id, attempt, root, session=session
         )
         if state == "completed":
-            if quality == "passed":
+            if _completed_quality_receipt(quality):
                 return 0, "completed", "completed", "not_attempted"
             return 1, "failed", "failed", "not_attempted"
         if state == "budget_gate":
@@ -1333,6 +1363,7 @@ def _monitor_window(
             spend_now = base.project_charges()
             now_epoch = time.time()
             rate = _finite(current.get("dph_total"))
+            storage_reserve = _storage_reserve_for_row(current)
             extra_storage = _other_storage_reserve(current_rows, ident)
             projected_spend = projected_billable_spend(
                 spend_now,
@@ -1343,7 +1374,7 @@ def _monitor_window(
             )
             if (
                 rate is None or extra_storage is None or projected_spend is None
-                or _storage_reserve_for_row(current) is None or started_at is None
+                or storage_reserve is None or started_at is None
             ):
                 return stop_for_gate("budget_gate")
             elapsed_seconds = max(0.0, now_epoch - started_at)
@@ -1385,6 +1416,19 @@ def _monitor_window(
                     forecast_total_seconds,
                     remaining_work_seconds,
                     now_epoch,
+                    billing_snapshot={
+                        "schema": "cnot103_campaign_billing_snapshot_v1",
+                        "instance_id": str(ident),
+                        "billing_baseline_project_spend_usd": budget_baseline,
+                        "projected_project_spend_usd": projected_spend,
+                        "billing_baseline_epoch": billing_baseline_epoch,
+                        "captured_at_epoch": now_epoch,
+                        "active_rate_usd_per_hour": rate,
+                        "post_stop_storage_reserve_usd": storage_reserve,
+                        "other_storage_reserve_usd": extra_storage,
+                        "transfer_reserve_usd": base.TRANSFER_RESERVE,
+                        "stop_poll_reserve_usd": rate * cleanup_reserve_seconds / 3600.0,
+                    },
                 ):
                     return stop_for_gate("unverified")
                 authorized_forecast_token = forecast_token
@@ -1669,7 +1713,7 @@ def cleanup() -> int:
                                 )
                             ):
                                 outcome, status = "budget_gate", "budget_gate"
-                            elif state != "completed" or quality != "passed":
+                            elif state != "completed" or not _completed_quality_receipt(quality):
                                 outcome, status = (
                                     "time_limit" if state == "time_limit" else "failed"
                                 ), "failed"

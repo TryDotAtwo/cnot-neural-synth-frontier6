@@ -404,6 +404,15 @@ class RemoteStatusReaderTests(unittest.TestCase):
         )
 
 
+class CompletedMeasurementStatusTests(unittest.TestCase):
+    def test_no_practical_gain_is_a_valid_completed_measurement(self):
+        self.assertTrue(controller._completed_quality_receipt("passed"))
+        self.assertTrue(controller._completed_quality_receipt("no_practical_gain"))
+        self.assertIn("no_practical_gain", controller.QUALITY_STATES)
+        self.assertFalse(controller._completed_quality_receipt("tie"))
+        self.assertFalse(controller._completed_quality_receipt("invalid"))
+
+
 class ForecastAuthorizationWriterTests(unittest.TestCase):
     def test_authorization_is_written_and_acknowledged_on_the_pinned_session(self):
         class Session:
@@ -422,10 +431,24 @@ class ForecastAuthorizationWriterTests(unittest.TestCase):
             3600.0,
             3500.0,
             1000.0,
+            billing_snapshot={
+                "schema": "cnot103_campaign_billing_snapshot_v1",
+                "instance_id": "123",
+                "billing_baseline_project_spend_usd": 1.0,
+                "projected_project_spend_usd": 1.25,
+                "billing_baseline_epoch": 1000.0,
+                "captured_at_epoch": 1001.0,
+                "active_rate_usd_per_hour": 0.2,
+                "post_stop_storage_reserve_usd": 0.1,
+                "other_storage_reserve_usd": 0.0,
+                "transfer_reserve_usd": 0.05,
+                "stop_poll_reserve_usd": 0.01,
+            },
         )
         self.assertTrue(result)
         self.assertEqual(session.timeout, 30)
         self.assertIn("forecast-approval.private.json", session.command)
+        self.assertIn("cnot103_campaign_billing_snapshot_v1", session.command)
         self.assertIn("authorized_at_epoch", session.command)
         body = session.command.partition("<<'PY'\n")[2].partition("\nPY\n")[0]
         ast.parse(body)
