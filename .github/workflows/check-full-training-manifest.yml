@@ -115,6 +115,16 @@ jobs:
               echo 'cpu_torch_runtime=unit_test_failed'
             elif grep -Eiq '(^|[[:space:]])error(:|\[E[0-9]+\]:)' "$runtime_log"; then
               echo 'cpu_torch_runtime=compile_or_link_failed'
+            elif grep -Fq 'error while loading shared libraries' "$runtime_log"; then
+              echo 'cpu_torch_runtime=libtorch_runtime_link_failed'
+            elif grep -Fq 'undefined symbol' "$runtime_log"; then
+              echo 'cpu_torch_runtime=libtorch_symbol_mismatch'
+            elif grep -Fq 'could not compile' "$runtime_log"; then
+              echo 'cpu_torch_runtime=rust_compile_failed'
+            elif grep -Fq 'failed to run custom build command' "$runtime_log"; then
+              echo 'cpu_torch_runtime=torch_build_script_failed'
+            elif grep -Fq 'exit successfully' "$runtime_log"; then
+              echo 'cpu_torch_runtime=child_process_failed'
             elif grep -Fq 'No space left on device' "$runtime_log"; then
               echo 'cpu_torch_runtime=runner_storage_exhausted'
             elif grep -Fq 'signal: 9' "$runtime_log"; then
@@ -124,7 +134,7 @@ jobs:
             fi
             exit 1
           fi
-                    for name in \
+          for name in \
             v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold \
             v13_terminal_scans_all_gates_even_when_shortlist_omits_the_solution \
             v13_depth_three_budget_matches_scalar_oracle_at_seven_and_forty_three \
@@ -279,16 +289,16 @@ jobs:
               fi
               if ! timeout --signal=TERM --kill-after=15s 20m python -m pip install \
                 --disable-pip-version-check --no-cache-dir --force-reinstall --no-deps \
-                --index-url https://download.pytorch.org/whl/cu128 'torch==2.9.0' \
+                --index-url https://download.pytorch.org/whl/cu128 torch==2.9.0 \
                 >/runner_temp/cnot103-pytorch-wheel-install.log 2>&1; then
                 echo pytorch_cuda_wheel_install_failed >"$status"
                 exit 12
               fi
-              if ! python -c "import torch; assert torch.__version__.split('+')[0] == '2.9.0'" >/dev/null 2>&1; then
+              if ! python -c "import torch; assert torch.__version__.split(chr(43))[0] == bytes((50,46,57,46,48)).decode()" >/dev/null 2>&1; then
                 echo torch_version_mismatch >"$status"
                 exit 12
               fi
-              if ! python -c "import torch; assert torch.version.cuda and torch.version.cuda.startswith('12.8')" >/dev/null 2>&1; then
+              if ! python -c "import torch; assert torch.version.cuda and torch.version.cuda.startswith(bytes((49,50,46,56)).decode())" >/dev/null 2>&1; then
                 echo cuda_version_mismatch >"$status"
                 exit 13
               fi
@@ -296,7 +306,7 @@ jobs:
                 echo torch_abi_metadata_missing >"$status"
                 exit 14
               fi
-              if ! python -c "import pathlib, torch; p=pathlib.Path(torch.__file__).resolve().parent/'lib'; assert (p/'libtorch_cpu.so').is_file() and (p/'libtorch_cuda.so').is_file(); print(p)" > /runner_temp/cnot103-torch-lib.path 2>/dev/null; then
+              if ! python -c "import pathlib, torch; p=pathlib.Path(torch.__file__).resolve().parent.joinpath(bytes((108,105,98)).decode()); assert p.joinpath(bytes((108,105,98,116,111,114,99,104,95,99,112,117,46,115,111)).decode()).is_file() and p.joinpath(bytes((108,105,98,116,111,114,99,104,95,99,117,100,97,46,115,111)).decode()).is_file(); print(p)" > /runner_temp/cnot103-torch-lib.path 2>/dev/null; then
                 echo torch_library_missing >"$status"
                 exit 15
               fi
