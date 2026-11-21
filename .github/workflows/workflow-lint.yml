@@ -1,0 +1,22 @@
+name: CNOT workflow syntax check
+
+on:
+  push:
+    branches:
+      - codex/full-feature-train-workflow
+    paths:
+      - '.github/workflows/check-full-training-manifest.yml'
+      - '.github/workflows/workflow-lint.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Parse the campaign workflow YAML
+        run: ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' .github/workflows/check-full-training-manifest.yml .github/workflows/workflow-lint.yml
