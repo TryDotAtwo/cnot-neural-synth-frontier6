@@ -917,5 +917,199 @@ class CleanBootstrapTests(unittest.TestCase):
         self.assertFalse(receipt["complete"])
 
 
+
+class MeasurementCurveTests(unittest.TestCase):
+    @staticmethod
+    def valid_spec():
+        return {
+            "schema": "cnot103_measurement_experiment_v1",
+            "experiment_id": "learning-curve-first-v1",
+            "bindings": {
+                "source": "workflow_head_sha",
+                "dataset": "sealed_dataset_sha256",
+                "holdout": ["holdout_revision", "holdout_sha256"],
+                "panels": "cnot103_panel_cohorts_v1",
+            },
+            "splits": {
+                "policy": "stratified_per_width",
+                "cases_per_width": 8,
+                "order": ["train", "dev", "test"],
+                "locked_test": "after_first_dev_gain",
+            },
+            "model": {
+                "parameters": 136_421_807,
+                "structural_blocks": 8,
+                "input_slots": 102,
+                "batch_size": 4,
+                "feature_schema": "runtime_packet_layout_v25",
+            },
+            "training": {
+                "seed": 202611200001,
+                "max_attempts": 512,
+                "accepted_milestones": [8, 32, 128, 512],
+            },
+            "search": training.BEAM_CONFIG.copy(),
+            "hardware": {
+                "selection": "controller_approved_target",
+                "gpu_count": 2,
+                "record_actual_devices": True,
+            },
+            "resource_limits": {
+                "max_active_seconds": training.MAX_RUNTIME_SECONDS,
+                "max_total_usd": 20.0,
+            },
+            "quality": {
+                "minimum_solved_rate_gain": 0.05,
+                "minimum_relative_paired_cost_reduction": 0.05,
+            },
+        }
+
+    def test_versioned_measurement_spec_is_bounded_and_keeps_the_full_contract(self):
+        loader = getattr(training, "load_measurement_spec", None)
+        self.assertTrue(callable(loader), "measurement spec loader is missing")
+        spec = loader()
+        self.assertEqual(spec["schema"], "cnot103_measurement_experiment_v1")
+        self.assertEqual(spec["training"]["max_attempts"], 512)
+        self.assertEqual(spec["training"]["accepted_milestones"], [8, 32, 128, 512])
+        self.assertNotEqual(spec["training"]["max_attempts"], 250_000)
+        self.assertEqual(spec["model"]["parameters"], training.MODEL_PARAMETERS)
+        self.assertEqual(spec["model"]["structural_blocks"], training.STRUCTURAL_BLOCKS)
+        self.assertEqual(spec["model"]["input_slots"], training.MODEL_INPUTS)
+        self.assertEqual(spec["search"], training.BEAM_CONFIG)
+
+    def test_measurement_spec_rejects_bad_milestones_and_independent_resource_caps(self):
+        validate = getattr(training, "validate_measurement_spec", None)
+        self.assertTrue(callable(validate), "measurement spec validator is missing")
+        duplicate = self.valid_spec()
+        duplicate["training"]["accepted_milestones"] = [8, 8, 32]
+        with self.assertRaises(RunError):
+            validate(duplicate)
+        over_wall = self.valid_spec()
+        over_wall["resource_limits"]["max_active_seconds"] += 1
+        with self.assertRaises(RunError):
+            validate(over_wall)
+        over_spend = self.valid_spec()
+        over_spend["resource_limits"]["max_total_usd"] = 20.01
+        with self.assertRaises(RunError):
+            validate(over_spend)
+
+    def test_training_progress_delta_reports_attempts_accepts_rejects_and_examples(self):
+        delta = getattr(training, "training_progress_delta", None)
+        self.assertTrue(callable(delta), "training progress accounting is missing")
+        result = delta(
+            {"attempted": 2, "accepted": 2, "rejected": 0},
+            {"attempted": 8, "accepted": 7, "rejected": 1},
+            batch_size=4,
+        )
+        self.assertEqual(result, {
+            "attempted_updates": 6,
+            "accepted_updates": 5,
+            "rejected_updates": 1,
+            "examples_seen": 24,
+            "accepted_examples": 20,
+            "rejected_examples": 4,
+        })
+
+    def test_three_checkpoints_resume_in_order_and_run_locked_test_only_after_first_gain(self):
+        sweep = getattr(training, "run_measurement_sweep", None)
+        self.assertTrue(callable(sweep), "measurement sweep runner is missing")
+        events = []
+        statuses = {8: "tie", 32: "tie", 128: "length_gain"}
+        initial = {"attempted": 2, "accepted": 2, "rejected": 0}
+
+        def train_to(milestone, prior_progress):
+            events.append(("train", milestone))
+            self.assertEqual(prior_progress, initial if milestone == 8 else {
+                "attempted": milestone // 4,
+                "accepted": milestone // 4,
+                "rejected": 0,
+            })
+            end = {"attempted": milestone, "accepted": milestone, "rejected": 0}
+            return {
+                "start_progress": prior_progress,
+                "end_progress": end,
+                "checkpoint": {"sha256": str(milestone % 10) * 64},
+                "training_wall_seconds": float(milestone),
+            }
+
+        def search_dev(training_result):
+            milestone = training_result["end_progress"]["accepted"]
+            events.append(("dev", milestone))
+            return {"wall_seconds": 2.0, "solved_count": milestone}
+
+        def compare_dev(training_result, dev_result):
+            milestone = training_result["end_progress"]["accepted"]
+            events.append(("compare", milestone))
+            return {"status": statuses[milestone], "reason": statuses[milestone]}
+
+        def persist(receipt):
+            events.append(("persist", receipt["accepted_updates"]))
+
+        def locked_test(selected):
+            events.append(("test", selected["accepted_updates"]))
+            return {"status": "evaluated", "checkpoint_sha256": selected["checkpoint_sha256"]}
+
+        result = sweep(
+            [8, 32, 128],
+            initial_progress=initial,
+            max_attempts=512,
+            train_to=train_to,
+            search_dev=search_dev,
+            compare_dev=compare_dev,
+            persist_receipt=persist,
+            locked_test=locked_test,
+        )
+        self.assertEqual([row["accepted_updates"] for row in result["measurements"]], [8, 32, 128])
+        self.assertEqual(result["selected"]["accepted_updates"], 128)
+        self.assertEqual(result["locked_test"]["status"], "evaluated")
+        self.assertEqual(sum(1 for event in events if event[0] == "test"), 1)
+        self.assertGreater(events.index(("test", 128)), events.index(("compare", 128)))
+        self.assertEqual([event[1] for event in events if event[0] == "train"], [8, 32, 128])
+
+    def test_measurement_sweep_withholds_locked_test_when_no_dev_checkpoint_gains(self):
+        sweep = getattr(training, "run_measurement_sweep", None)
+        self.assertTrue(callable(sweep), "measurement sweep runner is missing")
+        tested = []
+        initial = {"attempted": 0, "accepted": 0, "rejected": 0}
+
+        def train_to(milestone, prior_progress):
+            end = {"attempted": milestone, "accepted": milestone, "rejected": 0}
+            return {
+                "start_progress": prior_progress,
+                "end_progress": end,
+                "checkpoint": {"sha256": str(milestone % 10) * 64},
+                "training_wall_seconds": 1.0,
+            }
+
+        result = sweep(
+            [8, 32],
+            initial_progress=initial,
+            max_attempts=32,
+            train_to=train_to,
+            search_dev=lambda report: {"wall_seconds": 1.0},
+            compare_dev=lambda report, dev: {"status": "tie"},
+            persist_receipt=lambda receipt: None,
+            locked_test=lambda selected: tested.append(selected),
+        )
+        self.assertIsNone(result["selected"])
+        self.assertIsNone(result["locked_test"])
+        self.assertEqual(tested, [])
+        self.assertEqual(len(result["measurements"]), 2)
+
+    def test_remaining_forecast_counts_only_unfinished_work(self):
+        estimate = getattr(training, "estimate_measurement_remaining_work_seconds", None)
+        self.assertTrue(callable(estimate), "measurement forecast is missing")
+        remaining = estimate(
+            remaining_attempts=40,
+            seconds_per_attempt=2.0,
+            future_dev_evaluations=2,
+            dev_search_seconds=11.0,
+            locked_search_seconds=17.0,
+            checkpoint_reserve_seconds=5.0,
+            cleanup_reserve_seconds=3.0,
+        )
+        self.assertEqual(remaining, 127.0)
+
+
 if __name__ == "__main__":
     unittest.main()
