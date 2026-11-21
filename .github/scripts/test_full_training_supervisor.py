@@ -320,173 +320,322 @@ class ForecastGateTests(unittest.TestCase):
 
 
 class QualityComparisonTests(unittest.TestCase):
+    CASE_IDS = ["case-a", "case-b"]
+    PANEL_INDICES = [3, 8]
+    PANEL = "test"
+    ROOTS = {
+        "case-a": {
+            "panel_index": 3,
+            "dimension": 3,
+            "alphabet_id": "test-cnot-n3",
+            "start_packed_rows": [1, 3, 4],
+        },
+        "case-b": {
+            "panel_index": 8,
+            "dimension": 3,
+            "alphabet_id": "test-cnot-n3",
+            "start_packed_rows": [1, 2, 5],
+        },
+    }
+
     @staticmethod
-    def solved(case_id, cost):
-        identity = [1, 2, 4]
-        base_gate = [0, 1] if case_id.endswith("a") else [0, 2]
-        gates = [base_gate.copy() for _ in range(cost)]
-        start = identity.copy()
-        start[base_gate[1]] ^= start[base_gate[0]]
+    def solved(case_id, cost=1):
+        start = [1, 3, 4] if case_id.endswith("a") else [1, 2, 5]
+        gate = [0, 1] if case_id.endswith("a") else [0, 2]
+        gates = [gate]
+        while len(gates) < cost:
+            gates.extend([[0, 1], [0, 1]])
+        gates = gates[:cost]
+        identity = training._identity_packed_rows(3)
+        # Keep physical cost honest and replayable for every fixture length.
+        if len(gates) % 2 == 0:
+            gates.append(gate)
         return {
             "case_id": case_id,
+            "panel_index": 3 if case_id == "case-a" else 8,
             "dimension": 3,
             "width": 3,
+            "alphabet_id": "test-cnot-n3",
             "wall_seconds": 0.01,
             "status": "solved",
             "start_packed_rows": start,
             "end_packed_rows": identity,
             "word": {
                 "replayed": True,
-                "physical_cost": cost,
+                "physical_cost": len(gates),
                 "control_target": gates,
             },
         }
 
     @staticmethod
     def unsolved(case_id):
+        root = QualityComparisonTests.ROOTS[case_id]
         return {
             "case_id": case_id,
-            "dimension": 3,
-            "width": 3,
+            "panel_index": root["panel_index"],
+            "dimension": root["dimension"],
+            "width": root["dimension"],
+            "alphabet_id": root["alphabet_id"],
             "wall_seconds": 0.01,
             "status": "depth_limit",
-            "start_packed_rows": [1, 3, 4] if case_id.endswith("a") else [1, 2, 5],
+            "start_packed_rows": root["start_packed_rows"].copy(),
             "end_packed_rows": None,
             "word": None,
         }
 
     @staticmethod
-    def report(rows, *, search=None, panel="test", head="qhat"):
-        return {
-            "schema": "cnot103_panel_search_result_v2",
+    def pins(head, char):
+        values = {
+            "search_manifest_sha256": char * 64,
+            "dataset_sha256": "d" * 64,
+            "source_revision": "a" * 40,
+            "training_manifest_sha256": None,
+            "training_result_sha256": None,
+            "checkpoint_sha256": None,
+        }
+        if head != "hamming":
+            values.update({
+                "training_manifest_sha256": "e" * 64,
+                "training_result_sha256": "f" * 64,
+                "checkpoint_sha256": "9" * 64,
+            })
+        return values
+
+    @classmethod
+    def report(cls, rows, *, search=None, panel="test", head="qhat", manifest_char=None):
+        if manifest_char is None:
+            manifest_char = "1" if head == "hamming" else "2"
+        panel_indices = cls.PANEL_INDICES.copy()
+        panel_ids = cls.CASE_IDS.copy()
+        pins = cls.pins(head, manifest_char)
+        value = {
+            "schema": (
+                "cnot103_hamming_search_result_v1"
+                if head == "hamming"
+                else "cnot103_panel_search_result_v2"
+            ),
             "panel": panel,
-            "panel_digest": "a" * 64,
-            "panel_ids": ["case-a", "case-b"],
-            "feature_model_inputs": 102,
-            "feature_execution": "not_used_by_hamming" if head == "hamming" else "used_for_model_scoring",
-            "training_exposure_audit": {"strict_unseen": True},
+            "panel_digest": training._panel_digest(panel, panel_indices, panel_ids),
+            "panel_indices": panel_indices,
+            "panel_ids": panel_ids,
+            "search_manifest_sha256": pins["search_manifest_sha256"],
+            "dataset_sha256": pins["dataset_sha256"],
+            "source_revision": pins["source_revision"],
             "search": training.BEAM_CONFIG if search is None else search,
             "head": head,
             "execution_backend": "cpu_hamming" if head == "hamming" else "cuda_model",
             "rows": rows,
         }
+        if head == "qhat":
+            value.update({
+                "training_manifest_sha256": pins["training_manifest_sha256"],
+                "training_result_sha256": pins["training_result_sha256"],
+                "checkpoint": {"sha256": pins["checkpoint_sha256"]},
+                "feature_model_inputs": 102,
+                "feature_execution": "used_for_model_scoring",
+                "training_exposure_audit": {"strict_unseen": True},
+            })
+        return value
 
-    def compare(self, baseline_rows, candidate_rows, *, baseline_search=None,
-                candidate_search=None, baseline_head="qhat", candidate_head="qhat"):
+    def compare(
+        self, baseline_rows, candidate_rows, *,
+        baseline_search=None, candidate_search=None,
+        baseline_head="qhat", candidate_head="qhat",
+        minimum_baseline_solved=1, minimum_baseline_widths=1,
+        baseline_manifest_char="1", candidate_manifest_char="2",
+    ):
+        baseline = self.report(
+            baseline_rows, search=baseline_search, head=baseline_head,
+            manifest_char=baseline_manifest_char,
+        )
+        candidate = self.report(
+            candidate_rows, search=candidate_search, head=candidate_head,
+            manifest_char=candidate_manifest_char,
+        )
         return training.compare_quality(
-            self.report(baseline_rows, search=baseline_search, head=baseline_head),
-            self.report(candidate_rows, search=candidate_search, head=candidate_head),
-            expected_case_ids=["case-a", "case-b"],
+            baseline,
+            candidate,
+            expected_case_ids=self.CASE_IDS,
+            expected_panel_indices=self.PANEL_INDICES,
+            expected_case_roots=self.ROOTS,
             expected_panel="test",
-            expected_panel_digest="a" * 64,
+            expected_panel_digest=training._panel_digest(
+                "test", self.PANEL_INDICES, self.CASE_IDS
+            ),
             expected_search=training.BEAM_CONFIG,
+            baseline_receipt_pins=self.pins(baseline_head, baseline_manifest_char),
+            candidate_receipt_pins=self.pins(candidate_head, candidate_manifest_char),
             baseline_head=baseline_head,
             candidate_head=candidate_head,
+            minimum_baseline_solved=minimum_baseline_solved,
+            minimum_baseline_widths=minimum_baseline_widths,
         )
 
-    def test_valid_candidate_passes_and_rows_are_paired_by_case_id(self):
+    def test_full_baseline_and_shorter_candidate_is_length_gain(self):
         result = self.compare(
-            [self.solved("case-a", 3), self.unsolved("case-b")],
+            [self.solved("case-a", 3), self.solved("case-b", 3)],
+            [self.solved("case-a", 1), self.solved("case-b", 1)],
+        )
+        self.assertEqual(result["status"], "length_gain")
+        self.assertEqual(result["baseline_solved_count"], 2)
+        self.assertEqual(result["candidate_solved_count"], 2)
+        self.assertAlmostEqual(result["relative_paired_cost_reduction"], 2 / 3)
+
+    def test_same_paired_length_and_new_solution_is_coverage_gain(self):
+        result = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
             [self.solved("case-b", 1), self.solved("case-a", 1)],
         )
-        self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["baseline_solved_count"], 1)
-        self.assertEqual(result["candidate_solved_count"], 2)
+        self.assertEqual(result["status"], "coverage_gain")
 
-    def test_candidate_must_reach_the_frozen_practical_gain_threshold(self):
+    def test_exact_quality_equality_is_tie(self):
         result = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
             [self.solved("case-a", 1), self.unsolved("case-b")],
         )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["required_solved_gain"], 1)
+        self.assertEqual(result["status"], "tie")
 
-    def test_valid_but_worse_candidate_fails(self):
-        result = self.compare(
-            [self.solved("case-a", 1), self.unsolved("case-b")],
-            [self.solved("case-a", 3), self.unsolved("case-b")],
-        )
-        self.assertEqual(result["status"], "failed")
-
-    def test_previously_solved_case_cannot_become_unsolved(self):
+    def test_candidate_that_loses_baseline_solution_fails(self):
         result = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
             [self.unsolved("case-a"), self.solved("case-b", 1)],
         )
         self.assertEqual(result["status"], "failed")
 
-    def test_same_solved_count_on_different_cases_fails(self):
+    def test_more_expensive_common_solutions_fail_even_with_more_coverage(self):
         result = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
-            [self.unsolved("case-a"), self.solved("case-b", 3)],
+            [self.solved("case-a", 3), self.solved("case-b", 1)],
         )
         self.assertEqual(result["status"], "failed")
 
-    def test_zero_solved_baseline_is_inconclusive(self):
-        result = self.compare(
+    def test_empty_or_too_small_baseline_is_inconclusive(self):
+        empty = self.compare(
             [self.unsolved("case-a"), self.unsolved("case-b")],
             [self.solved("case-a", 1), self.unsolved("case-b")],
         )
-        self.assertEqual(result["status"], "inconclusive")
+        too_small = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            [self.solved("case-a", 1), self.solved("case-b", 1)],
+            minimum_baseline_solved=2,
+        )
+        self.assertEqual(empty["status"], "inconclusive")
+        self.assertEqual(too_small["status"], "inconclusive")
 
-    def test_duplicate_or_missing_case_ids_are_invalid(self):
-        duplicate = self.compare(
-            [self.solved("case-a", 1), self.unsolved("case-a")],
+    def test_valid_row_permutation_is_paired_by_id_index_and_original_matrix(self):
+        result = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
+            [self.unsolved("case-b"), self.solved("case-a", 1)],
         )
-        missing = self.compare(
-            [self.solved("case-a", 1)],
-            [self.solved("case-a", 1), self.unsolved("case-b")],
-        )
-        self.assertEqual(duplicate["status"], "invalid")
-        self.assertEqual(missing["status"], "invalid")
+        self.assertEqual(result["status"], "tie")
 
-    def test_wrong_scorer_backend_is_invalid(self):
-        bad = self.report(
-            [self.solved("case-a", 1), self.unsolved("case-b")],
-            head="hamming",
+    def test_declaration_order_must_match_even_when_rows_are_reordered(self):
+        baseline = self.report(
+            [self.solved("case-a", 1), self.unsolved("case-b")], head="hamming"
         )
-        bad["execution_backend"] = "cuda_model"
+        candidate = self.report(
+            [self.solved("case-a", 1), self.unsolved("case-b")]
+        )
+        candidate["panel_ids"] = list(reversed(self.CASE_IDS))
+        candidate["panel_indices"] = list(reversed(self.PANEL_INDICES))
         result = training.compare_quality(
-            bad,
-            self.report(
-                [self.solved("case-a", 1), self.solved("case-b", 1)],
-                head="qhat",
-            ),
-            expected_case_ids=["case-a", "case-b"],
+            baseline, candidate,
+            expected_case_ids=self.CASE_IDS,
+            expected_panel_indices=self.PANEL_INDICES,
+            expected_case_roots=self.ROOTS,
             expected_panel="test",
-            expected_panel_digest="a" * 64,
+            expected_panel_digest=training._panel_digest("test", self.PANEL_INDICES, self.CASE_IDS),
             expected_search=training.BEAM_CONFIG,
+            baseline_receipt_pins=self.pins("hamming", "1"),
+            candidate_receipt_pins=self.pins("qhat", "2"),
             baseline_head="hamming",
             candidate_head="qhat",
+            minimum_baseline_solved=1,
+            minimum_baseline_widths=1,
         )
         self.assertEqual(result["status"], "invalid")
 
-    def test_search_budget_mismatch_is_invalid(self):
+    def test_manifest_dataset_checkpoint_case_index_and_root_pins_are_checked(self):
+        baseline_rows = [self.solved("case-a", 1), self.unsolved("case-b")]
+        candidate_rows = [self.solved("case-a", 1), self.unsolved("case-b")]
+        cases = [
+            ("search_manifest_sha256", lambda r: r.__setitem__("search_manifest_sha256", "8" * 64)),
+            ("dataset_sha256", lambda r: r.__setitem__("dataset_sha256", "7" * 64)),
+            ("checkpoint", lambda r: r["checkpoint"].__setitem__("sha256", "6" * 64)),
+            ("panel_index", lambda r: r["rows"][0].__setitem__("panel_index", 99)),
+            ("case_root", lambda r: r["rows"][0]["start_packed_rows"].__setitem__(0, 2)),
+            ("case_id", lambda r: r["rows"][0].__setitem__("case_id", "wrong-case")),
+        ]
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                baseline = self.report(baseline_rows.copy(), head="hamming")
+                candidate = self.report(candidate_rows.copy())
+                mutate(candidate)
+                result = training.compare_quality(
+                    baseline, candidate,
+                    expected_case_ids=self.CASE_IDS,
+                    expected_panel_indices=self.PANEL_INDICES,
+                    expected_case_roots=self.ROOTS,
+                    expected_panel="test",
+                    expected_panel_digest=training._panel_digest(
+                        "test", self.PANEL_INDICES, self.CASE_IDS
+                    ),
+                    expected_search=training.BEAM_CONFIG,
+                    baseline_receipt_pins=self.pins("hamming", "1"),
+                    candidate_receipt_pins=self.pins("qhat", "2"),
+                    baseline_head="hamming",
+                    candidate_head="qhat",
+                    minimum_baseline_solved=1,
+                    minimum_baseline_widths=1,
+                )
+                self.assertEqual(result["status"], "invalid")
+
+    def test_wrong_scorer_or_matched_budget_is_invalid(self):
+        wrong_backend = self.report(
+            [self.solved("case-a", 1), self.unsolved("case-b")], head="qhat"
+        )
+        wrong_backend["execution_backend"] = "cpu_hamming"
+        bad = training.compare_quality(
+            self.report([self.solved("case-a", 1), self.unsolved("case-b")], head="hamming"),
+            wrong_backend,
+            expected_case_ids=self.CASE_IDS,
+            expected_panel_indices=self.PANEL_INDICES,
+            expected_case_roots=self.ROOTS,
+            expected_panel="test",
+            expected_panel_digest=training._panel_digest("test", self.PANEL_INDICES, self.CASE_IDS),
+            expected_search=training.BEAM_CONFIG,
+            baseline_receipt_pins=self.pins("hamming", "1"),
+            candidate_receipt_pins=self.pins("qhat", "2"),
+            baseline_head="hamming",
+            candidate_head="qhat",
+            minimum_baseline_solved=1,
+            minimum_baseline_widths=1,
+        )
         other = dict(training.BEAM_CONFIG)
         other["max_depth"] += 1
-        result = self.compare(
+        mismatched = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
             [self.solved("case-a", 1), self.unsolved("case-b")],
             candidate_search=other,
         )
-        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(bad["status"], "invalid")
+        self.assertEqual(mismatched["status"], "invalid")
 
-    def test_replay_and_physical_cost_are_checked_per_original_case(self):
+    def test_independent_replay_and_physical_cost_validation(self):
         broken_replay = self.solved("case-a", 1)
         broken_replay["word"]["replayed"] = False
-        mismatch = self.compare(
+        broken_cost = self.solved("case-a", 1)
+        broken_cost["word"]["physical_cost"] = 2
+        replay_result = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
             [broken_replay, self.unsolved("case-b")],
         )
-        broken_cost = self.solved("case-a", 1)
-        broken_cost["word"]["physical_cost"] = 2
-        cost_mismatch = self.compare(
+        cost_result = self.compare(
             [self.solved("case-a", 1), self.unsolved("case-b")],
             [broken_cost, self.unsolved("case-b")],
         )
-        self.assertEqual(mismatch["status"], "invalid")
-        self.assertEqual(cost_mismatch["status"], "invalid")
+        self.assertEqual(replay_result["status"], "invalid")
+        self.assertEqual(cost_result["status"], "invalid")
 
 
 class BaselineGateTests(unittest.TestCase):
@@ -496,6 +645,7 @@ class BaselineGateTests(unittest.TestCase):
         rows = []
         case_ids = []
         panel_indices = []
+        case_roots = {}
         index = 0
         for width in widths:
             solved_count = solved_by_width.get(width, 0)
@@ -506,14 +656,23 @@ class BaselineGateTests(unittest.TestCase):
                 identity = training._identity_packed_rows(width)
                 start = identity.copy()
                 start[1] ^= start[0]
+                alphabet_id = f"test-cnot-n{width}"
+                case_roots[case_id] = {
+                    "panel_index": index,
+                    "dimension": width,
+                    "alphabet_id": alphabet_id,
+                    "start_packed_rows": start,
+                }
                 solved = offset < solved_count
                 gate = [0, 1]
                 if invalid_replay and solved and not rows:
                     gate = [0, 2]
                 rows.append({
                     "case_id": case_id,
+                    "panel_index": index,
                     "dimension": width,
                     "width": width,
+                    "alphabet_id": alphabet_id,
                     "wall_seconds": 0.01,
                     "status": "solved" if solved else "depth_limit",
                     "start_packed_rows": start,
@@ -525,89 +684,86 @@ class BaselineGateTests(unittest.TestCase):
                     } if solved else None),
                 })
                 index += 1
-        return {
-            "schema": "cnot103_panel_search_result_v2",
+        indices = panel_indices.copy()
+        ids = case_ids.copy()
+        pins = {
+            "search_manifest_sha256": "1" * 64,
+            "dataset_sha256": "d" * 64,
+            "source_revision": "a" * 40,
+        }
+        report = {
+            "schema": "cnot103_hamming_search_result_v1",
             "panel": "dev",
-            "panel_digest": training._panel_digest("dev", panel_indices, case_ids),
-            "panel_indices": panel_indices,
-            "panel_ids": case_ids,
-            "feature_model_inputs": 102,
-            "feature_execution": "not_used_by_hamming",
-            "training_exposure_audit": {"strict_unseen": True},
+            "panel_digest": training._panel_digest("dev", indices, ids),
+            "panel_indices": indices,
+            "panel_ids": ids,
+            "search_manifest_sha256": pins["search_manifest_sha256"],
+            "dataset_sha256": pins["dataset_sha256"],
+            "source_revision": pins["source_revision"],
             "search": training.BEAM_CONFIG,
             "head": "hamming",
             "execution_backend": "cpu_hamming",
             "rows": rows,
-        }, case_ids, training._panel_digest("dev", panel_indices, case_ids)
+        }
+        return report, case_ids, panel_indices, case_roots, pins, report["panel_digest"]
 
-    def gate(self, report, case_ids, digest):
+    def gate(self, report, case_ids, indices, roots, pins, digest):
         return training.evaluate_baseline_gate(
             report,
             expected_case_ids=case_ids,
+            expected_panel_indices=indices,
+            expected_case_roots=roots,
             expected_panel_digest=digest,
             expected_search=training.BEAM_CONFIG,
+            expected_receipt_pins=pins,
+            minimum_solved=2,
+            minimum_widths=2,
         )
 
     def test_zero_solved_hamming_baseline_is_inconclusive(self):
-        report, case_ids, digest = self.panel_report(
+        report, ids, indices, roots, pins, digest = self.panel_report(
             solved_by_width={}, widths=[10, 13]
         )
-        result = self.gate(report, case_ids, digest)
-        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(self.gate(report, ids, indices, roots, pins, digest)["status"], "inconclusive")
 
-    def test_trivial_hamming_baseline_below_frozen_solve_and_width_threshold_fails(self):
-        report, case_ids, digest = self.panel_report(
+    def test_trivial_baseline_below_threshold_is_inconclusive(self):
+        report, ids, indices, roots, pins, digest = self.panel_report(
             solved_by_width={10: 1, 13: 1}, widths=[10, 13]
         )
-        result = self.gate(report, case_ids, digest)
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(self.gate(report, ids, indices, roots, pins, digest)["status"], "inconclusive")
 
     def test_replay_invalid_hamming_baseline_is_rejected(self):
-        report, case_ids, digest = self.panel_report(
+        report, ids, indices, roots, pins, digest = self.panel_report(
             solved_by_width={10: 1}, widths=[10], invalid_replay=True
         )
-        result = self.gate(report, case_ids, digest)
-        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(self.gate(report, ids, indices, roots, pins, digest)["status"], "invalid")
 
     def test_frozen_nontrivial_dev_baseline_passes(self):
         widths = [10, 13, 16, 20, 24, 32, 40]
-        report, case_ids, digest = self.panel_report(
+        report, ids, indices, roots, pins, digest = self.panel_report(
             solved_by_width={width: 2 for width in widths}, widths=widths
         )
-        result = self.gate(report, case_ids, digest)
+        result = self.gate(report, ids, indices, roots, pins, digest)
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["solved_count"], 14)
         self.assertEqual(result["solved_width_count"], 7)
 
-    def test_hamming_baseline_and_qhat_candidate_pair_under_same_budget(self):
-        baseline = [self.solved_row("case-a", 3), self.unsolved_row("case-b")]
-        candidate = [self.solved_row("case-a", 1), self.solved_row("case-b", 1)]
-        result = QualityComparisonTests().compare(
-            baseline,
-            candidate,
-            baseline_head="hamming",
-            candidate_head="qhat",
+    def test_baseline_gate_pins_and_root_identity_reject_tampering(self):
+        report, ids, indices, roots, pins, digest = self.panel_report(
+            solved_by_width={10: 2, 13: 2}, widths=[10, 13]
         )
-        self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["paired_baseline_physical_cost"], 3)
-        self.assertEqual(result["paired_candidate_physical_cost"], 1)
+        report["search_manifest_sha256"] = "9" * 64
+        result = self.gate(report, ids, indices, roots, pins, digest)
+        self.assertEqual(result["status"], "invalid")
 
-    def test_rejected_baseline_never_invokes_full_train_callback(self):
-        calls = []
-        with self.assertRaises(RunError):
+    def test_full_training_refuses_nonpassed_baseline_before_calling_train(self):
+        called = []
+        with self.assertRaises(training.RunError):
             training.train_after_baseline_gate(
-                {"status": "failed"},
-                lambda: calls.append("full_resume"),
+                {"status": "inconclusive"},
+                lambda: called.append(True),
             )
-        self.assertEqual(calls, [])
-
-    @staticmethod
-    def solved_row(case_id, cost):
-        return QualityComparisonTests.solved(case_id, cost)
-
-    @staticmethod
-    def unsolved_row(case_id):
-        return QualityComparisonTests.unsolved(case_id)
+        self.assertFalse(called)
 
 
 class CleanBootstrapTests(unittest.TestCase):
@@ -649,8 +805,8 @@ class CleanBootstrapTests(unittest.TestCase):
                 data_path = root / training.DATA_RELATIVE
                 candidate_bytes = json.dumps({
                     "panels": {
-                        "dev": [{"lineage_id": "dev-case-1", "state": {"n": 2}}],
-                        "test": [{"lineage_id": "test-case-1", "state": {"n": 2}}],
+                        "dev": [{"lineage_id": "dev-case-1", "state": {"n": 2, "alphabet_id": "synthetic-cnot-n2", "packed_rows": [1, 3]}}],
+                        "test": [{"lineage_id": "test-case-1", "state": {"n": 2, "alphabet_id": "synthetic-cnot-n2", "packed_rows": [1, 3]}}],
                     },
                 }, separators=(",", ":")).encode("utf-8")
                 data_path.write_bytes(candidate_bytes)

@@ -55,6 +55,8 @@ BEAM_CONFIG = {
 BASELINE_MIN_SOLVED = 14
 BASELINE_MIN_WIDTHS = 7
 QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN = 0.05
+QUALITY_MIN_RELATIVE_COST_REDUCTION = 0.05
+QUALITY_GAIN_STATUSES = frozenset({"length_gain", "coverage_gain", "combined_gain"})
 
 
 
@@ -277,6 +279,36 @@ def _panel_digest(panel: str, indices: list[int], case_ids: list[str]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _packed_state_rows(state: object) -> tuple[int, str, list[int]]:
+    if not isinstance(state, dict):
+        raise RunError("frozen panel state is malformed")
+    dimension = state.get("n")
+    alphabet_id = state.get("alphabet_id")
+    rows = state.get("packed_rows")
+    if (
+        type(dimension) is not int or dimension < 1
+        or not isinstance(alphabet_id, str) or not alphabet_id
+        or not isinstance(rows, list) or len(rows) != dimension
+    ):
+        raise RunError("frozen panel state identity is malformed")
+    words_per_row = (dimension + 63) // 64
+    packed: list[int] = []
+    for value in rows:
+        if type(value) is int:
+            integer = value
+        elif isinstance(value, str) and value.isdecimal():
+            integer = int(value)
+        else:
+            raise RunError("frozen panel packed row is malformed")
+        if integer < 0 or integer.bit_length() > dimension:
+            raise RunError("frozen panel packed row exceeds its width")
+        packed.extend(
+            (integer >> (64 * word)) & 0xFFFFFFFFFFFFFFFF
+            for word in range(words_per_row)
+        )
+    return dimension, alphabet_id, packed
+
+
 def select_panel_cohorts(
     dataset_value: object, per_width: int = 8
 ) -> dict[str, dict[str, Any]]:
@@ -287,17 +319,28 @@ def select_panel_cohorts(
         records = dataset_value["panels"].get(panel)
         indices = select_dev_indices(records, per_width=per_width)
         case_ids: list[str] = []
+        case_roots: dict[str, dict[str, Any]] = {}
         for index in indices:
             record = records[index]
             case_id = record.get("lineage_id") if isinstance(record, dict) else None
             if not isinstance(case_id, str) or not case_id.strip():
                 raise RunError(f"{panel} cohort has a missing case identity")
+            dimension, alphabet_id, root_rows = _packed_state_rows(
+                record.get("state") if isinstance(record, dict) else None
+            )
             case_ids.append(case_id)
+            case_roots[case_id] = {
+                "panel_index": index,
+                "dimension": dimension,
+                "alphabet_id": alphabet_id,
+                "start_packed_rows": root_rows,
+            }
         if len(case_ids) != len(set(case_ids)):
             raise RunError(f"{panel} cohort contains duplicate case identities")
         result[panel] = {
             "indices": indices,
             "case_ids": case_ids,
+            "case_roots": case_roots,
             "digest": _panel_digest(panel, indices, case_ids),
             "case_count": len(indices),
         }
@@ -316,12 +359,22 @@ def _panel_search_metrics(
     report: object,
     *,
     expected_case_ids: list[str],
+    expected_panel_indices: list[int],
+    expected_case_roots: dict[str, dict[str, Any]],
     expected_panel: str,
     expected_panel_digest: str,
     expected_search: dict[str, Any],
+    expected_receipt_pins: dict[str, Any],
     expected_head: str = "qhat",
 ) -> dict[str, Any]:
-    if not isinstance(report, dict) or report.get("schema") != "cnot103_panel_search_result_v2":
+    if not isinstance(report, dict):
+        raise RunError("panel search report is malformed")
+    typed_hamming = (
+        expected_head == "hamming"
+        and report.get("schema") == "cnot103_hamming_search_result_v1"
+    )
+    neural_schema = report.get("schema") == "cnot103_panel_search_result_v2"
+    if not (typed_hamming or neural_schema):
         raise RunError("panel search report schema is invalid")
     if report.get("panel") != expected_panel:
         raise RunError("panel search evaluated the wrong frozen split")
@@ -329,10 +382,17 @@ def _panel_search_metrics(
         raise RunError("panel search digest differs from its frozen cohort")
     if report.get("panel_ids") != expected_case_ids:
         raise RunError("panel search case identities differ from the frozen cohort")
-    if not expected_case_ids:
-        raise RunError("frozen panel is empty")
-    if len(expected_case_ids) != len(set(expected_case_ids)):
-        raise RunError("frozen panel contains duplicate case identities")
+    if report.get("panel_indices") != expected_panel_indices:
+        raise RunError("panel search index declaration differs from the frozen cohort")
+    if (
+        not expected_case_ids
+        or len(expected_case_ids) != len(set(expected_case_ids))
+        or len(expected_panel_indices) != len(expected_case_ids)
+        or len(expected_panel_indices) != len(set(expected_panel_indices))
+        or any(type(index) is not int or index < 0 for index in expected_panel_indices)
+        or set(expected_case_roots) != set(expected_case_ids)
+    ):
+        raise RunError("frozen panel cohort is empty, duplicated, or lacks root pins")
     expected_backend = "cpu_hamming" if expected_head == "hamming" else "cuda_model"
     if (
         expected_head not in {"qhat", "proposal", "hamming"}
@@ -341,17 +401,35 @@ def _panel_search_metrics(
         or report.get("execution_backend") != expected_backend
     ):
         raise RunError("panel search budget, scorer, or execution backend differs")
-    expected_feature_execution = (
-        "not_used_by_hamming" if expected_head == "hamming" else "used_for_model_scoring"
-    )
-    if (
-        report.get("feature_model_inputs") != MODEL_INPUTS
-        or report.get("feature_execution") != expected_feature_execution
-    ):
-        raise RunError("panel search model-input slots or feature execution differs")
-    audit = report.get("training_exposure_audit")
-    if not isinstance(audit, dict) or audit.get("strict_unseen") is not True:
-        raise RunError("panel search exposure audit failed")
+
+    for pin_name, expected in expected_receipt_pins.items():
+        if pin_name == "checkpoint_sha256":
+            checkpoint = report.get("checkpoint")
+            observed = checkpoint.get("sha256") if isinstance(checkpoint, dict) else None
+        else:
+            observed = report.get(pin_name)
+        if expected is None:
+            if observed is not None:
+                raise RunError(f"panel search unexpectedly reports {pin_name}")
+        elif observed != expected:
+            raise RunError(f"panel search {pin_name} differs from the pinned run")
+
+    if typed_hamming:
+        if expected_head != "hamming":
+            raise RunError("typed CPU Hamming receipt cannot score a neural head")
+    else:
+        expected_feature_execution = (
+            "not_used_by_hamming" if expected_head == "hamming" else "used_for_model_scoring"
+        )
+        if (
+            report.get("feature_model_inputs") != MODEL_INPUTS
+            or report.get("feature_execution") != expected_feature_execution
+        ):
+            raise RunError("panel search model-input slots or feature execution differs")
+        audit = report.get("training_exposure_audit")
+        if not isinstance(audit, dict) or audit.get("strict_unseen") is not True:
+            raise RunError("panel search exposure audit failed")
+
     rows = report.get("rows")
     if not isinstance(rows, list) or len(rows) != len(expected_case_ids):
         raise RunError("panel search row count differs from the frozen cohort")
@@ -363,17 +441,25 @@ def _panel_search_metrics(
         case_id = row.get("case_id")
         if not isinstance(case_id, str) or case_id not in expected_case_ids or case_id in cases:
             raise RunError("panel search case identity is missing, duplicated, or unexpected")
+        root_pin = expected_case_roots[case_id]
         dimension = row.get("dimension")
-        if type(dimension) is not int or dimension < 1:
-            raise RunError("panel search case dimension is invalid")
+        if (
+            type(dimension) is not int
+            or dimension != root_pin.get("dimension")
+            or type(row.get("panel_index")) is not int
+            or row.get("panel_index") != root_pin.get("panel_index")
+            or row.get("alphabet_id") != root_pin.get("alphabet_id")
+        ):
+            raise RunError("panel search ID-to-index-to-root identity differs from the sealed cohort")
         words_per_row = (dimension + 63) // 64
         start = row.get("start_packed_rows")
         if (
             not isinstance(start, list)
             or len(start) != dimension * words_per_row
             or any(type(word) is not int or word < 0 or word > 0xFFFFFFFFFFFFFFFF for word in start)
+            or start != root_pin.get("start_packed_rows")
         ):
-            raise RunError("panel search original case state is malformed")
+            raise RunError("panel search original matrix differs from the sealed root")
         width = row.get("width", dimension)
         if type(width) is not int or width != dimension:
             raise RunError("panel search case width differs from its state")
@@ -420,7 +506,9 @@ def _panel_search_metrics(
         elif word is not None or row.get("end_packed_rows") is not None:
             raise RunError("unsolved panel row unexpectedly contains a word or endpoint")
         cases[case_id] = {
+            "panel_index": root_pin["panel_index"],
             "dimension": dimension,
+            "alphabet_id": root_pin["alphabet_id"],
             "start_packed_rows": start,
             "status": row["status"],
             "physical_cost": cost,
@@ -449,10 +537,11 @@ def _panel_search_metrics(
         "physical_costs": costs,
         "total_physical_cost": sum(costs),
         "median_physical_cost": statistics.median(costs) if costs else None,
-        "search_wall_seconds": sum(
-            cases[case_id]["wall_seconds"] for case_id in expected_case_ids
-        ),
+        "search_wall_seconds": sum(cases[case_id]["wall_seconds"] for case_id in expected_case_ids),
         "cases": cases,
+        "panel_indices": expected_panel_indices,
+        "panel_digest": expected_panel_digest,
+        "receipt_pins": dict(expected_receipt_pins),
         "by_width": {
             str(width): {
                 "case_count": row["case_count"],
@@ -466,12 +555,17 @@ def _panel_search_metrics(
     }
 
 
+
+
 def evaluate_baseline_gate(
     report: object,
     *,
     expected_case_ids: list[str],
+    expected_panel_indices: list[int],
+    expected_case_roots: dict[str, dict[str, Any]],
     expected_panel_digest: str,
     expected_search: dict[str, Any],
+    expected_receipt_pins: dict[str, Any],
     minimum_solved: int = BASELINE_MIN_SOLVED,
     minimum_widths: int = BASELINE_MIN_WIDTHS,
 ) -> dict[str, Any]:
@@ -480,9 +574,12 @@ def evaluate_baseline_gate(
         metrics = _panel_search_metrics(
             report,
             expected_case_ids=expected_case_ids,
+            expected_panel_indices=expected_panel_indices,
+            expected_case_roots=expected_case_roots,
             expected_panel="dev",
             expected_panel_digest=expected_panel_digest,
             expected_search=expected_search,
+            expected_receipt_pins=expected_receipt_pins,
             expected_head="hamming",
         )
     except RunError as exc:
@@ -494,12 +591,9 @@ def evaluate_baseline_gate(
     if metrics["solved_count"] == 0:
         status = "inconclusive"
         reason = "Hamming baseline solved no frozen dev cases"
-    elif (
-        metrics["solved_count"] < minimum_solved
-        or solved_widths < minimum_widths
-    ):
-        status = "failed"
-        reason = "Hamming baseline is below the frozen solve or width-coverage threshold"
+    elif metrics["solved_count"] < minimum_solved or solved_widths < minimum_widths:
+        status = "inconclusive"
+        reason = "Hamming baseline is too small for a paired quality decision"
     else:
         status = "passed"
         reason = "Hamming baseline meets the frozen dev admission threshold"
@@ -517,6 +611,8 @@ def evaluate_baseline_gate(
     }
 
 
+
+
 def train_after_baseline_gate(gate: object, full_train):
     """Fail closed so full training cannot run without a passed dev baseline."""
     if not isinstance(gate, dict) or gate.get("status") != "passed":
@@ -529,83 +625,112 @@ def compare_quality(
     candidate_report: object,
     *,
     expected_case_ids: list[str],
+    expected_panel_indices: list[int],
+    expected_case_roots: dict[str, dict[str, Any]],
     expected_panel: str,
     expected_panel_digest: str,
     expected_search: dict[str, Any],
+    baseline_receipt_pins: dict[str, Any],
+    candidate_receipt_pins: dict[str, Any],
     baseline_head: str = "qhat",
     candidate_head: str = "qhat",
+    minimum_baseline_solved: int = BASELINE_MIN_SOLVED,
+    minimum_baseline_widths: int = BASELINE_MIN_WIDTHS,
 ) -> dict[str, Any]:
-    """Compare paired searches on one frozen panel and identical beam budget."""
+    """Compare paired, replay-checked searches on one frozen panel and budget."""
     try:
         baseline = _panel_search_metrics(
             baseline_report,
             expected_case_ids=expected_case_ids,
+            expected_panel_indices=expected_panel_indices,
+            expected_case_roots=expected_case_roots,
             expected_panel=expected_panel,
             expected_panel_digest=expected_panel_digest,
             expected_search=expected_search,
+            expected_receipt_pins=baseline_receipt_pins,
             expected_head=baseline_head,
         )
         candidate = _panel_search_metrics(
             candidate_report,
             expected_case_ids=expected_case_ids,
+            expected_panel_indices=expected_panel_indices,
+            expected_case_roots=expected_case_roots,
             expected_panel=expected_panel,
             expected_panel_digest=expected_panel_digest,
             expected_search=expected_search,
+            expected_receipt_pins=candidate_receipt_pins,
             expected_head=candidate_head,
         )
-        for case_id in expected_case_ids:
-            before = baseline["cases"][case_id]
-            after = candidate["cases"][case_id]
-            if (
-                before["dimension"] != after["dimension"]
-                or before["start_packed_rows"] != after["start_packed_rows"]
-            ):
-                raise RunError("paired quality case differs in original orientation")
     except RunError as exc:
         return {"status": "invalid", "reason": str(exc)}
 
     baseline_solved = set(baseline["solved_case_ids"])
     candidate_solved = set(candidate["solved_case_ids"])
-    required_solved_gain = max(
-        1,
-        math.ceil(QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN * len(expected_case_ids)),
-    )
     solved_gain = candidate["solved_count"] - baseline["solved_count"]
-    if not baseline_solved:
+    required_solved_gain = max(
+        1, math.ceil(QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN * len(expected_case_ids))
+    )
+    solved_widths = sum(
+        1 for summary in baseline["by_width"].values() if summary["solved_count"] > 0
+    )
+    paired_baseline_cost = sum(
+        baseline["cases"][case_id]["physical_cost"] for case_id in baseline_solved
+    )
+    common_ids = baseline_solved & candidate_solved
+    paired_candidate_cost = sum(
+        candidate["cases"][case_id]["physical_cost"] for case_id in common_ids
+    )
+    relative_cost_reduction = (
+        (paired_baseline_cost - paired_candidate_cost) / paired_baseline_cost
+        if paired_baseline_cost > 0 and len(common_ids) == len(baseline_solved)
+        else 0.0
+    )
+
+    if (
+        len(baseline_solved) < minimum_baseline_solved
+        or solved_widths < minimum_baseline_widths
+    ):
         status = "inconclusive"
-        reason = "baseline solved no locked test cases"
-        paired_baseline_cost = 0
-        paired_candidate_cost = 0
+        reason = "baseline solve count or width coverage is below the frozen paired-evaluation minimum"
     elif not baseline_solved.issubset(candidate_solved):
         status = "failed"
-        reason = "candidate lost one or more baseline solutions"
-        paired_baseline_cost = sum(
-            baseline["cases"][case_id]["physical_cost"] for case_id in baseline_solved
-        )
-        paired_candidate_cost = sum(
-            candidate["cases"][case_id]["physical_cost"]
-            for case_id in baseline_solved & candidate_solved
-        )
+        reason = "candidate lost a previously solved baseline case"
+    elif paired_candidate_cost > paired_baseline_cost:
+        status = "failed"
+        reason = "candidate increased physical cost on the paired baseline cases"
     else:
-        paired_baseline_cost = sum(
-            baseline["cases"][case_id]["physical_cost"] for case_id in baseline_solved
+        length_gain = (
+            candidate["solved_count"] == baseline["solved_count"]
+            and relative_cost_reduction >= QUALITY_MIN_RELATIVE_COST_REDUCTION
         )
-        paired_candidate_cost = sum(
-            candidate["cases"][case_id]["physical_cost"] for case_id in baseline_solved
-        )
-        if paired_candidate_cost > paired_baseline_cost:
-            status = "failed"
-            reason = "candidate increased paired physical cost"
-        elif solved_gain < required_solved_gain:
-            status = "failed"
-            reason = "candidate did not reach the frozen practical solved-rate gain"
+        coverage_gain = solved_gain >= required_solved_gain
+        if length_gain and coverage_gain:
+            status = "combined_gain"
+            reason = (
+                f"paired cost fell {relative_cost_reduction:.1%} and solve rate rose "
+                f"{solved_gain}/{len(expected_case_ids)} cases"
+            )
+        elif length_gain:
+            status = "length_gain"
+            reason = f"paired physical cost fell {relative_cost_reduction:.1%} with solve coverage preserved"
+        elif coverage_gain:
+            status = "coverage_gain"
+            reason = (
+                f"solve rate rose {solved_gain}/{len(expected_case_ids)} cases; "
+                "paired baseline cost did not increase"
+            )
+        elif candidate_solved == baseline_solved and paired_candidate_cost == paired_baseline_cost:
+            status = "tie"
+            reason = "solve coverage and paired physical cost are equal"
         else:
-            status = "passed"
-            reason = "candidate preserved baseline solves, reduced paired cost, and reached the frozen solved-rate gain"
-    widths = sorted(
-        set(baseline["by_width"]) | set(candidate["by_width"]),
-        key=int,
-    )
+            status = "no_practical_gain"
+            reason = (
+                f"cost reduction {relative_cost_reduction:.1%} is below "
+                f"{QUALITY_MIN_RELATIVE_COST_REDUCTION:.0%} and solve gain "
+                f"{solved_gain} is below {required_solved_gain} cases"
+            )
+
+    widths = sorted(set(baseline["by_width"]) | set(candidate["by_width"]), key=int)
     return {
         "status": status,
         "reason": reason,
@@ -618,10 +743,14 @@ def compare_quality(
         "solved_gain": solved_gain,
         "required_solved_gain": required_solved_gain,
         "minimum_absolute_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
+        "minimum_relative_cost_reduction": QUALITY_MIN_RELATIVE_COST_REDUCTION,
+        "minimum_baseline_solved": minimum_baseline_solved,
+        "minimum_baseline_widths": minimum_baseline_widths,
         "baseline_solved_rate": baseline["solved_rate"],
         "candidate_solved_rate": candidate["solved_rate"],
         "paired_baseline_physical_cost": paired_baseline_cost,
         "paired_candidate_physical_cost": paired_candidate_cost,
+        "relative_paired_cost_reduction": relative_cost_reduction,
         "baseline_metrics": baseline,
         "candidate_metrics": candidate,
         "by_width": [
@@ -639,6 +768,8 @@ def compare_quality(
             for width in widths
         ],
     }
+
+
 
 
 def validate_training_result(
@@ -1089,7 +1220,7 @@ class Supervisor:
             "starting", "preparing", "benchmarking", "resuming", "baseline",
             "training", "final_quality", "completed", "failed", "budget_gate", "time_limit",
         }
-        allowed_quality = {"not_ready", "measured", "passed", "failed", "inconclusive", "invalid"}
+        allowed_quality = {"not_ready", "measured", "passed", "length_gain", "coverage_gain", "combined_gain", "tie", "no_practical_gain", "failed", "inconclusive", "invalid"}
         if state not in allowed_states:
             state = "failed"
         if quality is not None:
@@ -1673,6 +1804,64 @@ class Supervisor:
         _write_new_private_json(path, value)
         return path
 
+    def _expected_search_receipt_pins(self, manifest_path: pathlib.Path) -> dict[str, Any]:
+        try:
+            manifest_bytes = manifest_path.read_bytes()
+            manifest = json.loads(manifest_bytes)
+        except (OSError, json.JSONDecodeError):
+            raise RunError("search manifest receipt pins are unreadable") from None
+        schema = manifest.get("schema") if isinstance(manifest, dict) else None
+        pins: dict[str, Any] = {
+            "search_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        }
+        if schema == "cnot103_hamming_search_v1":
+            dataset = manifest.get("dataset")
+            if not isinstance(dataset, dict):
+                raise RunError("Hamming manifest dataset pin is missing")
+            pins.update({
+                "dataset_sha256": dataset.get("sha256"),
+                "source_revision": manifest.get("source_revision"),
+                "training_manifest_sha256": None,
+                "training_result_sha256": None,
+                "checkpoint_sha256": None,
+            })
+            return pins
+        if schema != "cnot103_panel_search_v2":
+            raise RunError("search manifest schema is not recognized for receipt pinning")
+        train = manifest.get("training_manifest")
+        result = manifest.get("training_result")
+        if not isinstance(train, dict) or not isinstance(result, dict):
+            raise RunError("neural search manifest lacks pinned training inputs")
+        train_path = pathlib.Path(train.get("path", ""))
+        result_path = pathlib.Path(result.get("path", ""))
+        try:
+            train_bytes = train_path.read_bytes()
+            result_bytes = result_path.read_bytes()
+            train_value = json.loads(train_bytes)
+            result_value = json.loads(result_bytes)
+        except (OSError, json.JSONDecodeError):
+            raise RunError("neural search training pins are unreadable") from None
+        train_sha = hashlib.sha256(train_bytes).hexdigest()
+        result_sha = hashlib.sha256(result_bytes).hexdigest()
+        checkpoint = result_value.get("checkpoint") if isinstance(result_value, dict) else None
+        dataset = train_value.get("dataset") if isinstance(train_value, dict) else None
+        if (
+            train_sha != train.get("sha256")
+            or result_sha != result.get("sha256")
+            or not isinstance(checkpoint, dict)
+            or not isinstance(checkpoint.get("sha256"), str)
+            or not isinstance(dataset, dict)
+            or not isinstance(dataset.get("sha256"), str)
+        ):
+            raise RunError("neural search input receipts differ from their manifest pins")
+        pins.update({
+            "dataset_sha256": dataset["sha256"],
+            "training_manifest_sha256": train_sha,
+            "training_result_sha256": result_sha,
+            "checkpoint_sha256": checkpoint["sha256"],
+        })
+        return pins
+
     def _search(
         self,
         name: str,
@@ -1681,11 +1870,12 @@ class Supervisor:
         panel: str,
         *,
         expected_head: str = "qhat",
+        runner_name: str = "cnot103-search",
     ) -> tuple[dict[str, Any], dict[str, Any], float]:
         started = time.monotonic()
         report = self._run(
             name,
-            [str(self._runner("cnot103-search")), str(manifest)],
+            [str(self._runner(runner_name)), str(manifest)],
             state="baseline" if name.startswith("baseline") else "final_quality",
             json_stdout=True,
         )
@@ -1693,9 +1883,12 @@ class Supervisor:
         metrics = _panel_search_metrics(
             report,
             expected_case_ids=cohort["case_ids"],
+            expected_panel_indices=cohort["indices"],
+            expected_case_roots=cohort["case_roots"],
             expected_panel=panel,
             expected_panel_digest=cohort["digest"],
             expected_search=BEAM_CONFIG,
+            expected_receipt_pins=self._expected_search_receipt_pins(manifest),
             expected_head=expected_head,
         )
         return report, metrics, elapsed
@@ -1817,6 +2010,7 @@ class Supervisor:
                 "execution_backend": "cpu_hamming",
                 "quality_acceptance": {
                     "minimum_absolute_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
+                    "minimum_relative_cost_reduction": QUALITY_MIN_RELATIVE_COST_REDUCTION,
                     "preserve_all_hamming_solutions": True,
                     "paired_physical_cost_may_not_increase": True,
                 },
@@ -1843,8 +2037,11 @@ class Supervisor:
             baseline_gate = evaluate_baseline_gate(
                 baseline_dev_report,
                 expected_case_ids=dev_cohort["case_ids"],
+                expected_panel_indices=dev_cohort["indices"],
+                expected_case_roots=dev_cohort["case_roots"],
                 expected_panel_digest=dev_cohort["digest"],
                 expected_search=BEAM_CONFIG,
+                expected_receipt_pins=baseline_dev_metrics["receipt_pins"],
             )
             _write_new_private_json(
                 self.root / "reports" / "baseline-dev-gate.private.json",
@@ -1985,9 +2182,13 @@ class Supervisor:
                 baseline_dev_report,
                 final_dev_report,
                 expected_case_ids=dev_cohort["case_ids"],
+                expected_panel_indices=dev_cohort["indices"],
+                expected_case_roots=dev_cohort["case_roots"],
                 expected_panel="dev",
                 expected_panel_digest=dev_cohort["digest"],
                 expected_search=BEAM_CONFIG,
+                baseline_receipt_pins=baseline_dev_metrics["receipt_pins"],
+                candidate_receipt_pins=final_dev_metrics["receipt_pins"],
                 baseline_head="hamming",
                 candidate_head="qhat",
             )
@@ -2004,7 +2205,7 @@ class Supervisor:
             final_test_report = None
             final_test_metrics = None
             final_test_wall = 0.0
-            if dev_quality_comparison["status"] == "passed":
+            if dev_quality_comparison["status"] in QUALITY_GAIN_STATUSES:
                 # The selected full-training checkpoint has passed the frozen
                 # dev criterion. Only now open the locked test panel.
                 baseline_test_manifest = self._search_manifest(
@@ -2030,9 +2231,13 @@ class Supervisor:
                     baseline_test_report,
                     final_test_report,
                     expected_case_ids=test_cohort["case_ids"],
+                    expected_panel_indices=test_cohort["indices"],
+                    expected_case_roots=test_cohort["case_roots"],
                     expected_panel="test",
                     expected_panel_digest=test_cohort["digest"],
                     expected_search=BEAM_CONFIG,
+                    baseline_receipt_pins=baseline_test_metrics["receipt_pins"],
+                    candidate_receipt_pins=final_test_metrics["receipt_pins"],
                     baseline_head="hamming",
                     candidate_head="qhat",
                 )
@@ -2094,6 +2299,8 @@ class Supervisor:
                     "head": "qhat",
                     "baseline_head": "hamming",
                     "acceptance_minimum_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
+                    "acceptance_minimum_relative_cost_reduction": QUALITY_MIN_RELATIVE_COST_REDUCTION,
+                    "accepted_gain_statuses": sorted(QUALITY_GAIN_STATUSES),
                     "baseline_dev": baseline_dev_metrics,
                     "dev_paired_comparison": dev_quality_comparison,
                     "locked_test_evaluated": final_test_report is not None,
@@ -2111,8 +2318,8 @@ class Supervisor:
                 },
             }
             _write_new_private_json(self.private_report_path, final_report)
-            if self.quality_status == "passed":
-                self.status("completed", "passed")
+            if self.quality_status in QUALITY_GAIN_STATUSES:
+                self.status("completed", self.quality_status)
                 return 0
             self.status("failed", self.quality_status)
             return 1
