@@ -74,7 +74,7 @@ pub mod device_context;
 #[cfg(feature = "cuda")]
 pub mod device_feature_plan;
 
-#[cfg(any(feature = "cuda", all(test, feature = "torch")))]
+#[cfg(any(feature = "cuda", feature = "torch"))]
 pub mod device_search;
 
 #[cfg(feature = "cuda")]

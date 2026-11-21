@@ -389,6 +389,7 @@ class QualityComparisonTests(unittest.TestCase):
             "search_manifest_sha256": char * 64,
             "dataset_sha256": "d" * 64,
             "source_revision": "a" * 40,
+            "runtime_contract": "native_device_search_v13",
             "training_manifest_sha256": None,
             "training_result_sha256": None,
             "checkpoint_sha256": None,
@@ -421,6 +422,17 @@ class QualityComparisonTests(unittest.TestCase):
             "search_manifest_sha256": pins["search_manifest_sha256"],
             "dataset_sha256": pins["dataset_sha256"],
             "source_revision": pins["source_revision"],
+            "runtime_contract": pins["runtime_contract"],
+            "panel_roots": [
+                {
+                    "panel_index": cls.ROOTS[case_id]["panel_index"],
+                    "case_id": case_id,
+                    "dimension": cls.ROOTS[case_id]["dimension"],
+                    "alphabet_id": cls.ROOTS[case_id]["alphabet_id"],
+                    "start_packed_rows": cls.ROOTS[case_id]["start_packed_rows"],
+                }
+                for case_id in cls.CASE_IDS
+            ] if head == "hamming" else None,
             "search": training.BEAM_CONFIG if search is None else search,
             "head": head,
             "execution_backend": "cpu_hamming" if head == "hamming" else "cuda_model",
@@ -690,6 +702,7 @@ class BaselineGateTests(unittest.TestCase):
             "search_manifest_sha256": "1" * 64,
             "dataset_sha256": "d" * 64,
             "source_revision": "a" * 40,
+            "runtime_contract": "native_device_search_v13",
         }
         report = {
             "schema": "cnot103_hamming_search_result_v1",
@@ -700,6 +713,17 @@ class BaselineGateTests(unittest.TestCase):
             "search_manifest_sha256": pins["search_manifest_sha256"],
             "dataset_sha256": pins["dataset_sha256"],
             "source_revision": pins["source_revision"],
+            "runtime_contract": pins["runtime_contract"],
+            "panel_roots": [
+                {
+                    "panel_index": roots[case_id]["panel_index"],
+                    "case_id": case_id,
+                    "dimension": roots[case_id]["dimension"],
+                    "alphabet_id": roots[case_id]["alphabet_id"],
+                    "start_packed_rows": roots[case_id]["start_packed_rows"],
+                }
+                for case_id in case_ids
+            ],
             "search": training.BEAM_CONFIG,
             "head": "hamming",
             "execution_backend": "cpu_hamming",
@@ -827,11 +851,16 @@ class CleanBootstrapTests(unittest.TestCase):
                 }),
                     encoding="utf-8",
                 )
-            elif name == "cargo_release_build":
+            elif name == "cargo_cpu_native_build":
                 validator = supervisor._runner("cnot103-validate-data")
+                hamming = supervisor._runner("cnot103-hamming-search")
                 validator.parent.mkdir(parents=True, exist_ok=True)
                 validator.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 validator.chmod(0o700)
+                hamming.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                hamming.chmod(0o700)
+            elif name == "cargo_release_build":
+                return None
             elif name == "validate_frozen_dataset":
                 if not pathlib.Path(command[0]).is_file():
                     raise AssertionError("Rust validator was invoked before cargo build")
@@ -848,12 +877,18 @@ class CleanBootstrapTests(unittest.TestCase):
             coverage_calls.append(True)
             raise self.ReachedCoverage()
 
+        def cpu_hamming_search(*_args, **_kwargs):
+            stages.append("cpu_hamming_search")
+            return {}, {"receipt_pins": {}}, 0.01
+
         with (
             patch.object(supervisor, "_check_source"),
             patch.object(supervisor, "_hardware", return_value={"torch_cuda_devices": 2}),
             patch.object(supervisor, "_free_gib", return_value=100.0),
             patch.object(supervisor, "_ensure_cargo"),
             patch.object(supervisor, "_run", side_effect=run_stage),
+            patch.object(supervisor, "_search", side_effect=cpu_hamming_search),
+            patch.object(training, "evaluate_baseline_gate", return_value={"status": "passed"}),
             patch.object(supervisor, "_feature_coverage", side_effect=coverage),
         ):
             result = supervisor.run()
@@ -863,8 +898,9 @@ class CleanBootstrapTests(unittest.TestCase):
         result, stages, coverage, root = self._run_to_coverage(validation_ok=True)
 
         self.assertEqual(result, 1)  # stopped deliberately at the coverage boundary
-        self.assertLess(stages.index("cargo_release_build"), stages.index("validate_frozen_dataset"))
+        self.assertLess(stages.index("cargo_cpu_native_build"), stages.index("validate_frozen_dataset"))
         self.assertLess(stages.index("validate_frozen_dataset"), stages.index("finalize_frozen_dataset"))
+        self.assertLess(stages.index("cpu_hamming_search"), stages.index("cargo_release_build"))
         self.assertTrue(coverage)
         receipt = json.loads((root / training.DATA_RECEIPT_RELATIVE).read_text(encoding="utf-8"))
         self.assertTrue(receipt["complete"])
@@ -873,7 +909,8 @@ class CleanBootstrapTests(unittest.TestCase):
         result, stages, coverage, root = self._run_to_coverage(validation_ok=False)
 
         self.assertEqual(result, 1)
-        self.assertLess(stages.index("cargo_release_build"), stages.index("validate_frozen_dataset"))
+        self.assertLess(stages.index("cargo_cpu_native_build"), stages.index("validate_frozen_dataset"))
+        self.assertNotIn("cargo_release_build", stages)
         self.assertNotIn("finalize_frozen_dataset", stages)
         self.assertFalse(coverage)
         receipt = json.loads((root / training.DATA_RECEIPT_RELATIVE).read_text(encoding="utf-8"))

@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/check-full-training-cpu-runtime.yml'
       - '.github/scripts/cnot_cpu_torch_ci.py'
+      - '.github/scripts/cnot_hamming_cpu_ci.py'
       - '.github/scripts/build_training_manifest.py'
       - '.github/training-profiles/**'
       - 'native/**'
@@ -196,6 +197,68 @@ jobs:
           echo "code=$profile_code" >>"$GITHUB_OUTPUT"
           echo "profile_status=$profile_status profile_code=$profile_code"
 
+      - name: Compile the sealed Hamming fixture writer
+        id: compile_hamming_fixture
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+        run: |
+          set -euo pipefail
+          cargo_json="$RUNNER_TEMP/cnot103-hamming-fixture-cargo.json"
+          binary_file="$RUNNER_TEMP/cnot103-hamming-fixture-executable"
+          cargo_status=0
+          cargo test --no-run --locked --features torch --test cnot_hamming_fixture --message-format=json >"$cargo_json" 2>&1 || cargo_status=$?
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
+            --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
+            --artifact-kind test --target-name cnot_hamming_fixture \
+            --binary-file "$binary_file" \
+            --artifact-dir "$RUNNER_TEMP/cnot103-torch-target/debug/deps" \
+            --artifact-prefix cnot_hamming_fixture- --output "$GITHUB_OUTPUT"
+
+      - name: Write the sealed synthetic train dev test fixture
+        id: hamming_fixture
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' && steps.compile_hamming_fixture.outputs.status == 'compiled' }}
+        working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+          CNOT103_TEST_FIXTURE_PATH: ${{ runner.temp }}/cnot103-hamming-fixture.json
+        run: |
+          set -euo pipefail
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py run-tests \
+            --binary-file "$RUNNER_TEMP/cnot103-hamming-fixture-executable" \
+            --tests export_cpu_hamming_fixture_for_ci --output "$GITHUB_OUTPUT"
+
+      - name: Compile CPU-only Hamming search binary
+        id: compile_hamming
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+        run: |
+          set -euo pipefail
+          cargo_json="$RUNNER_TEMP/cnot103-hamming-cargo.json"
+          binary_file="$RUNNER_TEMP/cnot103-hamming-executable"
+          cargo_status=0
+          cargo build --locked --features torch --bin cnot103-hamming-search --message-format=json >"$cargo_json" 2>&1 || cargo_status=$?
+          python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
+            --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
+            --artifact-kind bin --target-name cnot103-hamming-search \
+            --binary-file "$binary_file" --output "$GITHUB_OUTPUT"
+
+      - name: Run pinned CPU Hamming search and reject altered dataset roots
+        id: hamming
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' && steps.compile_hamming_fixture.outputs.status == 'compiled' && steps.hamming_fixture.outputs.status == 'passed' && steps.compile_hamming.outputs.status == 'compiled' }}
+        env:
+          CNOT103_SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/cnot_hamming_cpu_ci.py \
+            --dataset "$RUNNER_TEMP/cnot103-hamming-fixture.json" \
+            --binary-file "$RUNNER_TEMP/cnot103-hamming-executable" \
+            --source-revision "$CNOT103_SOURCE_REVISION" \
+            --output "$GITHUB_OUTPUT"
+
       - name: Close the CPU torch acceptance gate
         if: always() && !cancelled()
         env:
@@ -212,6 +275,10 @@ jobs:
           PROFILE_COMPILE_CODE: ${{ steps.compile_profile.outputs.rustc_code }}
           PROFILE_STATUS: ${{ steps.profile.outputs.status }}
           PROFILE_CODE: ${{ steps.profile.outputs.code }}
+          HAMMING_FIXTURE_COMPILE_STATUS: ${{ steps.compile_hamming_fixture.outputs.status }}
+          HAMMING_FIXTURE_STATUS: ${{ steps.hamming_fixture.outputs.status }}
+          HAMMING_COMPILE_STATUS: ${{ steps.compile_hamming.outputs.status }}
+          HAMMING_STATUS: ${{ steps.hamming.outputs.status }}
         run: |
           set -euo pipefail
           echo "v13_compile=${V13_COMPILE_STATUS:-not_run} rustc_code=${V13_COMPILE_CODE:-none}"
@@ -220,6 +287,10 @@ jobs:
           echo "resume=${RESUME_STATUS:-not_run} code=${RESUME_CODE:-none}"
           echo "profile_compile=${PROFILE_COMPILE_STATUS:-not_run} rustc_code=${PROFILE_COMPILE_CODE:-none}"
           echo "profile=${PROFILE_STATUS:-not_run} code=${PROFILE_CODE:-none}"
+          echo "hamming_fixture_compile=${HAMMING_FIXTURE_COMPILE_STATUS:-not_run}"
+          echo "hamming_fixture=${HAMMING_FIXTURE_STATUS:-not_run}"
+          echo "hamming_compile=${HAMMING_COMPILE_STATUS:-not_run}"
+          echo "hamming=${HAMMING_STATUS:-not_run}"
           python3 .github/scripts/cnot_cpu_torch_ci.py gate \
             --torch "${TORCH_OUTCOME:-missing}" \
             --v13-compile "${V13_COMPILE_STATUS:-not_run}" \
@@ -227,4 +298,8 @@ jobs:
             --resume-compile "${RESUME_COMPILE_STATUS:-not_run}" \
             --resume "${RESUME_STATUS:-not_run}" \
             --profile-compile "${PROFILE_COMPILE_STATUS:-not_run}" \
-            --profile "${PROFILE_STATUS:-not_run}"
+            --profile "${PROFILE_STATUS:-not_run}" \
+            --hamming-fixture-compile "${HAMMING_FIXTURE_COMPILE_STATUS:-not_run}" \
+            --hamming-fixture "${HAMMING_FIXTURE_STATUS:-not_run}" \
+            --hamming-compile "${HAMMING_COMPILE_STATUS:-not_run}" \
+            --hamming "${HAMMING_STATUS:-not_run}"

@@ -3,6 +3,7 @@ use super::{
     artifacts,
     evaluation::{load_panel_checkpoint, PanelCheckpoint},
 };
+use super::super::panel::{frozen_panel_digest, validate_frozen_panel};
 use crate::{
     device_search::{search_hamming, search_neural, ActionHead, BeamConfig},
     run_config::manifest::PinnedArtifact,
@@ -27,13 +28,6 @@ struct SearchManifest {
     head: ActionHead,
 }
 
-fn frozen_panel_digest(panel: &str, indices: &[usize], ids: &[String]) -> String {
-    let value = json!({"panel":panel,"indices":indices,"ids":ids});
-    artifacts::sha256(
-        &serde_json::to_vec(&value).expect("panel identity JSON serialization is infallible"),
-    )
-}
-
 pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
     let raw = fs::read(path).map_err(|e| e.to_string())?;
     let search: SearchManifest = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
@@ -56,6 +50,9 @@ pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
     {
         return Err("panel search manifest cohort identity is invalid".into());
     }
+    if matches!(search.head, ActionHead::Hamming) {
+        return Err("CPU Hamming uses the sealed CPU-only search manifest".into());
+    }
     let PanelCheckpoint {
         field,
         receipt,
@@ -67,6 +64,13 @@ pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
         &search.training_result,
         &search.panel,
         &search.panel_indices,
+    )?;
+    validate_frozen_panel(
+        &field.dataset,
+        &search.panel,
+        &search.panel_indices,
+        &search.panel_ids,
+        &search.panel_digest,
     )?;
     let records = match search.panel.as_str() {
         "dev" => field.dataset.dev.records(),

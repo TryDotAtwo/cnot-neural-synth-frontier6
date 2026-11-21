@@ -417,6 +417,21 @@ def _panel_search_metrics(
     if typed_hamming:
         if expected_head != "hamming":
             raise RunError("typed CPU Hamming receipt cannot score a neural head")
+        expected_roots = [
+            {
+                "panel_index": expected_case_roots[case_id]["panel_index"],
+                "case_id": case_id,
+                "dimension": expected_case_roots[case_id]["dimension"],
+                "alphabet_id": expected_case_roots[case_id]["alphabet_id"],
+                "start_packed_rows": expected_case_roots[case_id]["start_packed_rows"],
+            }
+            for case_id in expected_case_ids
+        ]
+        if (
+            report.get("runtime_contract") != "native_device_search_v13"
+            or report.get("panel_roots") != expected_roots
+        ):
+            raise RunError("typed Hamming receipt runtime or source-root pins differ")
     else:
         expected_feature_execution = (
             "not_used_by_hamming" if expected_head == "hamming" else "used_for_model_scoring"
@@ -1534,6 +1549,19 @@ class Supervisor:
             or receipt.get("dataset_bytes") != data_path.stat().st_size
         ):
             raise RunError("Rust-accepted dataset receipt was not sealed")
+    def _build_cpu_native(self) -> None:
+        self._ensure_cargo()
+        self._run(
+            "cargo_cpu_native_build",
+            [
+                "cargo", "build", "--release", "--features", "torch",
+                "--manifest-path", str(self.source / "native/Cargo.toml"),
+                "--bin", "cnot103-validate-data",
+                "--bin", "cnot103-hamming-search",
+            ],
+            state="preparing",
+        )
+
     def _build_native(self) -> None:
         self._ensure_cargo()
         self._run(
@@ -1759,6 +1787,54 @@ class Supervisor:
         validate_training_result(report, expected_start, expected_end)
         return report, elapsed
 
+    def _hamming_search_manifest(
+        self,
+        name: str,
+        dataset_sha: str,
+        panel: str,
+        cohort: dict[str, Any],
+    ) -> pathlib.Path:
+        if panel not in {"dev", "test"}:
+            raise RunError("CPU Hamming manifest panel is invalid")
+        indices = cohort.get("indices")
+        case_ids = cohort.get("case_ids")
+        case_roots = cohort.get("case_roots")
+        if (
+            not isinstance(indices, list) or not indices
+            or not isinstance(case_ids, list) or len(case_ids) != len(indices)
+            or not isinstance(case_roots, dict) or set(case_roots) != set(case_ids)
+            or cohort.get("digest") != _panel_digest(panel, indices, case_ids)
+        ):
+            raise RunError("CPU Hamming manifest cohort is malformed")
+        panel_roots = [
+            {
+                "panel_index": indices[position],
+                "case_id": case_id,
+                "dimension": case_roots[case_id]["dimension"],
+                "alphabet_id": case_roots[case_id]["alphabet_id"],
+                "start_packed_rows": case_roots[case_id]["start_packed_rows"],
+            }
+            for position, case_id in enumerate(case_ids)
+        ]
+        value = {
+            "schema": "cnot103_hamming_search_v1",
+            "source_revision": self.source_revision,
+            "dataset": {
+                "path": str(self.root / DATA_RELATIVE),
+                "sha256": dataset_sha,
+            },
+            "panel": panel,
+            "panel_indices": indices,
+            "panel_ids": case_ids,
+            "panel_roots": panel_roots,
+            "panel_digest": cohort["digest"],
+            "runtime_contract": "native_device_search_v13",
+            "search": BEAM_CONFIG,
+        }
+        path = self.root / "manifests" / f"{name}.json"
+        _write_new_private_json(path, value)
+        return path
+
     def _search_manifest(
         self,
         name: str,
@@ -1821,6 +1897,7 @@ class Supervisor:
             pins.update({
                 "dataset_sha256": dataset.get("sha256"),
                 "source_revision": manifest.get("source_revision"),
+                "runtime_contract": manifest.get("runtime_contract"),
                 "training_manifest_sha256": None,
                 "training_result_sha256": None,
                 "checkpoint_sha256": None,
@@ -1922,9 +1999,8 @@ class Supervisor:
         try:
             self.status("starting")
             self._check_source()
-            hardware = self._hardware()
             dataset_sha = self._build_dataset()
-            self._build_native()
+            self._build_cpu_native()
             self._validate_and_seal_dataset(dataset_sha)
             data_value = json.loads((self.root / DATA_RELATIVE).read_text(encoding="utf-8"))
             panel_cohorts = select_panel_cohorts(data_value, per_width=8)
@@ -1936,6 +2012,103 @@ class Supervisor:
                     "panels": panel_cohorts,
                 },
             )
+            dev_cohort = panel_cohorts["dev"]
+            test_cohort = panel_cohorts["test"]
+            baseline_plan = {
+                "schema": "cnot103_hamming_baseline_plan_v2",
+                "source_revision": self.source_revision,
+                "holdout_revision": self.holdout_revision,
+                "holdout_sha256": self.holdout_sha256,
+                "dataset_sha256": dataset_sha,
+                "dev_panel": dev_cohort,
+                "locked_test_panel": test_cohort,
+                "search": BEAM_CONFIG,
+                "runtime_contract": {
+                    "id": "native_device_search_v13",
+                    "frontier_charge": "charge_complete_live_parent_frontier_before_goal_scan",
+                    "terminal_scan": "full_action_alphabet_one_cnot_before_shortlist",
+                    "final_layer_scan": False,
+                    "orientation": "row_target_xor_row_control",
+                    "alphabet": "all_to_all_unit_cnot",
+                    "tie_break": "ascending_score_then_lexicographic_complete_word",
+                    "replay": "exact_gf2_rows_to_identity",
+                    "state_dtype": "packed_u64",
+                    "hamming_score": "integer_popcount_then_float32",
+                },
+                "quality_acceptance": {
+                    "shared_guard": [
+                        "sealed_source_roots",
+                        "independent_replay",
+                        "matched_search_budget",
+                        "useful_hamming_baseline",
+                        "preserve_all_baseline_solutions",
+                        "paired_common_cost_must_not_increase",
+                    ],
+                    "length_gain": {
+                        "minimum_relative_paired_cost_reduction": QUALITY_MIN_RELATIVE_COST_REDUCTION,
+                        "solve_coverage_must_be_preserved": True,
+                    },
+                    "coverage_gain": {
+                        "minimum_absolute_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
+                        "common_solution_cost_must_not_increase": True,
+                    },
+                    "equality": "tie",
+                    "inadequate_baseline": "inconclusive",
+                },
+                "criterion": {
+                    "minimum_solved_dev_cases": BASELINE_MIN_SOLVED,
+                    "minimum_solved_dev_widths": BASELINE_MIN_WIDTHS,
+                    "zero_solved_is": "inconclusive",
+                    "baseline_runs_before_cuda_or_training": True,
+                    "locked_test_is_never_used_to_tune": True,
+                },
+            }
+            _write_new_private_json(
+                self.root / "reports" / "baseline-plan.private.json",
+                baseline_plan,
+            )
+            baseline_dev_manifest = self._hamming_search_manifest(
+                "baseline_dev_search", dataset_sha, "dev", dev_cohort
+            )
+            baseline_dev_report, baseline_dev_metrics, baseline_dev_wall = self._search(
+                "baseline_dev_search",
+                baseline_dev_manifest,
+                dev_cohort,
+                "dev",
+                expected_head="hamming",
+                runner_name="cnot103-hamming-search",
+            )
+            baseline_gate = evaluate_baseline_gate(
+                baseline_dev_report,
+                expected_case_ids=dev_cohort["case_ids"],
+                expected_panel_indices=dev_cohort["indices"],
+                expected_case_roots=dev_cohort["case_roots"],
+                expected_panel_digest=dev_cohort["digest"],
+                expected_search=BEAM_CONFIG,
+                expected_receipt_pins=baseline_dev_metrics["receipt_pins"],
+            )
+            _write_new_private_json(
+                self.root / "reports" / "baseline-dev-gate.private.json",
+                {
+                    "schema": "cnot103_hamming_baseline_gate_receipt_v2",
+                    "plan_sha256": hashlib.sha256(
+                        (self.root / "reports" / "baseline-plan.private.json").read_bytes()
+                    ).hexdigest(),
+                    "result": baseline_gate,
+                    "search_wall_seconds": baseline_dev_wall,
+                },
+            )
+            self.status("baseline", baseline_gate["status"])
+            if baseline_gate["status"] != "passed":
+                self.quality_status = baseline_gate["status"]
+                raise RunError(
+                    "frozen dev Hamming baseline failed the predeclared admission threshold"
+                )
+
+            # The Hamming baseline uses CPU tensors and completes before CUDA setup,
+            # feature coverage, benchmark scoring, or any optimizer update.
+            hardware = self._hardware()
+            self._build_native()
             self.feature_coverage_summary = self._feature_coverage(dataset_sha)
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB is free for immutable checkpoints")
@@ -1955,111 +2128,6 @@ class Supervisor:
             )
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB remains after resume proof")
-
-            dev_cohort = panel_cohorts["dev"]
-            test_cohort = panel_cohorts["test"]
-            baseline_plan = {
-                "schema": "cnot103_hamming_baseline_plan_v1",
-                "source_revision": self.source_revision,
-                "holdout_revision": self.holdout_revision,
-                "holdout_sha256": self.holdout_sha256,
-                "dataset_sha256": dataset_sha,
-                "profile_id": PROFILE_ID,
-                "profile_sha256": hashlib.sha256(
-                    (self.source / PROFILE_RELATIVE).read_bytes()
-                ).hexdigest(),
-                "feature_schema": "runtime_packet_layout_v25",
-                "model": {
-                    "parameters": MODEL_PARAMETERS,
-                    "structural_blocks": STRUCTURAL_BLOCKS,
-                    "input_slots": MODEL_INPUTS,
-                    "seed": json.loads(resume_manifest.read_text(encoding="utf-8"))[
-                        "training"
-                    ]["seed"],
-                },
-                "checkpoint_inputs": {
-                    "training_manifest_sha256": hashlib.sha256(
-                        resume_manifest.read_bytes()
-                    ).hexdigest(),
-                    "training_result_sha256": hashlib.sha256(
-                        (self.root / "reports" / "resume_step_2.stdout.json").read_bytes()
-                    ).hexdigest(),
-                    "receipt": json.loads(
-                        (self.root / "reports" / "resume_step_2.stdout.json").read_text(
-                            encoding="utf-8"
-                        )
-                    ).get("checkpoint"),
-                },
-                "dev_panel": dev_cohort,
-                "locked_test_panel": test_cohort,
-                "search": BEAM_CONFIG,
-                "runtime_contract": {
-                    "id": "native_device_search_v13",
-                    "frontier_charge": "charge_complete_live_parent_frontier_before_goal_scan",
-                    "terminal_scan": "full_action_alphabet_one_cnot_before_shortlist",
-                    "final_layer_scan": False,
-                    "orientation": "row_target_xor_row_control",
-                    "alphabet": "all_to_all_unit_cnot",
-                    "tie_break": "ascending_score_then_lexicographic_complete_word",
-                    "replay": "exact_gf2_rows_to_identity",
-                    "state_dtype": "packed_u64",
-                    "neural_score_dtype": "float32",
-                    "hamming_score": "integer_popcount_then_float32",
-                },
-                "head": "hamming",
-                "execution_backend": "cpu_hamming",
-                "quality_acceptance": {
-                    "minimum_absolute_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
-                    "minimum_relative_cost_reduction": QUALITY_MIN_RELATIVE_COST_REDUCTION,
-                    "preserve_all_hamming_solutions": True,
-                    "paired_physical_cost_may_not_increase": True,
-                },
-                "criterion": {
-                    "minimum_solved_dev_cases": BASELINE_MIN_SOLVED,
-                    "minimum_solved_dev_widths": BASELINE_MIN_WIDTHS,
-                    "zero_solved_is": "inconclusive",
-                    "locked_test_is_never_used_to_tune": True,
-                },
-            }
-            _write_new_private_json(
-                self.root / "reports" / "baseline-plan.private.json",
-                baseline_plan,
-            )
-            baseline_dev_manifest = self._search_manifest(
-                "baseline_dev_search", resume_manifest,
-                self.root / "reports" / "resume_step_2.stdout.json",
-                "dev", dev_cohort, head="hamming",
-            )
-            baseline_dev_report, baseline_dev_metrics, baseline_dev_wall = self._search(
-                "baseline_dev_search", baseline_dev_manifest, dev_cohort, "dev",
-                expected_head="hamming",
-            )
-            baseline_gate = evaluate_baseline_gate(
-                baseline_dev_report,
-                expected_case_ids=dev_cohort["case_ids"],
-                expected_panel_indices=dev_cohort["indices"],
-                expected_case_roots=dev_cohort["case_roots"],
-                expected_panel_digest=dev_cohort["digest"],
-                expected_search=BEAM_CONFIG,
-                expected_receipt_pins=baseline_dev_metrics["receipt_pins"],
-            )
-            _write_new_private_json(
-                self.root / "reports" / "baseline-dev-gate.private.json",
-                {
-                    "schema": "cnot103_hamming_baseline_gate_receipt_v1",
-                    "plan_sha256": hashlib.sha256(
-                        (self.root / "reports" / "baseline-plan.private.json").read_bytes()
-                    ).hexdigest(),
-                    "result": baseline_gate,
-                    "search_wall_seconds": baseline_dev_wall,
-                },
-            )
-            self.status("baseline", baseline_gate["status"])
-            if baseline_gate["status"] != "passed":
-                self.quality_status = baseline_gate["status"]
-                raise RunError(
-                    "frozen dev Hamming baseline failed the predeclared admission threshold"
-                )
 
             baseline_test_report = None
             baseline_test_metrics = None
@@ -2086,8 +2154,7 @@ class Supervisor:
             estimated_candidate_dev_seconds = smoke_qhat_dev_wall
             estimated_candidate_test_seconds = smoke_qhat_dev_wall * panel_scale
             search_eval_reserve_seconds = (
-                baseline_dev_wall
-                + estimated_locked_hamming_seconds
+                estimated_locked_hamming_seconds
                 + estimated_candidate_dev_seconds
                 + estimated_candidate_test_seconds
             )
@@ -2208,14 +2275,16 @@ class Supervisor:
             if dev_quality_comparison["status"] in QUALITY_GAIN_STATUSES:
                 # The selected full-training checkpoint has passed the frozen
                 # dev criterion. Only now open the locked test panel.
-                baseline_test_manifest = self._search_manifest(
-                    "baseline_test_search", resume_manifest,
-                    self.root / "reports" / "resume_step_2.stdout.json",
-                    "test", test_cohort, head="hamming",
+                baseline_test_manifest = self._hamming_search_manifest(
+                    "baseline_test_search", dataset_sha, "test", test_cohort
                 )
                 baseline_test_report, baseline_test_metrics, baseline_test_wall = self._search(
-                    "baseline_test_search", baseline_test_manifest, test_cohort, "test",
+                    "baseline_test_search",
+                    baseline_test_manifest,
+                    test_cohort,
+                    "test",
                     expected_head="hamming",
+                    runner_name="cnot103-hamming-search",
                 )
                 baseline_search_wall = baseline_dev_wall + baseline_test_wall
                 final_test_manifest = self._search_manifest(

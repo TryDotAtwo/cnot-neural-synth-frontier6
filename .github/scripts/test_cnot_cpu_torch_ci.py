@@ -249,17 +249,23 @@ class CpuTorchCiTests(unittest.TestCase):
             "resume": "passed",
             "profile_compile": "compiled",
             "profile": "passed",
+            "hamming_fixture_compile": "compiled",
+            "hamming_fixture": "passed",
+            "hamming_compile": "compiled",
+            "hamming": "passed",
         }
         receipt = gate_receipt(outcomes)
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["outcomes"]["v13"], "failed")
         self.assertEqual(receipt["outcomes"]["resume"], "passed")
         self.assertEqual(receipt["outcomes"]["profile"], "passed")
+        self.assertEqual(receipt["outcomes"]["hamming"], "passed")
 
     def test_missing_outcome_keeps_the_overall_gate_closed(self):
         receipt = gate_receipt({"torch": "success", "v13_compile": "compiled", "v13": "passed"})
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["outcomes"]["resume"], "not_run")
+        self.assertEqual(receipt["outcomes"]["hamming"], "not_run")
 
 
 if __name__ == "__main__":

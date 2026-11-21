@@ -12,7 +12,7 @@ import subprocess
 from typing import Any
 
 RUSTC_CODE = re.compile(r"^E[0-9]{4}$")
-CHECK_NAMES = ("v13", "resume", "profile")
+CHECK_NAMES = ("v13", "resume", "profile", "hamming")
 
 
 def _target_matches(target: dict[str, Any], target_name: str | None, artifact_kind: str) -> bool:
@@ -272,6 +272,10 @@ def gate_receipt(outcomes: dict[str, str]) -> dict[str, Any]:
         "resume": "passed",
         "profile_compile": "compiled",
         "profile": "passed",
+        "hamming_fixture_compile": "compiled",
+        "hamming_fixture": "passed",
+        "hamming_compile": "compiled",
+        "hamming": "passed",
     }
     checks = {name: outcomes.get(name, "not_run") for name in expected}
     return {
@@ -373,6 +377,10 @@ def command_gate(args: argparse.Namespace) -> int:
             "resume": args.resume,
             "profile_compile": args.profile_compile,
             "profile": args.profile,
+            "hamming_fixture_compile": args.hamming_fixture_compile,
+            "hamming_fixture": args.hamming_fixture,
+            "hamming_compile": args.hamming_compile,
+            "hamming": args.hamming,
         }
     )
     _emit({"status": receipt["status"]}, args.output)
@@ -409,6 +417,10 @@ def build_parser() -> argparse.ArgumentParser:
         "v13-compile",
         "resume-compile",
         "profile-compile",
+        "hamming-fixture-compile",
+        "hamming-fixture",
+        "hamming-compile",
+        "hamming",
     ):
         gate_parser.add_argument("--" + name, required=True)
     gate_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))

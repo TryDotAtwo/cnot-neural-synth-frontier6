@@ -9,12 +9,22 @@ name = "cnot103_native"
 crate-type = ["rlib"]
 
 [[bin]]
+name = "cnot103-hamming-search"
+path = "src/bin/cnot103_hamming_search.rs"
+required-features = ["torch"]
+
+[[bin]]
 name = "cnot103-validate-data"
 path = "src/bin/cnot103_validate_data.rs"
 
 [[bin]]
 name = "cnot103-validate-manifest"
 path = "src/bin/cnot103_validate_manifest.rs"
+required-features = ["torch"]
+
+[[test]]
+name = "cnot_hamming_fixture"
+path = "tests/cnot_hamming_fixture.rs"
 required-features = ["torch"]
 
 [[test]]
