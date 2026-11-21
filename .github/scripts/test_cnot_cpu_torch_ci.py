@@ -164,6 +164,27 @@ class CpuTorchCiTests(unittest.TestCase):
         self.assertEqual(result["rustc_code"], "none")
         self.assertNotIn("private_type", json.dumps(result))
 
+
+    def test_uncoded_runtime_test_error_gets_only_an_allowlisted_test_site(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "code": None,
+                "message": "private compiler detail with secret_type",
+                "spans": [{
+                    "file_name": "native/src/device_search/runtime.rs",
+                    "line_start": 875,
+                    "is_primary": True,
+                }],
+            },
+        }
+        result = compile_evidence(json.dumps(message), 101, "lib_test")
+        self.assertEqual(result["status"], "compile_failed_runtime_tests_hamming_control_test")
+        self.assertEqual(result["rustc_code"], "none")
+        self.assertNotIn("secret_type", json.dumps(result))
+        self.assertNotIn("private compiler detail", json.dumps(result))
+
     def test_unresolved_name_without_a_source_span_has_a_safe_class(self):
         message = {
             "reason": "compiler-message",
