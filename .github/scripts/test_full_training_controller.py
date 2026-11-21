@@ -202,9 +202,26 @@ class FullTrainingBudgetTests(unittest.TestCase):
             patch.object(controller.base, "stop_exact_label") as stop,
             patch.object(controller, "_summarize"),
         ):
-            controller.cleanup()
+            self.assertEqual(controller.cleanup(), 0)
 
         stop.assert_not_called()
+
+    def test_cleanup_is_successful_noop_when_no_run_target_exists(self):
+        old_label = "cnot103-r10k-44749514754-a1"
+        with (
+            patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}, clear=True),
+            patch.object(controller.base, "run_identity", return_value=("a" * 40, "123", "legacy")),
+            patch.object(controller, "CLAIM_VISIBILITY_WAIT_SECONDS", 0),
+            patch.object(controller, "_marker", return_value={"resume_existing_label": old_label}),
+            patch.object(controller.base, "instance_rows", return_value=[]),
+            patch.object(controller.base, "stop_exact_label") as stop,
+            patch.object(controller, "_summarize") as summarize,
+        ):
+            self.assertEqual(controller.cleanup(), 0)
+
+        stop.assert_not_called()
+        summarize.assert_called_once()
+        self.assertEqual(summarize.call_args.args[1:3], ("not_needed", "not_needed"))
 
     def test_cleanup_stops_run_claimed_target_without_a_late_step_output(self):
         run_label = "cnot103-fulltrain-123-a1"
