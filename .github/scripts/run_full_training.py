@@ -8,6 +8,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import shutil
 import statistics
 import subprocess
