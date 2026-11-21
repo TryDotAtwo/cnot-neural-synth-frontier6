@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a pinned 2x3060 full-model run manifest from an explicit feature profile.
+"""Build a bounded CNOT run manifest from an explicit feature profile.
 
 The profile is source-controlled and passed in by path. This tool never invents
 feature contexts from matrix width.
@@ -20,8 +20,9 @@ from urllib.request import Request, urlopen
 
 WIDTHS = (8, 10, 13, 25, 26, 34, 45, 50, 58, 72, 90, 108, 122, 144)
 MODEL_INPUT_COUNT = 102
-TARGET_ATTEMPTS = 250_000
-INVOCATION_ATTEMPTS = TARGET_ATTEMPTS
+TARGET_ATTEMPTS = 250_000  # Historical maximum, only used when explicitly requested.
+DEFAULT_TARGET_ATTEMPTS = 2
+INVOCATION_ATTEMPTS = 2
 BATCH_SIZE = 4
 CHECKPOINT_EVERY = 25_000
 PROFILE_SCHEMA = "cnot103_feature_context_profile_v2"
@@ -265,7 +266,7 @@ def build_manifest(
     checkpoint_dir: str,
     resume: bool,
     attempts: int = INVOCATION_ATTEMPTS,
-    target_attempts: int = TARGET_ATTEMPTS,
+    target_attempts: int = DEFAULT_TARGET_ATTEMPTS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     contexts = validate_profile(profile)
     _validate_run_inputs(
@@ -471,7 +472,7 @@ def main() -> int:
     parser.add_argument("--dataset-sha256")
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--attempts", type=int, default=INVOCATION_ATTEMPTS)
-    parser.add_argument("--target-attempts", type=int, default=TARGET_ATTEMPTS)
+    parser.add_argument("--target-attempts", type=int, default=DEFAULT_TARGET_ATTEMPTS)
     parser.add_argument("--output", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--self-test", action="store_true")
@@ -481,7 +482,7 @@ def main() -> int:
         if args.self_test:
             if any((args.profile, args.dataset_path, args.dataset_sha256, args.checkpoint_dir, args.resume)):
                 raise ValueError("self-test arguments")
-            if args.attempts != INVOCATION_ATTEMPTS or args.target_attempts != TARGET_ATTEMPTS:
+            if args.attempts != INVOCATION_ATTEMPTS or args.target_attempts != DEFAULT_TARGET_ATTEMPTS:
                 raise ValueError("self-test attempt arguments")
             profile = _self_test_profile()
             profile_bytes = json.dumps(profile, sort_keys=True).encode("utf-8")

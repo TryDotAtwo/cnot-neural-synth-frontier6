@@ -1,0 +1,23 @@
+{
+  "schema": "cnot103_historical_training_preset_v1",
+  "preset_id": "100-epochs-10k-250k",
+  "status": "historical_only_not_default",
+  "dispatch_allowed": false,
+  "training": {
+    "epochs": 100,
+    "records_per_epoch": 10000,
+    "attempts": 250000,
+    "batch_size": 4,
+    "devices": [
+      "RTX 3060",
+      "RTX 3060"
+    ]
+  },
+  "model": {
+    "parameters": 136421807,
+    "structural_blocks": 8,
+    "input_slots": 102,
+    "feature_schema": "runtime_packet_layout_v25"
+  },
+  "note": "Retained as an archival recipe. It is not the default experiment and must not authorize a run."
+}
