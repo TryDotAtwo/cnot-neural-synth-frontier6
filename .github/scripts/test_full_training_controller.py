@@ -145,6 +145,7 @@ class FullTrainingBudgetTests(unittest.TestCase):
             patch.object(controller.base, "is_2x3060", return_value=True),
             patch.object(controller.base, "instance_id", return_value=123),
             patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "_validate_bootstrap_budget", return_value=True),
             patch.object(controller.base, "instance_rows", return_value=[running]),
             patch.object(controller.base, "api_instance_id") as activate,
             patch.object(controller.base, "offer_inventory") as offers,
@@ -382,14 +383,14 @@ class RemoteStatusReaderTests(unittest.TestCase):
             def run(self, command, timeout):
                 return subprocess.CompletedProcess(
                     [], 0,
-                    "run_state=baseline\\n"
-                    "quality_status=measured\\n"
-                    "started_at_epoch=100.0\\n"
-                    "budget_baseline=2.5\\n"
-                    "billing_baseline_epoch=200.0\\n"
-                    "remaining_work_seconds=3000.0\\n"
-                    "forecast_total_seconds=3500.0\\n"
-                    + "forecast_token=" + "a" * 32 + "\\n",
+                    "run_state=baseline\n"
+                    "quality_status=measured\n"
+                    "started_at_epoch=100.0\n"
+                    "budget_baseline=2.5\n"
+                    "billing_baseline_epoch=200.0\n"
+                    "remaining_work_seconds=3000.0\n"
+                    "forecast_total_seconds=3500.0\n"
+                    + "forecast_token=" + "a" * 32 + "\n",
                     "",
                 )
 
@@ -426,7 +427,7 @@ class ForecastAuthorizationWriterTests(unittest.TestCase):
         self.assertEqual(session.timeout, 30)
         self.assertIn("forecast-approval.private.json", session.command)
         self.assertIn("authorized_at_epoch", session.command)
-        body = session.command.partition("<<'PY'\\n")[2].partition("\\nPY\\n")[0]
+        body = session.command.partition("<<'PY'\n")[2].partition("\nPY\n")[0]
         ast.parse(body)
 
     def test_missing_remote_acknowledgement_is_not_authorization(self):
@@ -602,7 +603,7 @@ class ForecastMonitoringTests(unittest.TestCase):
                 "_read_remote_status_full",
                 return_value=("baseline", "measured", 900.0, 0.0, 900.0, 3600.0, 3500.0, "a" * 32),
             ),
-            patch.object(controller.base, "instance_rows", side_effect=[row, {**row, "actual_status": "stopped"}]),
+            patch.object(controller.base, "instance_rows", side_effect=[[row], [{**row, "actual_status": "stopped"}]]),
             patch.object(controller.base, "resolve_label", return_value=row),
             patch.object(controller.base, "instance_id", side_effect=lambda value: value["id"]),
             patch.object(controller.base, "project_charges", return_value=0.0),
@@ -662,7 +663,7 @@ class ForecastMonitoringTests(unittest.TestCase):
                     forecast_total, remaining_work, "a" * 32,
                 ),
             ),
-            patch.object(controller.base, "instance_rows", side_effect=[row, stopped]),
+            patch.object(controller.base, "instance_rows", side_effect=[[row], [stopped]]),
             patch.object(controller.base, "resolve_label", return_value=row),
             patch.object(controller.base, "instance_id", side_effect=lambda value: value["id"]),
             patch.object(controller.base, "project_charges", return_value=0.0),
