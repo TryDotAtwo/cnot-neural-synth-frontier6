@@ -500,18 +500,126 @@ class StorageReservationTests(unittest.TestCase):
             self.assertIsNone(controller._other_storage_reserve(rows, 123))
 
 
-class BudgetConfigurationDiagnosisTests(unittest.TestCase):
-    def test_missing_private_target_identity_is_reported_as_a_redacted_gate(self):
-        marker = {"resume_existing_label": "cnot103-r10k-123-a1"}
+class NewRentalBudgetDiagnosisTests(unittest.TestCase):
+    @staticmethod
+    def offer(**updates):
+        row = {
+            "ask_id": 77,
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "dph_total": 0.30,
+            "storage_cost": 0.15,
+            "allocated_storage": 64,
+        }
+        row.update(updates)
+        return row
+
+    def test_new_rental_projection_covers_actual_64gb_disk_and_prior_spend(self):
+        offer = self.offer()
+        self.assertEqual(
+            controller.classify_new_rental_budget([offer], [], spent=0.0),
+            "within_cap",
+        )
+        self.assertEqual(
+            controller.classify_new_rental_budget([offer], [], spent=4.0),
+            "insufficient_remaining_budget",
+        )
+        expensive = self.offer(dph_total=0.40)
+        self.assertEqual(
+            controller.classify_new_rental_budget([expensive], [], spent=0.0),
+            "run_projection_exceeds_cap",
+        )
+
+    def test_new_rental_budget_uses_bootstrap_window_separately(self):
+        offer = self.offer(dph_total=0.50)
+        self.assertEqual(
+            controller.classify_new_rental_budget(
+                [offer], [], spent=0.0, active_hours=controller.BOOTSTRAP_HOURS
+            ),
+            "within_cap",
+        )
+        self.assertEqual(
+            controller.classify_new_rental_budget([offer], [], spent=0.0),
+            "run_projection_exceeds_cap",
+        )
+
+    def test_new_rental_budget_fails_closed_on_unknown_or_wrong_disk_contract(self):
+        self.assertEqual(
+            controller.classify_new_rental_budget(
+                [self.offer(storage_cost=None)], [], spent=0.0
+            ),
+            "inputs_unknown",
+        )
+        self.assertEqual(
+            controller.classify_new_rental_budget(
+                [self.offer(allocated_storage=None)], [], spent=0.0
+            ),
+            "inputs_unknown",
+        )
+        self.assertEqual(
+            controller.classify_new_rental_budget(
+                [self.offer(allocated_storage=32)], [], spent=0.0
+            ),
+            "inputs_unknown",
+        )
+
+    def test_no_eligible_offer_has_its_own_status(self):
+        self.assertEqual(
+            controller.classify_new_rental_budget([], [], spent=0.0),
+            "no_eligible_offer",
+        )
+
+    def test_missing_target_budget_path_is_get_only(self):
+        offer = self.offer()
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch.object(controller, "_marker", return_value=marker),
+            patch.object(controller, "_marker", return_value={
+                "resume_existing_label": "cnot103-r10k-123-a1",
+            }),
             patch.object(controller.base, "instance_rows", return_value=[]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller.base, "offer_inventory", return_value=[offer]) as offers,
+            patch.object(controller, "_summarize_budget") as summarize,
+            patch.object(controller.base, "api_instance_id") as update,
+            patch.object(controller.base, "create_once") as create,
+            patch.object(controller.base, "stop_exact_label") as stop,
+        ):
+            self.assertEqual(controller.budget_check(), 0)
+
+        offers.assert_called_once()
+        self.assertEqual(
+            summarize.call_args.args[1:],
+            ("success", "within_cap", "within_cap"),
+        )
+        update.assert_not_called()
+        create.assert_not_called()
+        stop.assert_not_called()
+
+
+class BudgetConfigurationDiagnosisTests(unittest.TestCase):
+    def test_existing_owned_target_without_private_id_does_not_trigger_rental_path(self):
+        target = {
+            "id": 123,
+            "label": "cnot103-r10k-123-a1",
+            "gpu_name": "RTX 3060",
+            "num_gpus": 2,
+            "disk_space": 64,
+            "storage_cost": 0.005,
+            "dph_total": 0.30,
+        }
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(controller, "_marker", return_value={
+                "resume_existing_label": target["label"],
+            }),
+            patch.object(controller.base, "instance_rows", return_value=[target]),
+            patch.object(controller.base, "project_charges", return_value=0.0),
+            patch.object(controller.base, "offer_inventory") as offers,
             patch.object(controller, "_summarize_budget") as summarize,
         ):
             self.assertEqual(controller.budget_check(), 1)
 
-        summarize.assert_called_once()
+        offers.assert_not_called()
         self.assertEqual(
             summarize.call_args.args[1:],
             ("failed", "configuration_missing", "configuration_missing"),
