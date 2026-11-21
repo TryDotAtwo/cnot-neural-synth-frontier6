@@ -153,6 +153,38 @@ def forecast_time_fits(
     return now - started + remaining + cleanup <= MAX_RUNTIME_SECONDS
 
 
+def validate_billing_snapshot(value: object) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != "cnot103_campaign_billing_snapshot_v1"
+        or not isinstance(value.get("instance_id"), str)
+        or not value["instance_id"].isdigit()
+    ):
+        raise RunError("controller billing snapshot is missing or malformed")
+    fields = (
+        "billing_baseline_project_spend_usd", "projected_project_spend_usd",
+        "billing_baseline_epoch", "captured_at_epoch", "active_rate_usd_per_hour",
+        "post_stop_storage_reserve_usd", "other_storage_reserve_usd",
+        "transfer_reserve_usd", "stop_poll_reserve_usd",
+    )
+    normalized: dict[str, Any] = {"schema": value["schema"], "instance_id": value["instance_id"]}
+    for name in fields:
+        number = value.get(name)
+        if (
+            isinstance(number, bool) or not isinstance(number, (int, float))
+            or not math.isfinite(number) or number < 0
+        ):
+            raise RunError("controller billing snapshot contains invalid cost or time data")
+        normalized[name] = float(number)
+    if (
+        normalized["active_rate_usd_per_hour"] <= 0
+        or normalized["billing_baseline_epoch"] <= 0
+        or normalized["captured_at_epoch"] < normalized["billing_baseline_epoch"]
+    ):
+        raise RunError("controller billing snapshot timeline or rate is invalid")
+    return normalized
+
+
 def _validated_progress(value: object, label: str) -> dict[str, int]:
     if not isinstance(value, dict):
         raise RunError(f"{label} progress is malformed")
@@ -1482,6 +1514,7 @@ class Supervisor:
         self.forecast_total_seconds: float | None = None
         self.remaining_work_seconds: float | None = None
         self.forecast_token: str | None = None
+        self.billing_snapshot: dict[str, Any] | None = None
         self.status_path = root / "status.private.json"
         self.events_path = root / "events.private.jsonl"
         self.error_path = root / "error.private.json"
@@ -1591,6 +1624,9 @@ class Supervisor:
                 self.remaining_work_seconds,
                 now_epoch,
             ):
+                self.billing_snapshot = validate_billing_snapshot(
+                    value.get("billing_snapshot") if isinstance(value, dict) else None
+                )
                 if not forecast_time_fits(
                     self.started_at_epoch, self.remaining_work_seconds, now_epoch
                 ):
@@ -2407,6 +2443,16 @@ class Supervisor:
                 raise RunError("less than 24 GiB is free for immutable checkpoints")
             update_seconds, setup_seconds, benchmark_report, benchmark_wall = self._benchmark(dataset_sha)
 
+            spec_path = self.source / MEASUREMENT_SPEC_RELATIVE
+            measurement_spec = load_measurement_spec(spec_path)
+            spec_bytes = spec_path.read_bytes()
+            measurement_spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
+            if (
+                measurement_spec["training"]["max_attempts"] != TARGET_ATTEMPTS
+                or measurement_spec["resource_limits"]["max_active_seconds"] != MAX_RUNTIME_SECONDS
+            ):
+                raise RunError("measurement spec differs from the supervisor's active limits")
+
             fresh_manifest = self._build_manifest(
                 "fresh_step_1", dataset_sha, 1, TARGET_ATTEMPTS, False
             )
@@ -2422,13 +2468,6 @@ class Supervisor:
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB remains after resume proof")
 
-            baseline_test_report = None
-            baseline_test_metrics = None
-            baseline_test_wall = 0.0
-            baseline_search_wall = baseline_dev_wall
-
-            # The two-update network is a timing diagnostic only. It never
-            # selects a checkpoint or contributes a quality claim.
             smoke_qhat_manifest = self._search_manifest(
                 "two_update_dev_search", resume_manifest,
                 self.root / "reports" / "resume_step_2.stdout.json",
@@ -2441,49 +2480,45 @@ class Supervisor:
 
             forecast_measured_at = time.time()
             elapsed_before_full = max(0.0, forecast_measured_at - self.started_at_epoch)
-            remaining_updates = TARGET_ATTEMPTS - 2
+            remaining_updates = measurement_spec["training"]["max_attempts"] - 2
+            future_milestones = [
+                value for value in measurement_spec["training"]["accepted_milestones"]
+                if value > 2
+            ]
             panel_scale = len(test_cohort["case_ids"]) / max(1, len(dev_cohort["case_ids"]))
             estimated_locked_hamming_seconds = baseline_dev_wall * panel_scale
-            estimated_candidate_dev_seconds = smoke_qhat_dev_wall
-            estimated_candidate_test_seconds = smoke_qhat_dev_wall * panel_scale
-            search_eval_reserve_seconds = (
-                estimated_locked_hamming_seconds
-                + estimated_candidate_dev_seconds
-                + estimated_candidate_test_seconds
+            estimated_locked_candidate_seconds = smoke_qhat_dev_wall * panel_scale
+            locked_search_reserve_seconds = (
+                estimated_locked_hamming_seconds + estimated_locked_candidate_seconds
             )
-            remaining_work_seconds = estimate_remaining_work_seconds(
-                setup_seconds=setup_seconds,
-                update_seconds=update_seconds / PILOT_ATTEMPTS,
-                remaining_updates=remaining_updates,
+            remaining_work_seconds = setup_seconds + estimate_measurement_remaining_work_seconds(
+                remaining_attempts=remaining_updates,
+                seconds_per_attempt=update_seconds / PILOT_ATTEMPTS,
+                future_dev_evaluations=len(future_milestones),
+                dev_search_seconds=smoke_qhat_dev_wall,
+                locked_search_seconds=locked_search_reserve_seconds,
                 checkpoint_reserve_seconds=CHECKPOINT_WRITE_RESERVE_SECONDS,
-                baseline_search_seconds=search_eval_reserve_seconds,
-                forecast_safety_seconds=FORECAST_SAFETY_SECONDS,
+                cleanup_reserve_seconds=FORECAST_SAFETY_SECONDS,
             )
             estimated_full_seconds = elapsed_before_full + remaining_work_seconds
             self.remaining_work_seconds = float(remaining_work_seconds)
             self.forecast_total_seconds = float(estimated_full_seconds)
             self.forecast_token = secrets.token_hex(16)
             runtime_gate = forecast_time_fits(
-                self.started_at_epoch,
-                self.remaining_work_seconds,
-                time.time(),
+                self.started_at_epoch, self.remaining_work_seconds, time.time()
             )
             _write_new_private_json(
                 self.root / "reports" / "bounded-pilot-decision.private.json",
                 {
-                    "schema": "cnot103_bounded_pilot_decision_v1",
+                    "schema": "cnot103_bounded_pilot_decision_v2",
                     "source_revision": self.source_revision,
                     "holdout_revision": self.holdout_revision,
                     "holdout_sha256": self.holdout_sha256,
                     "dataset_sha256": dataset_sha,
+                    "measurement_spec_sha256": measurement_spec_sha256,
+                    "experiment_id": measurement_spec["experiment_id"],
                     "hardware": hardware,
-                    "model": {
-                        "parameters": MODEL_PARAMETERS,
-                        "structural_blocks": STRUCTURAL_BLOCKS,
-                        "input_slots": MODEL_INPUTS,
-                        "batch_size": BATCH_SIZE,
-                        "target_attempts": TARGET_ATTEMPTS,
-                    },
+                    "model": measurement_spec["model"],
                     "pilot": {
                         "attempts": PILOT_ATTEMPTS,
                         "fresh_end_progress": fresh_report["end_progress"],
@@ -2494,21 +2529,26 @@ class Supervisor:
                         "baseline_dev": baseline_dev_metrics,
                         "two_update_qhat_dev_diagnostic": smoke_qhat_metrics,
                     },
+                    "learning_curve": {
+                        "max_attempts": measurement_spec["training"]["max_attempts"],
+                        "accepted_milestones": measurement_spec["training"]["accepted_milestones"],
+                        "future_dev_evaluations": len(future_milestones),
+                    },
                     "search_eval_reserve": {
                         "measured_hamming_dev_seconds": baseline_dev_wall,
                         "measured_two_update_qhat_dev_seconds": smoke_qhat_dev_wall,
                         "estimated_locked_hamming_seconds": estimated_locked_hamming_seconds,
-                        "estimated_final_qhat_dev_seconds": estimated_candidate_dev_seconds,
-                        "estimated_final_qhat_test_seconds": estimated_candidate_test_seconds,
+                        "estimated_locked_candidate_seconds": estimated_locked_candidate_seconds,
                         "locked_test_not_run_before_dev_checkpoint_selection": True,
                     },
                     "forecast": {
                         "measured_at_epoch": forecast_measured_at,
-                        "elapsed_before_full_seconds": elapsed_before_full,
-                        "remaining_updates": remaining_updates,
+                        "elapsed_before_measurements_seconds": elapsed_before_full,
+                        "remaining_attempts": remaining_updates,
                         "remaining_work_seconds": remaining_work_seconds,
                         "campaign_total_seconds": estimated_full_seconds,
                         "cleanup_reserve_seconds": FORECAST_CLEANUP_RESERVE_SECONDS,
+                        "safety_reserve_seconds": FORECAST_SAFETY_SECONDS,
                         "runtime_gate": "within_limit" if runtime_gate else "exceeds_limit",
                         "controller_budget_gate": "pending",
                     },
@@ -2517,100 +2557,223 @@ class Supervisor:
             self.status("baseline", "measured")
             if not runtime_gate:
                 self.status("time_limit", "measured")
-                raise TimeLimit("measured remaining work plus cleanup misses the 48-hour end-to-end gate")
+                raise TimeLimit("measured learning-curve work plus cleanup misses the end-to-end gate")
             self._await_forecast_approval()
 
-            full_manifest = self._build_manifest(
-                "full_resume", dataset_sha, remaining_updates, TARGET_ATTEMPTS, True
-            )
-            full_report, full_wall = train_after_baseline_gate(
-                baseline_gate,
-                lambda: self._train(
-                    "full_resume", full_manifest, 2, TARGET_ATTEMPTS, "training"
-                ),
-            )
-            final_dev_manifest = self._search_manifest(
-                "final_dev_search",
-                full_manifest,
-                self.root / "reports" / "full_resume.stdout.json",
-                "dev", dev_cohort,
-            )
-            final_dev_report, final_dev_metrics, final_dev_wall = self._search(
-                "final_dev_search", final_dev_manifest, dev_cohort, "dev"
-            )
-            dev_quality_comparison = compare_quality(
-                baseline_dev_report,
-                final_dev_report,
-                expected_case_ids=dev_cohort["case_ids"],
-                expected_panel_indices=dev_cohort["indices"],
-                expected_case_roots=dev_cohort["case_roots"],
-                expected_panel="dev",
-                expected_panel_digest=dev_cohort["digest"],
-                expected_search=BEAM_CONFIG,
-                baseline_receipt_pins=baseline_dev_metrics["receipt_pins"],
-                candidate_receipt_pins=final_dev_metrics["receipt_pins"],
-                baseline_head="hamming",
-                candidate_head="qhat",
-            )
-            _write_new_private_json(
-                self.root / "reports" / "dev-checkpoint-selection.private.json",
-                {
-                    "schema": "cnot103_dev_checkpoint_selection_v1",
-                    "cohort_digest": dev_cohort["digest"],
-                    "search": BEAM_CONFIG,
-                    "comparison": dev_quality_comparison,
-                },
-            )
+            baseline_test_report = None
+            baseline_test_metrics = None
+            baseline_test_wall = 0.0
+            candidate_test_report = None
+            candidate_test_metrics = None
+            candidate_test_wall = 0.0
+            paired_test_comparison = None
+            training_runs: dict[int, dict[str, Any]] = {}
 
-            final_test_report = None
-            final_test_metrics = None
-            final_test_wall = 0.0
-            if dev_quality_comparison["status"] in QUALITY_GAIN_STATUSES:
-                # The selected full-training checkpoint has passed the frozen
-                # dev criterion. Only now open the locked test panel.
+            def train_to_milestone(milestone: int, prior_progress: dict[str, int]) -> dict[str, Any]:
+                self.check_time()
+                prior = _validated_progress(prior_progress, "resume")
+                if prior["attempted"] != prior["accepted"] or prior["rejected"] != 0:
+                    raise RunError("measurement resume point contains rejected updates")
+                attempts = milestone - prior["attempted"]
+                if attempts < 1:
+                    raise RunError("measurement milestone does not advance training")
+                name = "learning_curve_{:06d}".format(milestone)
+                manifest = self._build_manifest(
+                    name, dataset_sha, attempts,
+                    measurement_spec["training"]["max_attempts"], True,
+                )
+                report, wall = self._train(
+                    name, manifest, prior["attempted"], milestone, "training"
+                )
+                result_path = self.root / "reports" / (name + ".stdout.json")
+                training_runs[milestone] = {
+                    "report": report, "manifest": manifest,
+                    "result_path": result_path, "training_wall_seconds": wall,
+                }
+                wrapped = dict(report)
+                wrapped["training_wall_seconds"] = wall
+                return wrapped
+
+            def search_milestone_dev(training_result: dict[str, Any]) -> dict[str, Any]:
+                milestone = training_result.get("end_progress", {}).get("accepted")
+                record = training_runs.get(milestone)
+                if record is None:
+                    raise RunError("dev search has no matching training checkpoint")
+                name = "learning_curve_{:06d}_dev_search".format(milestone)
+                manifest = self._search_manifest(
+                    name, record["manifest"], record["result_path"], "dev", dev_cohort
+                )
+                report, metrics, wall = self._search(name, manifest, dev_cohort, "dev")
+                record["dev_report"] = report
+                record["dev_metrics"] = metrics
+                record["dev_wall_seconds"] = wall
+                return {"wall_seconds": wall, "metrics": metrics}
+
+            def compare_milestone_dev(training_result, dev_result) -> dict[str, Any]:
+                milestone = training_result.get("end_progress", {}).get("accepted")
+                record = training_runs.get(milestone)
+                if record is None or "dev_report" not in record:
+                    raise RunError("dev comparison has no pinned checkpoint search")
+                return compare_quality(
+                    baseline_dev_report, record["dev_report"],
+                    expected_case_ids=dev_cohort["case_ids"],
+                    expected_panel_indices=dev_cohort["indices"],
+                    expected_case_roots=dev_cohort["case_roots"],
+                    expected_panel="dev", expected_panel_digest=dev_cohort["digest"],
+                    expected_search=measurement_spec["search"],
+                    baseline_receipt_pins=baseline_dev_metrics["receipt_pins"],
+                    candidate_receipt_pins=record["dev_metrics"]["receipt_pins"],
+                    baseline_head="hamming", candidate_head="qhat",
+                )
+
+            def persist_milestone_receipt(receipt: dict[str, Any]) -> None:
+                billing = self.billing_snapshot
+                captured_at = time.time()
+                cost = {
+                    "status": "unavailable",
+                    "actual_cost": "awaiting_confirmed_controller_invoice_after_stop",
+                }
+                if billing is not None:
+                    elapsed = max(0.0, captured_at - billing["captured_at_epoch"])
+                    projected = (
+                        billing["projected_project_spend_usd"]
+                        + billing["active_rate_usd_per_hour"] * elapsed / 3600.0
+                    )
+                    reserve = sum(billing[name] for name in (
+                        "post_stop_storage_reserve_usd", "other_storage_reserve_usd",
+                        "transfer_reserve_usd", "stop_poll_reserve_usd",
+                    ))
+                    cost = {
+                        "status": "projected_from_controller_invoice_snapshot",
+                        "billing_baseline_project_spend_usd": billing["billing_baseline_project_spend_usd"],
+                        "projected_project_spend_usd": projected,
+                        "reserved_storage_transfer_and_stop_usd": reserve,
+                        "projected_total_campaign_cost_usd": projected + reserve,
+                        "snapshot_captured_at_epoch": billing["captured_at_epoch"],
+                        "instance_id": billing["instance_id"],
+                        "actual_cost": "awaiting_confirmed_controller_invoice_after_stop",
+                    }
+                value = {
+                    **receipt,
+                    "source_revision": self.source_revision,
+                    "holdout_revision": self.holdout_revision,
+                    "holdout_sha256": self.holdout_sha256,
+                    "dataset_sha256": dataset_sha,
+                    "measurement_spec_sha256": measurement_spec_sha256,
+                    "experiment_id": measurement_spec["experiment_id"],
+                    "model": measurement_spec["model"],
+                    "search": measurement_spec["search"],
+                    "dev_panel_digest": dev_cohort["digest"],
+                    "campaign_elapsed_seconds": max(0.0, captured_at - self.started_at_epoch),
+                    "cost": cost,
+                }
+                path = self.root / "reports" / (
+                    "learning-curve-milestone-{:06d}.private.json".format(receipt["accepted_updates"])
+                )
+                _write_new_private_json(path, value)
+
+            def run_locked_test(selected: dict[str, Any]) -> dict[str, Any]:
+                nonlocal baseline_test_report, baseline_test_metrics, baseline_test_wall
+                nonlocal candidate_test_report, candidate_test_metrics, candidate_test_wall
+                nonlocal paired_test_comparison
+                milestone = selected["accepted_updates"]
+                record = training_runs.get(milestone)
+                if record is None:
+                    raise RunError("locked test has no selected dev checkpoint")
                 baseline_test_manifest = self._hamming_search_manifest(
                     "baseline_test_search", dataset_sha, "test", test_cohort
                 )
                 baseline_test_report, baseline_test_metrics, baseline_test_wall = self._search(
-                    "baseline_test_search",
-                    baseline_test_manifest,
-                    test_cohort,
-                    "test",
-                    expected_head="hamming",
-                    runner_name="cnot103-hamming-search",
+                    "baseline_test_search", baseline_test_manifest, test_cohort, "test",
+                    expected_head="hamming", runner_name="cnot103-hamming-search",
                 )
-                baseline_search_wall = baseline_dev_wall + baseline_test_wall
-                final_test_manifest = self._search_manifest(
-                    "final_test_search",
-                    full_manifest,
-                    self.root / "reports" / "full_resume.stdout.json",
-                    "test", test_cohort,
+                candidate_name = "learning_curve_{:06d}_test_search".format(milestone)
+                candidate_manifest = self._search_manifest(
+                    candidate_name, record["manifest"], record["result_path"], "test", test_cohort
                 )
-                final_test_report, final_test_metrics, final_test_wall = self._search(
-                    "final_test_search", final_test_manifest, test_cohort, "test"
+                candidate_test_report, candidate_test_metrics, candidate_test_wall = self._search(
+                    candidate_name, candidate_manifest, test_cohort, "test"
                 )
-                quality_comparison = compare_quality(
-                    baseline_test_report,
-                    final_test_report,
+                paired_test_comparison = compare_quality(
+                    baseline_test_report, candidate_test_report,
                     expected_case_ids=test_cohort["case_ids"],
                     expected_panel_indices=test_cohort["indices"],
                     expected_case_roots=test_cohort["case_roots"],
-                    expected_panel="test",
-                    expected_panel_digest=test_cohort["digest"],
-                    expected_search=BEAM_CONFIG,
+                    expected_panel="test", expected_panel_digest=test_cohort["digest"],
+                    expected_search=measurement_spec["search"],
                     baseline_receipt_pins=baseline_test_metrics["receipt_pins"],
-                    candidate_receipt_pins=final_test_metrics["receipt_pins"],
-                    baseline_head="hamming",
-                    candidate_head="qhat",
+                    candidate_receipt_pins=candidate_test_metrics["receipt_pins"],
+                    baseline_head="hamming", candidate_head="qhat",
                 )
-                self.quality_status = quality_comparison["status"]
+                return {
+                    "status": "evaluated",
+                    "accepted_updates": milestone,
+                    "checkpoint_sha256": selected["checkpoint_sha256"],
+                    "comparison": paired_test_comparison,
+                }
+
+            curve_result = run_measurement_sweep(
+                measurement_spec["training"]["accepted_milestones"],
+                initial_progress=resume_report["end_progress"],
+                max_attempts=measurement_spec["training"]["max_attempts"],
+                train_to=train_to_milestone, search_dev=search_milestone_dev,
+                compare_dev=compare_milestone_dev,
+                persist_receipt=persist_milestone_receipt, locked_test=run_locked_test,
+                batch_size=measurement_spec["model"]["batch_size"],
+                initial_training_wall_seconds=fresh_wall + resume_wall,
+            )
+            final_milestone = curve_result["measurements"][-1]["accepted_updates"]
+            final_measurement = training_runs[final_milestone]
+            full_report = final_measurement["report"]
+            full_wall = sum(row["training_wall_seconds"] for row in curve_result["measurements"])
+            final_dev_metrics = final_measurement["dev_metrics"]
+            final_dev_wall = final_measurement["dev_wall_seconds"]
+            dev_quality_comparison = curve_result["measurements"][-1]["comparison"]
+            baseline_search_wall = baseline_dev_wall + baseline_test_wall
+            final_test_report = candidate_test_report
+            final_test_metrics = candidate_test_metrics
+            final_test_wall = candidate_test_wall
+            if paired_test_comparison is not None:
+                quality_comparison = paired_test_comparison
+                if quality_comparison.get("status") in QUALITY_GAIN_STATUSES:
+                    self.quality_status = quality_comparison["status"]
+                elif quality_comparison.get("status") in {"tie", "no_practical_gain"}:
+                    self.quality_status = "no_practical_gain"
+                else:
+                    raise RunError("locked-test comparison is inconclusive or invalid")
             else:
                 quality_comparison = {
                     "status": "not_run",
-                    "reason": "locked test withheld because the frozen dev acceptance threshold failed",
+                    "reason": "locked test withheld because no dev checkpoint passed the frozen threshold",
                     "dev_status": dev_quality_comparison["status"],
                 }
-                self.quality_status = dev_quality_comparison["status"]
+                self.quality_status = "no_practical_gain"
+
+            curve_receipt = {
+                "schema": "cnot103_learning_curve_campaign_v1",
+                "source_revision": self.source_revision,
+                "holdout_revision": self.holdout_revision,
+                "holdout_sha256": self.holdout_sha256,
+                "dataset_sha256": dataset_sha,
+                "measurement_spec_sha256": measurement_spec_sha256,
+                "experiment_id": measurement_spec["experiment_id"],
+                "accepted_milestones": measurement_spec["training"]["accepted_milestones"],
+                "status": self.quality_status,
+                "curve_status": curve_result["status"],
+                "measurements": curve_result["measurements"],
+                "selected": curve_result["selected"],
+                "locked_test": curve_result["locked_test"],
+                "locked_test_comparison": quality_comparison,
+                "dev_panel_digest": dev_cohort["digest"],
+                "locked_test_panel_digest": test_cohort["digest"],
+                "model": measurement_spec["model"],
+                "search": measurement_spec["search"],
+                "campaign_elapsed_seconds": max(0.0, time.time() - self.started_at_epoch),
+                "billing_snapshot": self.billing_snapshot,
+                "actual_cost_status": "awaiting_confirmed_controller_invoice_after_stop",
+            }
+            _write_new_private_json(self.root / "reports" / "learning-curve.private.json", curve_receipt)
+
             total_elapsed = max(0.0, time.time() - self.started_at_epoch)
             if total_elapsed > MAX_RUNTIME_SECONDS:
                 raise TimeLimit("full run exceeded the end-to-end wall-time gate")
@@ -2624,8 +2787,15 @@ class Supervisor:
                 "started_at_epoch": self.started_at_epoch,
                 "completed_at_utc": _now(),
                 "total_elapsed_seconds": total_elapsed,
+                "measurement_experiment": {
+                    "id": measurement_spec["experiment_id"],
+                    "spec_sha256": measurement_spec_sha256,
+                    "max_attempts": measurement_spec["training"]["max_attempts"],
+                    "accepted_milestones": measurement_spec["training"]["accepted_milestones"],
+                    "locked_test_policy": measurement_spec["splits"]["locked_test"],
+                },
                 "training": {
-                    "target_attempts": TARGET_ATTEMPTS,
+                    "target_attempts": measurement_spec["training"]["max_attempts"],
                     "batch_size": BATCH_SIZE,
                     "model_parameters": MODEL_PARAMETERS,
                     "structural_blocks": STRUCTURAL_BLOCKS,
@@ -2634,7 +2804,11 @@ class Supervisor:
                     "fresh_progress": fresh_report["end_progress"],
                     "resume_progress": resume_report["end_progress"],
                     "final_progress": full_report["end_progress"],
-                    "checkpoint_files_expected": EXPECTED_CHECKPOINT_FILES,
+                    "attempted_updates": full_report["end_progress"]["attempted"],
+                    "accepted_updates": full_report["end_progress"]["accepted"],
+                    "rejected_updates": full_report["end_progress"]["rejected"],
+                    "examples_seen": full_report["end_progress"]["attempted"] * BATCH_SIZE,
+                    "checkpoint_states_observed": 2 + len(curve_result["measurements"]),
                     "checkpoint_free_space_gate_gib": CHECKPOINT_FREE_GIB,
                     "checkpoint_interval_attempts": CHECKPOINT_INTERVAL,
                 },
@@ -2646,7 +2820,7 @@ class Supervisor:
                     "fresh_step_wall_seconds": fresh_wall,
                     "resume_step_wall_seconds": resume_wall,
                     "baseline_search_wall_seconds": baseline_search_wall,
-                    "full_training_wall_seconds": full_wall,
+                    "learning_curve_training_wall_seconds": full_wall,
                     "baseline_dev_search_wall_seconds": baseline_dev_wall,
                     "baseline_test_search_wall_seconds": baseline_test_wall,
                     "final_dev_search_wall_seconds": final_dev_wall,
@@ -2662,6 +2836,9 @@ class Supervisor:
                     "baseline_head": "hamming",
                     "acceptance_minimum_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
                     "acceptance_minimum_relative_cost_reduction": QUALITY_MIN_RELATIVE_COST_REDUCTION,
+                    "learning_curve_receipt": "reports/learning-curve.private.json",
+                    "selected_checkpoint_sha256": curve_result["selected"]["checkpoint_sha256"] if curve_result["selected"] else None,
+                    "selected_accepted_updates": curve_result["selected"]["accepted_updates"] if curve_result["selected"] else None,
                     "accepted_gain_statuses": sorted(QUALITY_GAIN_STATUSES),
                     "baseline_dev": baseline_dev_metrics,
                     "dev_paired_comparison": dev_quality_comparison,
@@ -2680,7 +2857,7 @@ class Supervisor:
                 },
             }
             _write_new_private_json(self.private_report_path, final_report)
-            if self.quality_status in QUALITY_GAIN_STATUSES:
+            if self.quality_status in QUALITY_GAIN_STATUSES or self.quality_status == "no_practical_gain":
                 self.status("completed", self.quality_status)
                 return 0
             self.status("failed", self.quality_status)
