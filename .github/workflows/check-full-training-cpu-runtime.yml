@@ -71,7 +71,9 @@ jobs:
           cargo test --no-run --locked --features torch --lib --message-format=json >"$cargo_json" 2>&1 || cargo_status=$?
           python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
             --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
-            --artifact-kind lib_test --binary-file "$binary_file" --output "$GITHUB_OUTPUT"
+            --artifact-kind lib_test --binary-file "$binary_file" \
+            --artifact-dir "$RUNNER_TEMP/cnot103-torch-target/debug/deps" \
+            --artifact-prefix cnot103_native- --output "$GITHUB_OUTPUT"
 
       - name: Run the named v13 runtime regressions on CPU tensors
         id: v13
@@ -108,7 +110,9 @@ jobs:
           python3 ../.github/scripts/cnot_cpu_torch_ci.py compile \
             --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
             --artifact-kind test --target-name tch_training_resume \
-            --binary-file "$binary_file" --output "$GITHUB_OUTPUT"
+            --binary-file "$binary_file" \
+            --artifact-dir "$RUNNER_TEMP/cnot103-torch-target/debug/deps" \
+            --artifact-prefix tch_training_resume- --output "$GITHUB_OUTPUT"
 
       - name: Run the named fresh-process resume regressions
         id: resume

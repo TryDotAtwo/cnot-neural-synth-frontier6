@@ -3,10 +3,33 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cnot_cpu_torch_ci import compile_evidence, gate_receipt
+from cnot_cpu_torch_ci import compile_evidence, discover_test_executable, gate_receipt
 
 
 class CpuTorchCiTests(unittest.TestCase):
+    def test_fallback_finds_one_executable_test_harness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "cnot103_native-abc123"
+            target.write_bytes(b"test harness")
+            target.chmod(0o755)
+            self.assertEqual(
+                discover_test_executable(directory, "cnot103_native-"),
+                str(target),
+            )
+
+    def test_fallback_rejects_ambiguous_test_harnesses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [
+                Path(directory) / "cnot103_native-abc123",
+                Path(directory) / "cnot103_native-def456",
+            ]
+            for target in paths:
+                target.write_bytes(b"test harness")
+                target.chmod(0o755)
+            self.assertIsNone(
+                discover_test_executable(directory, "cnot103_native-")
+            )
+
     def test_compile_receipt_requires_the_expected_executable_artifact(self):
         messages = [
             {

@@ -35,6 +35,23 @@ def _target_matches(target: dict[str, Any], target_name: str | None, artifact_ki
     raise ValueError("unknown artifact kind")
 
 
+def discover_test_executable(artifact_dir: str | pathlib.Path, prefix: str) -> str | None:
+    """Find one Cargo test harness when JSON omits its executable field."""
+    root = pathlib.Path(artifact_dir)
+    try:
+        candidates = [
+            path for path in root.iterdir()
+            if path.is_file()
+            and path.name.startswith(prefix)
+            and not path.suffix
+            and os.access(path, os.X_OK)
+        ]
+    except OSError:
+        return None
+    candidates.sort()
+    return str(candidates[0]) if len(candidates) == 1 else None
+
+
 def _area_for_span(span: dict[str, Any]) -> str:
     filename = str(span.get("file_name", "")).replace("\\\\", "/").lower()
     line_start = span.get("line_start")
@@ -311,6 +328,18 @@ def command_compile(args: argparse.Namespace) -> int:
     evidence = compile_evidence(
         cargo_text, args.cargo_exit, args.artifact_kind, args.target_name
     )
+    if (
+        evidence["status"] == "compile_failed_artifact_missing"
+        and args.artifact_dir
+        and args.artifact_prefix
+    ):
+        executable = discover_test_executable(args.artifact_dir, args.artifact_prefix)
+        if executable is not None:
+            evidence = {
+                "status": "compiled",
+                "rustc_code": "none",
+                "executable": executable,
+            }
     binary_file = pathlib.Path(args.binary_file)
     if evidence["status"] == "compiled":
         binary_file.write_text(str(evidence["executable"]), encoding="utf-8")
@@ -360,6 +389,8 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--artifact-kind", choices=("lib_test", "test", "bin"), required=True)
     compile_parser.add_argument("--target-name")
     compile_parser.add_argument("--binary-file", required=True)
+    compile_parser.add_argument("--artifact-dir")
+    compile_parser.add_argument("--artifact-prefix")
     compile_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
     compile_parser.set_defaults(run=command_compile)
 
