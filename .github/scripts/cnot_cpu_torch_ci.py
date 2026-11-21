@@ -97,6 +97,27 @@ def _diagnostic_spans(message: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def _diagnostic_kind(message: dict[str, Any]) -> str:
+    text = str(message.get("message", "")).lower()
+    if "linking with" in text or "undefined reference" in text or "undefined symbol" in text:
+        return "linker"
+    if "cannot find " in text or text.startswith("unresolved import"):
+        return "unresolved_name"
+    if "type annotations needed" in text or "type must be known" in text:
+        return "type_inference"
+    if "mismatched types" in text or "expected " in text and " found " in text:
+        return "type_mismatch"
+    if "the trait bound" in text or "trait is not implemented" in text:
+        return "trait_bound"
+    if "no method named" in text or "no function or associated item" in text:
+        return "missing_method"
+    if "cannot borrow" in text or "borrowed value does not live long enough" in text:
+        return "borrow_check"
+    if "expected one of" in text or "unclosed delimiter" in text or "unexpected token" in text:
+        return "syntax"
+    return "compiler_error"
+
+
 def _diagnostic_area(message: dict[str, Any], code: str) -> str:
     spans = _diagnostic_spans(message)
     ordered = [span for span in spans if span.get("is_primary") is True]
@@ -136,7 +157,7 @@ def compile_evidence(
     target_name: str | None = None,
 ) -> dict[str, str | None]:
     executables: list[str] = []
-    errors: list[tuple[str | None, str]] = []
+    errors: list[tuple[str | None, str, str]] = []
     for line in cargo_json.splitlines():
         try:
             item = json.loads(line)
@@ -166,7 +187,7 @@ def compile_evidence(
                 code_value = None
             if code_value is not None or message.get("level") == "error":
                 area = _diagnostic_area(message, str(code_value or ""))
-                errors.append((code_value, area))
+                errors.append((code_value, area, _diagnostic_kind(message)))
 
     unique_executables = sorted(set(executables))
     if cargo_exit == 0 and len(unique_executables) == 1:
@@ -177,7 +198,7 @@ def compile_evidence(
         }
     if errors:
         return {
-            "status": f"compile_failed_{errors[0][1]}",
+            "status": f"compile_failed_{errors[0][1]}_{errors[0][2]}",
             "rustc_code": errors[0][0] or "none",
             "executable": None,
         }
