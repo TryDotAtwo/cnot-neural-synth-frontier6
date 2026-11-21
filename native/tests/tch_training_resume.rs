@@ -17,6 +17,7 @@ const TOTAL_COUNT: usize = 8;
 const SEED: u64 = 2026;
 const CHILD_STORE_ENV: &str = "CNOT103_RESUME_CHILD_STORE";
 const CHILD_OUTPUT_ENV: &str = "CNOT103_RESUME_CHILD_OUTPUT";
+const CHILD_ORDER_PREFIX_ENV: &str = "CNOT103_RESUME_ORDER_PREFIX";
 
 struct TestDir(PathBuf);
 
@@ -89,11 +90,13 @@ fn run_updates(
     weight: &Tensor,
     rare_group: &Tensor,
     count: usize,
+    order_trace: &mut Vec<Vec<usize>>,
 ) {
     for _ in 0..count {
         let rare_group_active = trainer.progress().attempted % 2 == 0;
         let outcome = trainer
             .step(BATCH_SIZE, |indices| {
+                order_trace.push(indices.to_vec());
                 let target =
                     indices.iter().map(|index| *index as f64).sum::<f64>() / indices.len() as f64;
                 let loss = (weight - target).pow_tensor_scalar(2.0).mean(Kind::Double);
@@ -111,7 +114,12 @@ fn run_updates(
     }
 }
 
-fn summary(trainer: &NeuralTrainer, weight: &Tensor, rare_group: &Tensor) -> Value {
+fn summary(
+    trainer: &NeuralTrainer,
+    weight: &Tensor,
+    rare_group: &Tensor,
+    order_trace: &[Vec<usize>],
+) -> Value {
     json!({
         "weight": weight.double_value(&[0]),
         "rare_group": rare_group.double_value(&[0]),
@@ -120,6 +128,7 @@ fn summary(trainer: &NeuralTrainer, weight: &Tensor, rare_group: &Tensor) -> Val
         "sampler": trainer.sampler_snapshot(),
         "objective_state": trainer.objective_state(),
         "rng_state": trainer.rng_state(),
+        "order_trace": order_trace,
     })
 }
 
@@ -130,21 +139,36 @@ fn fresh_process_resume_matches_uninterrupted() {
     let expected_contract = contract();
 
     let (variables, weight, rare_group, mut uninterrupted) = new_run();
-    run_updates(&mut uninterrupted, &weight, &rare_group, TOTAL_COUNT);
-    let expected = summary(&uninterrupted, &weight, &rare_group);
+    let mut uninterrupted_order = Vec::new();
+    run_updates(
+        &mut uninterrupted,
+        &weight,
+        &rare_group,
+        TOTAL_COUNT,
+        &mut uninterrupted_order,
+    );
+    let expected = summary(&uninterrupted, &weight, &rare_group, &uninterrupted_order);
 
     let (variables_before_split, weight_before_split, rare_group_before_split, mut split) =
         new_run();
+    let mut split_order = Vec::new();
     run_updates(
         &mut split,
         &weight_before_split,
         &rare_group_before_split,
         SPLIT_COUNT,
+        &mut split_order,
     );
     split
         .save_checkpoint(&variables_before_split, &store, expected_contract, false)
         .expect("save split checkpoint");
 
+    let order_prefix_path = temp.path().join("sampler-order-prefix.json");
+    fs::write(
+        &order_prefix_path,
+        serde_json::to_vec(&split_order).expect("encode sampler order prefix"),
+    )
+    .expect("write sampler order prefix");
     let output_path = temp.path().join("fresh-process-result.json");
     let child = Command::new(std::env::current_exe().expect("test executable path"))
         .arg("--ignored")
@@ -153,6 +177,7 @@ fn fresh_process_resume_matches_uninterrupted() {
         .arg("--nocapture")
         .env(CHILD_STORE_ENV, store.root())
         .env(CHILD_OUTPUT_ENV, &output_path)
+        .env(CHILD_ORDER_PREFIX_ENV, &order_prefix_path)
         .output()
         .expect("launch fresh process");
     assert!(
@@ -172,9 +197,10 @@ fn fresh_process_resume_matches_uninterrupted() {
 #[test]
 #[ignore = "invoked in a separate process by fresh_process_resume_matches_uninterrupted"]
 fn fresh_process_resume_child() {
-    let (Some(store_path), Some(output_path)) = (
+    let (Some(store_path), Some(output_path), Some(order_prefix_path)) = (
         std::env::var_os(CHILD_STORE_ENV),
         std::env::var_os(CHILD_OUTPUT_ENV),
+        std::env::var_os(CHILD_ORDER_PREFIX_ENV),
     ) else {
         return;
     };
@@ -184,11 +210,22 @@ fn fresh_process_resume_child() {
     trainer
         .restore_checkpoint(&mut variables, &store, &contract())
         .expect("restore checkpoint in fresh process");
-    run_updates(&mut trainer, &weight, &rare_group, TOTAL_COUNT - SPLIT_COUNT);
+    let mut order_trace: Vec<Vec<usize>> = serde_json::from_slice(
+        &fs::read(order_prefix_path).expect("read sampler order prefix"),
+    )
+    .expect("parse sampler order prefix");
+    run_updates(
+        &mut trainer,
+        &weight,
+        &rare_group,
+        TOTAL_COUNT - SPLIT_COUNT,
+        &mut order_trace,
+    );
 
     fs::write(
         output_path,
-        serde_json::to_vec(&summary(&trainer, &weight, &rare_group)).expect("encode summary"),
+        serde_json::to_vec(&summary(&trainer, &weight, &rare_group, &order_trace))
+            .expect("encode summary"),
     )
     .expect("write fresh-process summary");
 }

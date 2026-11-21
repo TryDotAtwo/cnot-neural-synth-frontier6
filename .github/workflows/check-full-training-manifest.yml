@@ -108,7 +108,7 @@ jobs:
             compiled_cpu_runtime_matches_small_gl2_bfs_distances_and_replays \
             compiled_cpu_runtime_matches_209_pinned_v13_cases_and_scalar_oracle \
             cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays; do
-            if ! grep -Fq "device_search::runtime::tests::$name: test" "$runtime_log"; then
+            if ! grep -Fq "test device_search::runtime::tests::$name ... ok" "$runtime_log"; then
               echo 'cpu_torch_runtime=expected_test_missing'
               exit 1
             fi
@@ -118,6 +118,28 @@ jobs:
             exit 1
           fi
           echo 'cpu_torch_runtime=passed'
+
+      - name: Verify fresh-process resume against uninterrupted accepted updates
+        working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+        run: |
+          set -euo pipefail
+          resume_log="$RUNNER_TEMP/cnot103-resume-equivalence.log"
+          if ! cargo test --locked --features torch --test tch_training_resume >"$resume_log" 2>&1; then
+            echo 'cpu_torch_resume=failed'
+            exit 1
+          fi
+          if ! grep -Fq 'fresh_process_resume_matches_uninterrupted ... ok' "$resume_log" \
+            || ! grep -Fq 'finite_loss_with_overflowing_adam_moments_requires_restore ... ok' "$resume_log"; then
+            echo 'cpu_torch_resume=expected_test_missing'
+            exit 1
+          fi
+          if ! grep -Fq 'test result: ok. 2 passed; 0 failed; 1 ignored' "$resume_log"; then
+            echo 'cpu_torch_resume=no_passing_test_summary'
+            exit 1
+          fi
+          echo 'cpu_torch_resume=optimizer_progress_sampler_and_order_match'
 
       - name: Validate the pinned 102-input profile with the real Rust parser
         working-directory: native
@@ -231,9 +253,21 @@ jobs:
                 echo toolchain_missing >"$status"
                 exit 11
               fi
-              if ! python -c "import pathlib, torch; assert torch.__version__.split('+')[0] == '2.9.0'; assert torch.version.cuda and torch.version.cuda.startswith('12.8'); p=pathlib.Path(torch.__file__).resolve().parent/'lib'; assert (p/'libtorch_cuda.so').is_file(); print(p)" > /runner_temp/cnot103-torch-lib.path 2>/dev/null; then
-                echo torch_abi_invalid >"$status"
+              if ! python -c "import torch; assert torch.__version__.split('+')[0] == '2.9.0'" >/dev/null 2>&1; then
+                echo torch_version_mismatch >"$status"
                 exit 12
+              fi
+              if ! python -c "import torch; assert torch.version.cuda and torch.version.cuda.startswith('12.8')" >/dev/null 2>&1; then
+                echo cuda_version_mismatch >"$status"
+                exit 13
+              fi
+              if ! python -c "import torch; assert isinstance(torch._C._GLIBCXX_USE_CXX11_ABI, bool)" >/dev/null 2>&1; then
+                echo torch_abi_metadata_missing >"$status"
+                exit 14
+              fi
+              if ! python -c "import pathlib, torch; p=pathlib.Path(torch.__file__).resolve().parent/'lib'; assert (p/'libtorch_cpu.so').is_file() and (p/'libtorch_cuda.so').is_file(); print(p)" > /runner_temp/cnot103-torch-lib.path 2>/dev/null; then
+                echo torch_library_missing >"$status"
+                exit 15
               fi
               torch_lib="$(cat /runner_temp/cnot103-torch-lib.path)"
               export LD_LIBRARY_PATH="$torch_lib:/usr/local/cuda/lib64"
@@ -246,7 +280,10 @@ jobs:
             result="$(cat "$RUNNER_TEMP/cnot103-cuda-build.status" 2>/dev/null || true)"
             case "$result" in
               toolchain_missing) echo 'cuda_build=nvcc_or_cmake_missing' ;;
-              torch_abi_invalid) echo 'cuda_build=pytorch_abi_mismatch' ;;
+              torch_version_mismatch) echo 'cuda_build=pytorch_version_mismatch' ;;
+              cuda_version_mismatch) echo 'cuda_build=cuda_version_mismatch' ;;
+              torch_abi_metadata_missing) echo 'cuda_build=pytorch_abi_metadata_missing' ;;
+              torch_library_missing) echo 'cuda_build=torch_library_missing' ;;
               cargo_cuda_build_failed) echo 'cuda_build=native_cuda_compile_failed' ;;
               cuda_bins_built) echo 'cuda_build=passed' ;;
               *) echo 'cuda_build=container_execution_failed' ;;

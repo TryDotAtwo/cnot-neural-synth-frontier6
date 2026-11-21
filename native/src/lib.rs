@@ -74,7 +74,7 @@ pub mod device_context;
 #[cfg(feature = "cuda")]
 pub mod device_feature_plan;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", all(test, feature = "torch")))]
 pub mod device_search;
 
 #[cfg(feature = "cuda")]
@@ -101,7 +101,7 @@ pub mod device_template_response;
 #[cfg(feature = "cuda")]
 pub mod device_zero_excess;
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "torch")]
 pub mod run_config;
 
 pub use alphabet::{AlphabetError, CertificateError, CnotAlphabet, WordCertificate};

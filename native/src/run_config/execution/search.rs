@@ -4,12 +4,12 @@ use super::{
     evaluation::{load_panel_checkpoint, PanelCheckpoint},
 };
 use crate::{
-    device_search::{search_neural, ActionHead, BeamConfig},
+    device_search::{search_hamming, search_neural, ActionHead, BeamConfig},
     run_config::manifest::PinnedArtifact,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path, time::Instant};
 #[cfg(test)]
 mod tests;
 
@@ -82,13 +82,18 @@ pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
             return Err("panel search case identity differs from the sealed dataset".into());
         }
         let root = &record.state;
-        let out = search_neural(
-            root,
-            &field.model,
-            &field.plans[&root.dimension()],
-            search.search,
-            search.head,
-        )?;
+        let started = Instant::now();
+        let out = match search.head {
+            ActionHead::Hamming => search_hamming(root, search.search)?,
+            head @ (ActionHead::Qhat | ActionHead::Proposal) => search_neural(
+                root,
+                &field.model,
+                &field.plans[&root.dimension()],
+                search.search,
+                head,
+            )?,
+        };
+        let row_wall_seconds = started.elapsed().as_secs_f64();
         let solved = out.word.is_some();
         let goal = crate::MatrixState::identity(root.dimension(), root.alphabet_id())
             .expect("validated dimension and alphabet");
@@ -117,7 +122,8 @@ pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
             "value_evaluations":out.value_evaluations,
             "action_evaluations":out.action_evaluations,
             "value_slots":out.value_slots,
-            "action_slots":out.action_slots
+            "action_slots":out.action_slots,
+            "wall_seconds":row_wall_seconds
         }));
     }
     Ok(json!({
@@ -135,10 +141,12 @@ pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
         "feature_registry_sha256":field.registry.contract_sha256(),
         "training_exposure_audit":audit,
         "feature_model_inputs":field.selected_count,
+        "feature_execution":if matches!(search.head, ActionHead::Hamming) { "not_used_by_hamming" } else { "used_for_model_scoring" },
         "feature_policy_id":field.objective.feature_policy().id().map_err(|e|e.to_string())?,
         "cuda_device":device,
         "search":search.search,
         "head":search.head,
+        "execution_backend":if matches!(search.head, ActionHead::Hamming) { "cpu_hamming" } else { "cuda_model" },
         "rows":rows
     }))
 }

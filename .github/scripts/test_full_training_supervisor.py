@@ -36,6 +36,7 @@ class FullTrainingSupervisorTests(unittest.TestCase):
         report = {
             "schema": "cnot103_dev_search_result_v1",
             "feature_model_inputs": 102,
+            "feature_execution": "not_used_by_hamming" if head == "hamming" else "used_for_model_scoring",
             "training_exposure_audit": {"strict_unseen": True},
             "rows": [
                 {"status": "solved", "word": {"physical_cost": 3, "replayed": True}},
@@ -330,6 +331,7 @@ class QualityComparisonTests(unittest.TestCase):
             "case_id": case_id,
             "dimension": 3,
             "width": 3,
+            "wall_seconds": 0.01,
             "status": "solved",
             "start_packed_rows": start,
             "end_packed_rows": identity,
@@ -346,6 +348,7 @@ class QualityComparisonTests(unittest.TestCase):
             "case_id": case_id,
             "dimension": 3,
             "width": 3,
+            "wall_seconds": 0.01,
             "status": "depth_limit",
             "start_packed_rows": [1, 3, 4] if case_id.endswith("a") else [1, 2, 5],
             "end_packed_rows": None,
@@ -363,6 +366,7 @@ class QualityComparisonTests(unittest.TestCase):
             "training_exposure_audit": {"strict_unseen": True},
             "search": training.BEAM_CONFIG if search is None else search,
             "head": head,
+            "execution_backend": "cpu_hamming" if head == "hamming" else "cuda_model",
             "rows": rows,
         }
 
@@ -375,6 +379,8 @@ class QualityComparisonTests(unittest.TestCase):
             expected_panel="test",
             expected_panel_digest="a" * 64,
             expected_search=training.BEAM_CONFIG,
+            baseline_head=baseline_head,
+            candidate_head=candidate_head,
         )
 
     def test_valid_candidate_passes_and_rows_are_paired_by_case_id(self):
@@ -385,6 +391,14 @@ class QualityComparisonTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["baseline_solved_count"], 1)
         self.assertEqual(result["candidate_solved_count"], 2)
+
+    def test_candidate_must_reach_the_frozen_practical_gain_threshold(self):
+        result = self.compare(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["required_solved_gain"], 1)
 
     def test_valid_but_worse_candidate_fails(self):
         result = self.compare(
@@ -425,6 +439,27 @@ class QualityComparisonTests(unittest.TestCase):
         )
         self.assertEqual(duplicate["status"], "invalid")
         self.assertEqual(missing["status"], "invalid")
+
+    def test_wrong_scorer_backend_is_invalid(self):
+        bad = self.report(
+            [self.solved("case-a", 1), self.unsolved("case-b")],
+            head="hamming",
+        )
+        bad["execution_backend"] = "cuda_model"
+        result = training.compare_quality(
+            bad,
+            self.report(
+                [self.solved("case-a", 1), self.solved("case-b", 1)],
+                head="qhat",
+            ),
+            expected_case_ids=["case-a", "case-b"],
+            expected_panel="test",
+            expected_panel_digest="a" * 64,
+            expected_search=training.BEAM_CONFIG,
+            baseline_head="hamming",
+            candidate_head="qhat",
+        )
+        self.assertEqual(result["status"], "invalid")
 
     def test_search_budget_mismatch_is_invalid(self):
         other = dict(training.BEAM_CONFIG)
@@ -478,6 +513,7 @@ class BaselineGateTests(unittest.TestCase):
                     "case_id": case_id,
                     "dimension": width,
                     "width": width,
+                    "wall_seconds": 0.01,
                     "status": "solved" if solved else "depth_limit",
                     "start_packed_rows": start,
                     "end_packed_rows": identity if solved else None,
@@ -495,9 +531,11 @@ class BaselineGateTests(unittest.TestCase):
             "panel_indices": panel_indices,
             "panel_ids": case_ids,
             "feature_model_inputs": 102,
+            "feature_execution": "not_used_by_hamming",
             "training_exposure_audit": {"strict_unseen": True},
             "search": training.BEAM_CONFIG,
             "head": "hamming",
+            "execution_backend": "cpu_hamming",
             "rows": rows,
         }, case_ids, training._panel_digest("dev", panel_indices, case_ids)
 

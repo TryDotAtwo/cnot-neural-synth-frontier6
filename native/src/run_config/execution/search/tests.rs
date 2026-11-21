@@ -30,6 +30,7 @@ fn check_word(
     let q = match head {
         ActionHead::Qhat => output.qhat,
         ActionHead::Proposal => -output.proposal_logits,
+        ActionHead::Hamming => panic!("Hamming baseline does not use the learned field"),
     };
     let mut ids: Vec<_> = (0..a.gates().len()).collect();
     let qscore = |i: usize| {

@@ -43,13 +43,19 @@ DATA_RELATIVE = "data/frozen_train_10k.json"
 DATA_SHA_RELATIVE = "data/frozen_train_10k.sha256"
 DATA_RECEIPT_RELATIVE = "data/build.receipt.json"
 HOLDOUT_RELATIVE = "input/full_shared_native_holdout_20261001.sqlite"
+# Compact v13 geometry: capacities are 1, 4, 16, then five layers of 36;
+# E=201 admits all eight planned parent frontiers without a budget stop.
 BEAM_CONFIG = {
-    "beam_width": 32,
-    "shortlist": 32,
-    "max_depth": 64,
-    "max_expanded": 16,
+    "beam_width": 36,
+    "shortlist": 4,
+    "max_depth": 8,
+    "max_expanded": 201,
     "inference_batch": 32,
 }
+BASELINE_MIN_SOLVED = 14
+BASELINE_MIN_WIDTHS = 7
+QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN = 0.05
+
 
 
 class RunError(RuntimeError):
@@ -313,6 +319,7 @@ def _panel_search_metrics(
     expected_panel: str,
     expected_panel_digest: str,
     expected_search: dict[str, Any],
+    expected_head: str = "qhat",
 ) -> dict[str, Any]:
     if not isinstance(report, dict) or report.get("schema") != "cnot103_panel_search_result_v2":
         raise RunError("panel search report schema is invalid")
@@ -324,10 +331,22 @@ def _panel_search_metrics(
         raise RunError("panel search case identities differ from the frozen cohort")
     if len(expected_case_ids) != len(set(expected_case_ids)):
         raise RunError("frozen panel contains duplicate case identities")
-    if report.get("search") != expected_search or report.get("head") != "qhat":
-        raise RunError("panel search budget or model head differs")
-    if report.get("feature_model_inputs") != MODEL_INPUTS:
-        raise RunError("panel search did not use all 102 model inputs")
+    expected_backend = "cpu_hamming" if expected_head == "hamming" else "cuda_model"
+    if (
+        expected_head not in {"qhat", "proposal", "hamming"}
+        or report.get("search") != expected_search
+        or report.get("head") != expected_head
+        or report.get("execution_backend") != expected_backend
+    ):
+        raise RunError("panel search budget, scorer, or execution backend differs")
+    expected_feature_execution = (
+        "not_used_by_hamming" if expected_head == "hamming" else "used_for_model_scoring"
+    )
+    if (
+        report.get("feature_model_inputs") != MODEL_INPUTS
+        or report.get("feature_execution") != expected_feature_execution
+    ):
+        raise RunError("panel search model-input slots or feature execution differs")
     audit = report.get("training_exposure_audit")
     if not isinstance(audit, dict) or audit.get("strict_unseen") is not True:
         raise RunError("panel search exposure audit failed")
@@ -356,6 +375,14 @@ def _panel_search_metrics(
         width = row.get("width", dimension)
         if type(width) is not int or width != dimension:
             raise RunError("panel search case width differs from its state")
+        wall_seconds = row.get("wall_seconds")
+        if (
+            isinstance(wall_seconds, bool)
+            or not isinstance(wall_seconds, (int, float))
+            or not math.isfinite(wall_seconds)
+            or wall_seconds < 0
+        ):
+            raise RunError("panel search per-case timing is invalid")
         word = row.get("word")
         cost: int | None = None
         if row["status"] == "solved":
@@ -395,16 +422,21 @@ def _panel_search_metrics(
             "start_packed_rows": start,
             "status": row["status"],
             "physical_cost": cost,
+            "wall_seconds": float(wall_seconds),
         }
     if set(cases) != set(expected_case_ids):
         raise RunError("panel search omitted one or more frozen cases")
     solved_ids = [case_id for case_id in expected_case_ids if cases[case_id]["status"] == "solved"]
     costs = [cases[case_id]["physical_cost"] for case_id in solved_ids]
-    widths: dict[int, dict[str, int]] = {}
+    widths: dict[int, dict[str, Any]] = {}
     for case_id in expected_case_ids:
         dimension = cases[case_id]["dimension"]
-        row = widths.setdefault(dimension, {"case_count": 0, "solved_count": 0})
+        row = widths.setdefault(
+            dimension,
+            {"case_count": 0, "solved_count": 0, "wall_seconds": []},
+        )
         row["case_count"] += 1
+        row["wall_seconds"].append(cases[case_id]["wall_seconds"])
         if cases[case_id]["status"] == "solved":
             row["solved_count"] += 1
     return {
@@ -415,16 +447,79 @@ def _panel_search_metrics(
         "physical_costs": costs,
         "total_physical_cost": sum(costs),
         "median_physical_cost": statistics.median(costs) if costs else None,
+        "search_wall_seconds": sum(
+            cases[case_id]["wall_seconds"] for case_id in expected_case_ids
+        ),
         "cases": cases,
         "by_width": {
             str(width): {
                 "case_count": row["case_count"],
                 "solved_count": row["solved_count"],
                 "solved_rate": row["solved_count"] / row["case_count"],
+                "search_wall_seconds": sum(row["wall_seconds"]),
+                "median_case_wall_seconds": statistics.median(row["wall_seconds"]),
             }
             for width, row in sorted(widths.items())
         },
     }
+
+
+def evaluate_baseline_gate(
+    report: object,
+    *,
+    expected_case_ids: list[str],
+    expected_panel_digest: str,
+    expected_search: dict[str, Any],
+    minimum_solved: int = BASELINE_MIN_SOLVED,
+    minimum_widths: int = BASELINE_MIN_WIDTHS,
+) -> dict[str, Any]:
+    """Admit use of a fixed Hamming baseline before any locked-test search."""
+    try:
+        metrics = _panel_search_metrics(
+            report,
+            expected_case_ids=expected_case_ids,
+            expected_panel="dev",
+            expected_panel_digest=expected_panel_digest,
+            expected_search=expected_search,
+            expected_head="hamming",
+        )
+    except RunError as exc:
+        return {"status": "invalid", "reason": str(exc)}
+    solved_widths = sum(
+        1 for summary in metrics["by_width"].values()
+        if summary["solved_count"] > 0
+    )
+    if metrics["solved_count"] == 0:
+        status = "inconclusive"
+        reason = "Hamming baseline solved no frozen dev cases"
+    elif (
+        metrics["solved_count"] < minimum_solved
+        or solved_widths < minimum_widths
+    ):
+        status = "failed"
+        reason = "Hamming baseline is below the frozen solve or width-coverage threshold"
+    else:
+        status = "passed"
+        reason = "Hamming baseline meets the frozen dev admission threshold"
+    return {
+        "status": status,
+        "reason": reason,
+        "panel": "dev",
+        "case_count": metrics["case_count"],
+        "solved_count": metrics["solved_count"],
+        "solved_width_count": solved_widths,
+        "minimum_solved": minimum_solved,
+        "minimum_widths": minimum_widths,
+        "panel_digest": expected_panel_digest,
+        "metrics": metrics,
+    }
+
+
+def train_after_baseline_gate(gate: object, full_train):
+    """Fail closed so full training cannot run without a passed dev baseline."""
+    if not isinstance(gate, dict) or gate.get("status") != "passed":
+        raise RunError("full training refused because the frozen dev baseline gate did not pass")
+    return full_train()
 
 
 def compare_quality(
@@ -435,6 +530,8 @@ def compare_quality(
     expected_panel: str,
     expected_panel_digest: str,
     expected_search: dict[str, Any],
+    baseline_head: str = "qhat",
+    candidate_head: str = "qhat",
 ) -> dict[str, Any]:
     """Compare paired searches on one frozen panel and identical beam budget."""
     try:
@@ -444,6 +541,7 @@ def compare_quality(
             expected_panel=expected_panel,
             expected_panel_digest=expected_panel_digest,
             expected_search=expected_search,
+            expected_head=baseline_head,
         )
         candidate = _panel_search_metrics(
             candidate_report,
@@ -451,6 +549,7 @@ def compare_quality(
             expected_panel=expected_panel,
             expected_panel_digest=expected_panel_digest,
             expected_search=expected_search,
+            expected_head=candidate_head,
         )
         for case_id in expected_case_ids:
             before = baseline["cases"][case_id]
@@ -465,6 +564,11 @@ def compare_quality(
 
     baseline_solved = set(baseline["solved_case_ids"])
     candidate_solved = set(candidate["solved_case_ids"])
+    required_solved_gain = max(
+        1,
+        math.ceil(QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN * len(expected_case_ids)),
+    )
+    solved_gain = candidate["solved_count"] - baseline["solved_count"]
     if not baseline_solved:
         status = "inconclusive"
         reason = "baseline solved no locked test cases"
@@ -477,7 +581,8 @@ def compare_quality(
             baseline["cases"][case_id]["physical_cost"] for case_id in baseline_solved
         )
         paired_candidate_cost = sum(
-            candidate["cases"][case_id]["physical_cost"] for case_id in baseline_solved & candidate_solved
+            candidate["cases"][case_id]["physical_cost"]
+            for case_id in baseline_solved & candidate_solved
         )
     else:
         paired_baseline_cost = sum(
@@ -489,9 +594,12 @@ def compare_quality(
         if paired_candidate_cost > paired_baseline_cost:
             status = "failed"
             reason = "candidate increased paired physical cost"
+        elif solved_gain < required_solved_gain:
+            status = "failed"
+            reason = "candidate did not reach the frozen practical solved-rate gain"
         else:
             status = "passed"
-            reason = "candidate preserved baseline solves without increasing paired physical cost"
+            reason = "candidate preserved baseline solves, reduced paired cost, and reached the frozen solved-rate gain"
     widths = sorted(
         set(baseline["by_width"]) | set(candidate["by_width"]),
         key=int,
@@ -499,10 +607,15 @@ def compare_quality(
     return {
         "status": status,
         "reason": reason,
+        "baseline_head": baseline_head,
+        "candidate_head": candidate_head,
         "panel": expected_panel,
         "case_count": len(expected_case_ids),
         "baseline_solved_count": baseline["solved_count"],
         "candidate_solved_count": candidate["solved_count"],
+        "solved_gain": solved_gain,
+        "required_solved_gain": required_solved_gain,
+        "minimum_absolute_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
         "baseline_solved_rate": baseline["solved_rate"],
         "candidate_solved_rate": candidate["solved_rate"],
         "paired_baseline_physical_cost": paired_baseline_cost,
@@ -1520,9 +1633,11 @@ class Supervisor:
         train_result: pathlib.Path,
         panel: str,
         cohort: dict[str, Any],
+        *,
+        head: str = "qhat",
     ) -> pathlib.Path:
-        if panel not in {"dev", "test"}:
-            raise RunError("search manifest panel is invalid")
+        if panel not in {"dev", "test"} or head not in {"qhat", "hamming"}:
+            raise RunError("search manifest panel or scorer is invalid")
         indices = cohort.get("indices")
         case_ids = cohort.get("case_ids")
         panel_digest = cohort.get("digest")
@@ -1550,7 +1665,7 @@ class Supervisor:
             "panel_ids": case_ids,
             "panel_digest": panel_digest,
             "search": BEAM_CONFIG,
-            "head": "qhat",
+            "head": head,
         }
         path = self.root / "manifests" / f"{name}.json"
         _write_new_private_json(path, value)
@@ -1562,6 +1677,8 @@ class Supervisor:
         manifest: pathlib.Path,
         cohort: dict[str, Any],
         panel: str,
+        *,
+        expected_head: str = "qhat",
     ) -> tuple[dict[str, Any], dict[str, Any], float]:
         started = time.monotonic()
         report = self._run(
@@ -1577,6 +1694,7 @@ class Supervisor:
             expected_panel=panel,
             expected_panel_digest=cohort["digest"],
             expected_search=BEAM_CONFIG,
+            expected_head=expected_head,
         )
         return report, metrics, elapsed
 
@@ -1645,34 +1763,141 @@ class Supervisor:
 
             dev_cohort = panel_cohorts["dev"]
             test_cohort = panel_cohorts["test"]
+            baseline_plan = {
+                "schema": "cnot103_hamming_baseline_plan_v1",
+                "source_revision": self.source_revision,
+                "holdout_revision": self.holdout_revision,
+                "holdout_sha256": self.holdout_sha256,
+                "dataset_sha256": dataset_sha,
+                "profile_id": PROFILE_ID,
+                "profile_sha256": hashlib.sha256(
+                    (self.source / PROFILE_RELATIVE).read_bytes()
+                ).hexdigest(),
+                "feature_schema": "runtime_packet_layout_v25",
+                "model": {
+                    "parameters": MODEL_PARAMETERS,
+                    "structural_blocks": STRUCTURAL_BLOCKS,
+                    "input_slots": MODEL_INPUTS,
+                    "seed": json.loads(resume_manifest.read_text(encoding="utf-8"))[
+                        "training"
+                    ]["seed"],
+                },
+                "checkpoint_inputs": {
+                    "training_manifest_sha256": hashlib.sha256(
+                        resume_manifest.read_bytes()
+                    ).hexdigest(),
+                    "training_result_sha256": hashlib.sha256(
+                        (self.root / "reports" / "resume_step_2.stdout.json").read_bytes()
+                    ).hexdigest(),
+                    "receipt": json.loads(
+                        (self.root / "reports" / "resume_step_2.stdout.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ).get("checkpoint"),
+                },
+                "dev_panel": dev_cohort,
+                "locked_test_panel": test_cohort,
+                "search": BEAM_CONFIG,
+                "runtime_contract": {
+                    "id": "native_device_search_v13",
+                    "frontier_charge": "charge_complete_live_parent_frontier_before_goal_scan",
+                    "terminal_scan": "full_action_alphabet_one_cnot_before_shortlist",
+                    "final_layer_scan": False,
+                    "orientation": "row_target_xor_row_control",
+                    "alphabet": "all_to_all_unit_cnot",
+                    "tie_break": "ascending_score_then_lexicographic_complete_word",
+                    "replay": "exact_gf2_rows_to_identity",
+                    "state_dtype": "packed_u64",
+                    "neural_score_dtype": "float32",
+                    "hamming_score": "integer_popcount_then_float32",
+                },
+                "head": "hamming",
+                "execution_backend": "cpu_hamming",
+                "quality_acceptance": {
+                    "minimum_absolute_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
+                    "preserve_all_hamming_solutions": True,
+                    "paired_physical_cost_may_not_increase": True,
+                },
+                "criterion": {
+                    "minimum_solved_dev_cases": BASELINE_MIN_SOLVED,
+                    "minimum_solved_dev_widths": BASELINE_MIN_WIDTHS,
+                    "zero_solved_is": "inconclusive",
+                    "locked_test_is_never_used_to_tune": True,
+                },
+            }
+            _write_new_private_json(
+                self.root / "reports" / "baseline-plan.private.json",
+                baseline_plan,
+            )
             baseline_dev_manifest = self._search_manifest(
                 "baseline_dev_search", resume_manifest,
                 self.root / "reports" / "resume_step_2.stdout.json",
-                "dev", dev_cohort,
+                "dev", dev_cohort, head="hamming",
             )
             baseline_dev_report, baseline_dev_metrics, baseline_dev_wall = self._search(
-                "baseline_dev_search", baseline_dev_manifest, dev_cohort, "dev"
+                "baseline_dev_search", baseline_dev_manifest, dev_cohort, "dev",
+                expected_head="hamming",
             )
-            baseline_test_manifest = self._search_manifest(
-                "baseline_test_search", resume_manifest,
+            baseline_gate = evaluate_baseline_gate(
+                baseline_dev_report,
+                expected_case_ids=dev_cohort["case_ids"],
+                expected_panel_digest=dev_cohort["digest"],
+                expected_search=BEAM_CONFIG,
+            )
+            _write_new_private_json(
+                self.root / "reports" / "baseline-dev-gate.private.json",
+                {
+                    "schema": "cnot103_hamming_baseline_gate_receipt_v1",
+                    "plan_sha256": hashlib.sha256(
+                        (self.root / "reports" / "baseline-plan.private.json").read_bytes()
+                    ).hexdigest(),
+                    "result": baseline_gate,
+                    "search_wall_seconds": baseline_dev_wall,
+                },
+            )
+            self.status("baseline", baseline_gate["status"])
+            if baseline_gate["status"] != "passed":
+                self.quality_status = baseline_gate["status"]
+                raise RunError(
+                    "frozen dev Hamming baseline failed the predeclared admission threshold"
+                )
+
+            baseline_test_report = None
+            baseline_test_metrics = None
+            baseline_test_wall = 0.0
+            baseline_search_wall = baseline_dev_wall
+
+            # The two-update network is a timing diagnostic only. It never
+            # selects a checkpoint or contributes a quality claim.
+            smoke_qhat_manifest = self._search_manifest(
+                "two_update_dev_search", resume_manifest,
                 self.root / "reports" / "resume_step_2.stdout.json",
-                "test", test_cohort,
+                "dev", dev_cohort, head="qhat",
             )
-            baseline_test_report, baseline_test_metrics, baseline_test_wall = self._search(
-                "baseline_test_search", baseline_test_manifest, test_cohort, "test"
+            smoke_qhat_report, smoke_qhat_metrics, smoke_qhat_dev_wall = self._search(
+                "two_update_dev_search", smoke_qhat_manifest, dev_cohort, "dev",
+                expected_head="qhat",
             )
-            baseline_search_wall = baseline_dev_wall + baseline_test_wall
-            self.status("baseline", "measured")
 
             forecast_measured_at = time.time()
             elapsed_before_full = max(0.0, forecast_measured_at - self.started_at_epoch)
             remaining_updates = TARGET_ATTEMPTS - 2
+            panel_scale = len(test_cohort["case_ids"]) / max(1, len(dev_cohort["case_ids"]))
+            estimated_locked_hamming_seconds = baseline_dev_wall * panel_scale
+            estimated_candidate_dev_seconds = smoke_qhat_dev_wall
+            estimated_candidate_test_seconds = smoke_qhat_dev_wall * panel_scale
+            search_eval_reserve_seconds = (
+                baseline_dev_wall
+                + estimated_locked_hamming_seconds
+                + estimated_candidate_dev_seconds
+                + estimated_candidate_test_seconds
+            )
             remaining_work_seconds = estimate_remaining_work_seconds(
                 setup_seconds=setup_seconds,
                 update_seconds=update_seconds / PILOT_ATTEMPTS,
                 remaining_updates=remaining_updates,
                 checkpoint_reserve_seconds=CHECKPOINT_WRITE_RESERVE_SECONDS,
-                baseline_search_seconds=baseline_search_wall,
+                baseline_search_seconds=search_eval_reserve_seconds,
                 forecast_safety_seconds=FORECAST_SAFETY_SECONDS,
             )
             estimated_full_seconds = elapsed_before_full + remaining_work_seconds
@@ -1708,7 +1933,15 @@ class Supervisor:
                         "update_seconds_per_attempt": update_seconds / PILOT_ATTEMPTS,
                         "benchmark_wall_seconds": benchmark_wall,
                         "baseline_dev": baseline_dev_metrics,
-                        "baseline_locked_test": baseline_test_metrics,
+                        "two_update_qhat_dev_diagnostic": smoke_qhat_metrics,
+                    },
+                    "search_eval_reserve": {
+                        "measured_hamming_dev_seconds": baseline_dev_wall,
+                        "measured_two_update_qhat_dev_seconds": smoke_qhat_dev_wall,
+                        "estimated_locked_hamming_seconds": estimated_locked_hamming_seconds,
+                        "estimated_final_qhat_dev_seconds": estimated_candidate_dev_seconds,
+                        "estimated_final_qhat_test_seconds": estimated_candidate_test_seconds,
+                        "locked_test_not_run_before_dev_checkpoint_selection": True,
                     },
                     "forecast": {
                         "measured_at_epoch": forecast_measured_at,
@@ -1731,8 +1964,11 @@ class Supervisor:
             full_manifest = self._build_manifest(
                 "full_resume", dataset_sha, remaining_updates, TARGET_ATTEMPTS, True
             )
-            full_report, full_wall = self._train(
-                "full_resume", full_manifest, 2, TARGET_ATTEMPTS, "training"
+            full_report, full_wall = train_after_baseline_gate(
+                baseline_gate,
+                lambda: self._train(
+                    "full_resume", full_manifest, 2, TARGET_ATTEMPTS, "training"
+                ),
             )
             final_dev_manifest = self._search_manifest(
                 "final_dev_search",
@@ -1743,24 +1979,69 @@ class Supervisor:
             final_dev_report, final_dev_metrics, final_dev_wall = self._search(
                 "final_dev_search", final_dev_manifest, dev_cohort, "dev"
             )
-            final_test_manifest = self._search_manifest(
-                "final_test_search",
-                full_manifest,
-                self.root / "reports" / "full_resume.stdout.json",
-                "test", test_cohort,
-            )
-            final_test_report, final_test_metrics, final_test_wall = self._search(
-                "final_test_search", final_test_manifest, test_cohort, "test"
-            )
-            quality_comparison = compare_quality(
-                baseline_test_report,
-                final_test_report,
-                expected_case_ids=test_cohort["case_ids"],
-                expected_panel="test",
-                expected_panel_digest=test_cohort["digest"],
+            dev_quality_comparison = compare_quality(
+                baseline_dev_report,
+                final_dev_report,
+                expected_case_ids=dev_cohort["case_ids"],
+                expected_panel="dev",
+                expected_panel_digest=dev_cohort["digest"],
                 expected_search=BEAM_CONFIG,
+                baseline_head="hamming",
+                candidate_head="qhat",
             )
-            self.quality_status = quality_comparison["status"]
+            _write_new_private_json(
+                self.root / "reports" / "dev-checkpoint-selection.private.json",
+                {
+                    "schema": "cnot103_dev_checkpoint_selection_v1",
+                    "cohort_digest": dev_cohort["digest"],
+                    "search": BEAM_CONFIG,
+                    "comparison": dev_quality_comparison,
+                },
+            )
+
+            final_test_report = None
+            final_test_metrics = None
+            final_test_wall = 0.0
+            if dev_quality_comparison["status"] == "passed":
+                # The selected full-training checkpoint has passed the frozen
+                # dev criterion. Only now open the locked test panel.
+                baseline_test_manifest = self._search_manifest(
+                    "baseline_test_search", resume_manifest,
+                    self.root / "reports" / "resume_step_2.stdout.json",
+                    "test", test_cohort, head="hamming",
+                )
+                baseline_test_report, baseline_test_metrics, baseline_test_wall = self._search(
+                    "baseline_test_search", baseline_test_manifest, test_cohort, "test",
+                    expected_head="hamming",
+                )
+                baseline_search_wall = baseline_dev_wall + baseline_test_wall
+                final_test_manifest = self._search_manifest(
+                    "final_test_search",
+                    full_manifest,
+                    self.root / "reports" / "full_resume.stdout.json",
+                    "test", test_cohort,
+                )
+                final_test_report, final_test_metrics, final_test_wall = self._search(
+                    "final_test_search", final_test_manifest, test_cohort, "test"
+                )
+                quality_comparison = compare_quality(
+                    baseline_test_report,
+                    final_test_report,
+                    expected_case_ids=test_cohort["case_ids"],
+                    expected_panel="test",
+                    expected_panel_digest=test_cohort["digest"],
+                    expected_search=BEAM_CONFIG,
+                    baseline_head="hamming",
+                    candidate_head="qhat",
+                )
+                self.quality_status = quality_comparison["status"]
+            else:
+                quality_comparison = {
+                    "status": "not_run",
+                    "reason": "locked test withheld because the frozen dev acceptance threshold failed",
+                    "dev_status": dev_quality_comparison["status"],
+                }
+                self.quality_status = dev_quality_comparison["status"]
             total_elapsed = max(0.0, time.time() - self.started_at_epoch)
             if total_elapsed > MAX_RUNTIME_SECONDS:
                 raise TimeLimit("full run exceeded the end-to-end wall-time gate")
@@ -1809,7 +2090,11 @@ class Supervisor:
                     "locked_test_cohort": test_cohort,
                     "beam_config": BEAM_CONFIG,
                     "head": "qhat",
+                    "baseline_head": "hamming",
+                    "acceptance_minimum_solved_rate_gain": QUALITY_MIN_ABSOLUTE_SOLVED_RATE_GAIN,
                     "baseline_dev": baseline_dev_metrics,
+                    "dev_paired_comparison": dev_quality_comparison,
+                    "locked_test_evaluated": final_test_report is not None,
                     "final_dev_diagnostic": final_dev_metrics,
                     "baseline_locked_test": baseline_test_metrics,
                     "candidate_locked_test": final_test_metrics,
@@ -1824,10 +2109,10 @@ class Supervisor:
                 },
             }
             _write_new_private_json(self.private_report_path, final_report)
-            if quality_comparison["status"] == "passed":
+            if self.quality_status == "passed":
                 self.status("completed", "passed")
                 return 0
-            self.status("failed", quality_comparison["status"])
+            self.status("failed", self.quality_status)
             return 1
         except TimeLimit as exc:
             self._private_failure(exc)

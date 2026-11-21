@@ -15,7 +15,7 @@ path = "src/bin/cnot103_validate_data.rs"
 [[bin]]
 name = "cnot103-validate-manifest"
 path = "src/bin/cnot103_validate_manifest.rs"
-required-features = ["cuda"]
+required-features = ["torch"]
 
 [[test]]
 name = "cuda_quadratic"
