@@ -5,5 +5,5 @@
   "disk_gb": 64,
   "preserve_remote_disk": true,
   "resume_existing_label": "cnot103-r10k-44749514754-a1",
-  "trigger_revision": 1
+  "trigger_revision": 2
 }
