@@ -92,6 +92,7 @@ class OfferAndBudgetTests(unittest.TestCase):
         import subprocess
         from unittest.mock import patch
 
+        controller.CREATE_ATTEMPTED = False
         with patch.object(
             controller, "vast_cli", side_effect=subprocess.TimeoutExpired("vastai", 120)
         ) as create_call, patch.object(controller, "wait_for_label", return_value=None):
@@ -195,7 +196,7 @@ class ExactOfferQuoteContractTests(unittest.TestCase):
 
         unverified = offer(74)
         del unverified["verified"]
-        del unverified["verification"]
+        unverified.pop("verification", None)
         with self.assertRaises(controller.GateError):
             controller.eligible_offers([unverified])
 
