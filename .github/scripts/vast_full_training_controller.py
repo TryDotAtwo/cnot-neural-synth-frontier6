@@ -667,6 +667,80 @@ def _start_target(
 
 
 
+def _offer_storage_hourly_cost(row: object) -> float | None:
+    """Convert the offer's monthly per-GB tariff for the requested 64 GB disk."""
+    if not isinstance(row, dict):
+        return None
+    monthly_per_gb = _finite(row.get("storage_cost"))
+    disk_gb = _finite(row.get("allocated_storage"))
+    if disk_gb is None:
+        disk_gb = _finite(row.get("disk_space"))
+    if (
+        monthly_per_gb is None or disk_gb is None
+        or monthly_per_gb < 0 or disk_gb != DISK_GB
+    ):
+        return None
+    hourly = monthly_per_gb * disk_gb / 720.0
+    return hourly if math.isfinite(hourly) else None
+
+
+def classify_new_rental_budget(
+    offers: object,
+    rows: object,
+    spent: object,
+    active_hours: object = ACTIVE_HOURS,
+) -> str:
+    """Classify a GET-only new-rental projection without exposing prices."""
+    if not isinstance(offers, list) or not isinstance(rows, list):
+        return "inputs_unknown"
+    if not offers:
+        return "no_eligible_offer"
+    spend_value = _finite(spent)
+    active = _finite(active_hours)
+    extra = _other_storage_reserve(rows, exclude_id=None)
+    if (
+        spend_value is None or spend_value < 0 or active is None or active < 0
+        or extra is None or extra < 0
+    ):
+        return "inputs_unknown"
+
+    saw_valid_offer = False
+    saw_unknown_offer = False
+    fits_without_prior_spend = False
+    for offer in offers:
+        if not isinstance(offer, dict) or not base.is_2x3060(offer):
+            saw_unknown_offer = True
+            continue
+        rate = _finite(offer.get("dph_total"))
+        storage_hourly = _offer_storage_hourly_cost(offer)
+        if rate is None or rate <= 0 or storage_hourly is None:
+            saw_unknown_offer = True
+            continue
+        saw_valid_offer = True
+        if full_run_budget_allows(
+            spend_value,
+            rate,
+            storage_hourly,
+            active_hours=active,
+            extra_storage_reserve=extra,
+        ):
+            return "within_cap"
+        if full_run_budget_allows(
+            0.0,
+            rate,
+            storage_hourly,
+            active_hours=active,
+            extra_storage_reserve=extra,
+        ):
+            fits_without_prior_spend = True
+
+    if saw_unknown_offer or not saw_valid_offer:
+        return "inputs_unknown" if saw_unknown_offer else "no_eligible_offer"
+    if fits_without_prior_spend:
+        return "insufficient_remaining_budget"
+    return "run_projection_exceeds_cap"
+
+
 def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     """Classify the pinned full-run budget without exposing financial values."""
     if not isinstance(row, dict):
@@ -1318,7 +1392,7 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     return result_code
 
 def budget_check() -> int:
-    """Read-only, redacted classification for the pinned full-training target."""
+    """Read-only, redacted classification for the full-run target or rental offers."""
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome = "failed"
     budget_status = "unavailable"
@@ -1326,13 +1400,35 @@ def budget_check() -> int:
     try:
         marker = _marker()
         rows = base.instance_rows()
-        target, _label = _row_for_approved_target(rows, marker)
-        if target is None:
-            budget_status = bootstrap_status = "target_missing"
-        else:
+        try:
+            target, _label = _row_for_approved_target(rows, marker)
+        except GateError as exc:
+            if str(exc) != "approved target configuration is missing or invalid":
+                raise
+            owned_3060 = any(
+                base.is_2x3060(row)
+                and (
+                    base.instance_id(row) in base.OWNED_INSTANCE_IDS
+                    or str(row.get("label") or "").casefold().startswith("cnot103")
+                )
+                for row in rows
+                if isinstance(row, dict)
+            )
+            if owned_3060:
+                raise
             spend = base.project_charges()
-            budget_status = classify_full_run_budget(target, rows, spend)
-            bootstrap_status = classify_bootstrap_budget(target, rows, spend)
+            offers = base.offer_inventory()
+            budget_status = classify_new_rental_budget(offers, rows, spend)
+            bootstrap_status = classify_new_rental_budget(
+                offers, rows, spend, active_hours=BOOTSTRAP_HOURS
+            )
+        else:
+            if target is None:
+                budget_status = bootstrap_status = "target_missing"
+            else:
+                spend = base.project_charges()
+                budget_status = classify_full_run_budget(target, rows, spend)
+                bootstrap_status = classify_bootstrap_budget(target, rows, spend)
         outcome = "success"
     except GateError as exc:
         reason = str(exc)
@@ -1529,7 +1625,7 @@ def _summarize_budget(
 ) -> None:
     allowed_statuses = {
         "within_cap", "insufficient_remaining_budget", "run_projection_exceeds_cap",
-        "inputs_unknown", "configuration_missing", "target_missing",
+        "inputs_unknown", "no_eligible_offer", "configuration_missing", "target_missing",
         "target_ambiguous", "target_mismatch", "unavailable",
     }
     if outcome not in {"success", "failed"}:
