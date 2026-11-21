@@ -328,7 +328,7 @@ class FullRunBudgetDiagnosisTests(unittest.TestCase):
         row = self.target()
         self.assertEqual(
             controller.classify_full_run_budget(row, [row], spent=5.0),
-            "prior_spend_exceeds_cap",
+            "insufficient_remaining_budget",
         )
         expensive = self.target(dph_total=0.50)
         self.assertEqual(
