@@ -16,7 +16,9 @@ from run_full_training import (
     validate_feature_coverage,
     validate_feature_coverage_preflight,
     estimate_full_run_seconds,
+    estimate_remaining_work_seconds,
     forecast_approval_matches,
+    forecast_time_fits,
 )
 
 
@@ -252,6 +254,15 @@ class FeatureCoverageTests(unittest.TestCase):
 
 class ForecastGateTests(unittest.TestCase):
     def test_runtime_forecast_reserves_the_final_equal_budget_search(self):
+        remaining = estimate_remaining_work_seconds(
+            setup_seconds=2.0,
+            update_seconds=0.5,
+            remaining_updates=10,
+            checkpoint_reserve_seconds=3.0,
+            baseline_search_seconds=11.0,
+            forecast_safety_seconds=5.0,
+        )
+        self.assertEqual(remaining, 26.0)
         estimate = estimate_full_run_seconds(
             elapsed_before_full=100.0,
             setup_seconds=2.0,
@@ -269,12 +280,42 @@ class ForecastGateTests(unittest.TestCase):
             "authorized": True,
             "forecast_token": "a" * 32,
             "forecast_total_seconds": 1234.0,
+            "remaining_work_seconds": 1000.0,
+            "authorized_at_epoch": 10_000.0,
         }
-        self.assertTrue(forecast_approval_matches(approval, "a" * 32, 1234.0))
-        self.assertFalse(forecast_approval_matches(approval, "b" * 32, 1234.0))
-        self.assertFalse(forecast_approval_matches(approval, "a" * 32, 1235.0))
+        self.assertTrue(
+            forecast_approval_matches(approval, "a" * 32, 1234.0, 1000.0, 10_005.0)
+        )
+        self.assertFalse(
+            forecast_approval_matches(approval, "b" * 32, 1234.0, 1000.0, 10_005.0)
+        )
+        self.assertFalse(
+            forecast_approval_matches(approval, "a" * 32, 1235.0, 1000.0, 10_005.0)
+        )
+        self.assertFalse(
+            forecast_approval_matches(approval, "a" * 32, 1234.0, 1001.0, 10_005.0)
+        )
+        self.assertFalse(
+            forecast_approval_matches(approval, "a" * 32, 1234.0, 1000.0, 10_361.0)
+        )
         approval["authorized"] = False
-        self.assertFalse(forecast_approval_matches(approval, "a" * 32, 1234.0))
+        self.assertFalse(
+            forecast_approval_matches(approval, "a" * 32, 1234.0, 1000.0, 10_005.0)
+        )
+
+    def test_twenty_minute_authorization_delay_consumes_remaining_wall_budget(self):
+        started = 100.0
+        before_delay = started + 10 * 3600
+        remaining = (
+            training.MAX_RUNTIME_SECONDS
+            - (before_delay - started)
+            - training.FORECAST_CLEANUP_RESERVE_SECONDS
+            - 60
+        )
+        self.assertTrue(forecast_time_fits(started, remaining, before_delay))
+        self.assertFalse(
+            forecast_time_fits(started, remaining, before_delay + 20 * 60)
+        )
 
 
 class QualityComparisonTests(unittest.TestCase):

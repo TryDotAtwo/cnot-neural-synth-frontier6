@@ -10,6 +10,9 @@ on:
       status:
         description: Allowlisted monitor state
         value: ${{ jobs.monitor.outputs.status }}
+      stop_verification:
+        description: Exact-target stop readback state
+        value: ${{ jobs.monitor.outputs.stop_verification }}
 
 permissions:
   actions: read
@@ -21,6 +24,7 @@ jobs:
     timeout-minutes: 355
     outputs:
       status: ${{ steps.monitor.outputs.status }}
+      stop_verification: ${{ steps.monitor.outputs.stop_verification }}
     steps:
       - name: Check out the pinned controller source
         uses: actions/checkout@v4

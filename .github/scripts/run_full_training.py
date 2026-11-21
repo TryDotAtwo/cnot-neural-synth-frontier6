@@ -31,6 +31,8 @@ EXPECTED_CHECKPOINT_FILES = 12
 CHECKPOINT_FREE_GIB = 24
 INITIAL_FREE_GIB = 40
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
+FORECAST_CLEANUP_RESERVE_SECONDS = 10 * 60
+FORECAST_AUTHORIZATION_MAX_AGE_SECONDS = 6 * 60
 FORECAST_APPROVAL_WAIT_SECONDS = 20 * 60
 FORECAST_APPROVAL_POLL_SECONDS = 5
 FORECAST_SAFETY_SECONDS = 15 * 60
@@ -59,9 +61,8 @@ class TimeLimit(RunError):
 
 
 
-def estimate_full_run_seconds(
+def estimate_remaining_work_seconds(
     *,
-    elapsed_before_full: float,
     setup_seconds: float,
     update_seconds: float,
     remaining_updates: int,
@@ -69,9 +70,8 @@ def estimate_full_run_seconds(
     baseline_search_seconds: float,
     forecast_safety_seconds: float,
 ) -> float:
-    """Forecast end-to-end time, reserving one final search at baseline-search speed."""
+    """Estimate work still required after the measured bounded pilot."""
     values = (
-        elapsed_before_full,
         setup_seconds,
         update_seconds,
         checkpoint_reserve_seconds,
@@ -89,8 +89,7 @@ def estimate_full_run_seconds(
     if update_seconds <= 0:
         raise RunError("runtime forecast requires a positive update measurement")
     return (
-        float(elapsed_before_full)
-        + float(setup_seconds)
+        float(setup_seconds)
         + float(update_seconds) * remaining_updates
         + float(checkpoint_reserve_seconds)
         + float(baseline_search_seconds)
@@ -98,30 +97,96 @@ def estimate_full_run_seconds(
     )
 
 
+def estimate_full_run_seconds(
+    *,
+    elapsed_before_full: float,
+    setup_seconds: float,
+    update_seconds: float,
+    remaining_updates: int,
+    checkpoint_reserve_seconds: float,
+    baseline_search_seconds: float,
+    forecast_safety_seconds: float,
+) -> float:
+    """Report elapsed campaign time plus remaining measured work."""
+    elapsed = elapsed_before_full
+    if (
+        isinstance(elapsed, bool) or not isinstance(elapsed, (int, float))
+        or not math.isfinite(elapsed) or elapsed < 0
+    ):
+        raise RunError("runtime forecast has invalid prior elapsed time")
+    return float(elapsed) + estimate_remaining_work_seconds(
+        setup_seconds=setup_seconds,
+        update_seconds=update_seconds,
+        remaining_updates=remaining_updates,
+        checkpoint_reserve_seconds=checkpoint_reserve_seconds,
+        baseline_search_seconds=baseline_search_seconds,
+        forecast_safety_seconds=forecast_safety_seconds,
+    )
+
+
+def forecast_time_fits(
+    started_at_epoch: object,
+    remaining_work_seconds: object,
+    now_epoch: object,
+    cleanup_reserve_seconds: object = FORECAST_CLEANUP_RESERVE_SECONDS,
+) -> bool:
+    values = (started_at_epoch, remaining_work_seconds, now_epoch, cleanup_reserve_seconds)
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in values
+    ):
+        return False
+    started, remaining, now, cleanup = map(float, values)
+    if started <= 0 or remaining < 0 or now < started or cleanup < 0:
+        return False
+    return now - started + remaining + cleanup <= MAX_RUNTIME_SECONDS
+
+
 def forecast_approval_matches(
-    value: object, token: str, forecast_total_seconds: float
+    value: object,
+    token: str,
+    forecast_total_seconds: float,
+    remaining_work_seconds: float,
+    now_epoch: float,
 ) -> bool:
     if not isinstance(value, dict):
         return False
+    values = (forecast_total_seconds, remaining_work_seconds, now_epoch)
     if (
         not isinstance(token, str)
         or len(token) != 32
         or any(character not in "0123456789abcdef" for character in token)
-        or isinstance(forecast_total_seconds, bool)
-        or not isinstance(forecast_total_seconds, (int, float))
-        or not math.isfinite(forecast_total_seconds)
+        or any(
+            isinstance(item, bool) or not isinstance(item, (int, float))
+            or not math.isfinite(item)
+            for item in values
+        )
         or forecast_total_seconds <= 0
+        or remaining_work_seconds <= 0
+        or now_epoch <= 0
     ):
         return False
-    observed = value.get("forecast_total_seconds")
+    observed_total = value.get("forecast_total_seconds")
+    observed_remaining = value.get("remaining_work_seconds")
+    authorized_at = value.get("authorized_at_epoch")
     return (
         value.get("schema") == "cnot103_full_training_forecast_approval_v1"
         and value.get("authorized") is True
         and value.get("forecast_token") == token
-        and not isinstance(observed, bool)
-        and isinstance(observed, (int, float))
-        and math.isfinite(observed)
-        and float(observed) == float(forecast_total_seconds)
+        and not isinstance(observed_total, bool)
+        and isinstance(observed_total, (int, float))
+        and math.isfinite(observed_total)
+        and float(observed_total) == float(forecast_total_seconds)
+        and not isinstance(observed_remaining, bool)
+        and isinstance(observed_remaining, (int, float))
+        and math.isfinite(observed_remaining)
+        and float(observed_remaining) == float(remaining_work_seconds)
+        and not isinstance(authorized_at, bool)
+        and isinstance(authorized_at, (int, float))
+        and math.isfinite(authorized_at)
+        and 0 < float(authorized_at) <= float(now_epoch)
+        and float(now_epoch) - float(authorized_at) <= FORECAST_AUTHORIZATION_MAX_AGE_SECONDS
     )
 
 
@@ -846,6 +911,7 @@ class Supervisor:
         started_at_epoch: float,
         budget_baseline: float,
         bootstrap_deadline_epoch: float,
+        billing_baseline_epoch: float | None = None,
     ):
         self.root = root
         self.source = root / "source"
@@ -854,9 +920,13 @@ class Supervisor:
         self.holdout_sha256 = holdout_sha256
         self.started_at_epoch = started_at_epoch
         self.budget_baseline = budget_baseline
+        self.billing_baseline_epoch = (
+            started_at_epoch if billing_baseline_epoch is None else billing_baseline_epoch
+        )
         self.bootstrap_deadline_epoch = bootstrap_deadline_epoch
         self.full_run_authorized = False
         self.forecast_total_seconds: float | None = None
+        self.remaining_work_seconds: float | None = None
         self.forecast_token: str | None = None
         self.status_path = root / "status.private.json"
         self.events_path = root / "events.private.jsonl"
@@ -919,7 +989,10 @@ class Supervisor:
             "updated_at_epoch": time.time(),
             "started_at_epoch": self.started_at_epoch,
             "budget_baseline": self.budget_baseline,
+            "billing_baseline_epoch": self.billing_baseline_epoch,
         }
+        if self.remaining_work_seconds is not None:
+            value["remaining_work_seconds"] = self.remaining_work_seconds
         if self.forecast_total_seconds is not None and self.forecast_token is not None:
             value["forecast_total_seconds"] = self.forecast_total_seconds
             value["forecast_token"] = self.forecast_token
@@ -939,7 +1012,11 @@ class Supervisor:
             raise TimeLimit("bounded bootstrap pilot deadline reached")
 
     def _await_forecast_approval(self) -> None:
-        if self.forecast_total_seconds is None or self.forecast_token is None:
+        if (
+            self.forecast_total_seconds is None
+            or self.forecast_token is None
+            or self.remaining_work_seconds is None
+        ):
             raise RunError("controller forecast is missing")
         deadline = min(
             self.bootstrap_deadline_epoch,
@@ -952,13 +1029,23 @@ class Supervisor:
                 value = json.loads(approval_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 value = None
+            now_epoch = time.time()
             if forecast_approval_matches(
-                value, self.forecast_token, self.forecast_total_seconds
+                value,
+                self.forecast_token,
+                self.forecast_total_seconds,
+                self.remaining_work_seconds,
+                now_epoch,
             ):
+                if not forecast_time_fits(
+                    self.started_at_epoch, self.remaining_work_seconds, now_epoch
+                ):
+                    raise TimeLimit("remaining work and stop reserve no longer fit the 48-hour gate")
                 self.full_run_authorized = True
                 return
             time.sleep(FORECAST_APPROVAL_POLL_SECONDS)
         raise TimeLimit("controller did not approve the forecast within the pilot window")
+
 
     def _active_deadline(self) -> float:
         if self.full_run_authorized:
@@ -1577,10 +1664,10 @@ class Supervisor:
             baseline_search_wall = baseline_dev_wall + baseline_test_wall
             self.status("baseline", "measured")
 
-            elapsed_before_full = max(0.0, time.time() - self.started_at_epoch)
+            forecast_measured_at = time.time()
+            elapsed_before_full = max(0.0, forecast_measured_at - self.started_at_epoch)
             remaining_updates = TARGET_ATTEMPTS - 2
-            estimated_full_seconds = estimate_full_run_seconds(
-                elapsed_before_full=elapsed_before_full,
+            remaining_work_seconds = estimate_remaining_work_seconds(
                 setup_seconds=setup_seconds,
                 update_seconds=update_seconds / PILOT_ATTEMPTS,
                 remaining_updates=remaining_updates,
@@ -1588,11 +1675,57 @@ class Supervisor:
                 baseline_search_seconds=baseline_search_wall,
                 forecast_safety_seconds=FORECAST_SAFETY_SECONDS,
             )
-            if estimated_full_seconds > MAX_RUNTIME_SECONDS:
-                raise TimeLimit("measured full-model speed misses the 48-hour end-to-end gate")
+            estimated_full_seconds = elapsed_before_full + remaining_work_seconds
+            self.remaining_work_seconds = float(remaining_work_seconds)
             self.forecast_total_seconds = float(estimated_full_seconds)
             self.forecast_token = secrets.token_hex(16)
+            runtime_gate = forecast_time_fits(
+                self.started_at_epoch,
+                self.remaining_work_seconds,
+                time.time(),
+            )
+            _write_new_private_json(
+                self.root / "reports" / "bounded-pilot-decision.private.json",
+                {
+                    "schema": "cnot103_bounded_pilot_decision_v1",
+                    "source_revision": self.source_revision,
+                    "holdout_revision": self.holdout_revision,
+                    "holdout_sha256": self.holdout_sha256,
+                    "dataset_sha256": dataset_sha,
+                    "hardware": hardware,
+                    "model": {
+                        "parameters": MODEL_PARAMETERS,
+                        "structural_blocks": STRUCTURAL_BLOCKS,
+                        "input_slots": MODEL_INPUTS,
+                        "batch_size": BATCH_SIZE,
+                        "target_attempts": TARGET_ATTEMPTS,
+                    },
+                    "pilot": {
+                        "attempts": PILOT_ATTEMPTS,
+                        "fresh_end_progress": fresh_report["end_progress"],
+                        "resume_end_progress": resume_report["end_progress"],
+                        "setup_seconds": setup_seconds,
+                        "update_seconds_per_attempt": update_seconds / PILOT_ATTEMPTS,
+                        "benchmark_wall_seconds": benchmark_wall,
+                        "baseline_dev": baseline_dev_metrics,
+                        "baseline_locked_test": baseline_test_metrics,
+                    },
+                    "forecast": {
+                        "measured_at_epoch": forecast_measured_at,
+                        "elapsed_before_full_seconds": elapsed_before_full,
+                        "remaining_updates": remaining_updates,
+                        "remaining_work_seconds": remaining_work_seconds,
+                        "campaign_total_seconds": estimated_full_seconds,
+                        "cleanup_reserve_seconds": FORECAST_CLEANUP_RESERVE_SECONDS,
+                        "runtime_gate": "within_limit" if runtime_gate else "exceeds_limit",
+                        "controller_budget_gate": "pending",
+                    },
+                },
+            )
             self.status("baseline", "measured")
+            if not runtime_gate:
+                self.status("time_limit", "measured")
+                raise TimeLimit("measured remaining work plus cleanup misses the 48-hour end-to-end gate")
             self._await_forecast_approval()
 
             full_manifest = self._build_manifest(
@@ -1714,6 +1847,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--holdout-sha256", required=True)
     parser.add_argument("--started-at-epoch", required=True, type=float)
     parser.add_argument("--budget-baseline", required=True, type=float)
+    parser.add_argument("--billing-baseline-epoch", required=True, type=float)
     parser.add_argument("--bootstrap-deadline-epoch", required=True, type=float)
     return parser.parse_args()
 
@@ -1729,9 +1863,12 @@ def main() -> int:
         or any(c not in "0123456789abcdef" for c in args.holdout_sha256)
         or not math.isfinite(args.started_at_epoch)
         or not math.isfinite(args.budget_baseline)
+        or not math.isfinite(args.billing_baseline_epoch)
         or not math.isfinite(args.bootstrap_deadline_epoch)
         or args.started_at_epoch <= 0
         or args.budget_baseline < 0
+        or args.billing_baseline_epoch < args.started_at_epoch
+        or args.billing_baseline_epoch > args.bootstrap_deadline_epoch
         or args.bootstrap_deadline_epoch <= args.started_at_epoch
         or args.bootstrap_deadline_epoch > args.started_at_epoch + MAX_RUNTIME_SECONDS
     ):
@@ -1747,6 +1884,7 @@ def main() -> int:
         started_at_epoch=args.started_at_epoch,
         budget_baseline=args.budget_baseline,
         bootstrap_deadline_epoch=args.bootstrap_deadline_epoch,
+        billing_baseline_epoch=args.billing_baseline_epoch,
     )
     return supervisor.run()
 

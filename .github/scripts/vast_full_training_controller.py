@@ -27,6 +27,7 @@ DISK_GB = 64
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 MAX_STOP_SECONDS = 300
 BUDGET_POLL_SECONDS = 5 * 60
+BILLING_LAG_BUFFER_SECONDS = 60 * 60
 MONITOR_SECONDS = 5 * 60 * 60 + 30 * 60
 POLL_SECONDS = 60
 STARTUP_WAIT_SECONDS = 3 * 60 * 60
@@ -67,12 +68,67 @@ def _finite(value: object) -> float | None:
     return base.finite_number(value)
 
 
-def _storage_reserve(storage_cost: object, hours: float = STORAGE_HOURS) -> float | None:
-    monthly = _finite(storage_cost)
-    reserve_hours = _finite(hours)
-    if monthly is None or reserve_hours is None or monthly < 0 or reserve_hours < 0:
+def projected_billable_spend(
+    invoice_now: object,
+    invoice_baseline: object,
+    billing_baseline_epoch: object,
+    now_epoch: object,
+    instance_rate: object,
+    invoice_lag_buffer_seconds: object = BILLING_LAG_BUFFER_SECONDS,
+) -> float | None:
+    """Use a same-time invoice baseline plus elapsed billing and lag reserve."""
+    current = _finite(invoice_now)
+    baseline = _finite(invoice_baseline)
+    baseline_epoch = _finite(billing_baseline_epoch)
+    now = _finite(now_epoch)
+    rate = _finite(instance_rate)
+    lag = _finite(invoice_lag_buffer_seconds)
+    if (
+        current is None or baseline is None or baseline_epoch is None or now is None
+        or rate is None or lag is None or current < 0 or baseline < 0 or rate < 0
+        or lag < 0 or now < baseline_epoch
+    ):
         return None
-    return monthly * DISK_GB * reserve_hours / 720.0
+    projected = baseline + rate * (now - baseline_epoch + lag) / 3600.0
+    if not math.isfinite(projected):
+        return None
+    return max(current, projected)
+
+
+def full_run_time_fits(
+    started_at_epoch: object,
+    remaining_work_seconds: object,
+    now_epoch: object,
+    cleanup_reserve_seconds: object = MAX_STOP_SECONDS + BUDGET_POLL_SECONDS,
+) -> bool:
+    started = _finite(started_at_epoch)
+    remaining = _finite(remaining_work_seconds)
+    now = _finite(now_epoch)
+    cleanup = _finite(cleanup_reserve_seconds)
+    if (
+        started is None or remaining is None or now is None or cleanup is None
+        or started <= 0 or remaining < 0 or cleanup < 0 or now < started
+    ):
+        return False
+    return now - started + remaining + cleanup <= MAX_RUNTIME_SECONDS
+
+
+def _storage_reserve(storage_cost_per_hour: object, hours: float = STORAGE_HOURS) -> float | None:
+    """Reserve the instance API's hourly storage charge for each retained hour."""
+    hourly = _finite(storage_cost_per_hour)
+    reserve_hours = _finite(hours)
+    if hourly is None or reserve_hours is None or hourly < 0 or reserve_hours < 0:
+        return None
+    return hourly * reserve_hours
+
+
+def _storage_reserve_for_row(row: object, hours: float = STORAGE_HOURS) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    disk_gb = _finite(row.get("disk_space"))
+    if disk_gb is None or disk_gb <= 0:
+        return None
+    return _storage_reserve(row.get("storage_cost"), hours)
 
 
 def full_run_budget_allows(
@@ -221,7 +277,7 @@ def _other_storage_reserve(rows: list[dict], exclude_id: int | None) -> float | 
         label = str(row.get("label") or "").casefold()
         if not (label.startswith("cnot103") or ident in base.OWNED_INSTANCE_IDS):
             continue
-        reserve = _storage_reserve(row.get("storage_cost"))
+        reserve = _storage_reserve_for_row(row)
         if reserve is None:
             return None
         total += reserve
@@ -325,9 +381,11 @@ def _launch_script(
     run_id: str,
     attempt: str,
     instance_id: int,
+    billing_baseline_epoch: float | None = None,
 ) -> str:
     q = shlex.quote
     source = root + "/source"
+    billing_epoch = started_at_epoch if billing_baseline_epoch is None else billing_baseline_epoch
     return f"""set -euo pipefail
 ROOT={q(root)}
 SOURCE={q(source)}
@@ -421,6 +479,7 @@ nohup setsid python3 {q(source + "/.github/scripts/run_full_training.py")} \\
   --holdout-sha256 {q(holdout_sha256)} \\
   --started-at-epoch {q(str(started_at_epoch))} \\
   --budget-baseline {q(str(budget_baseline))} \\
+  --billing-baseline-epoch {q(str(billing_epoch))} \\
   --bootstrap-deadline-epoch {q(str(bootstrap_deadline_epoch))} \\
   >"$ROOT/supervisor.private.log" 2>&1 </dev/null &
 PID=$!
@@ -617,20 +676,21 @@ def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     ident = base.instance_id(row)
     spend_value = _finite(spent)
     rate = _finite(row.get("dph_total"))
-    storage_monthly = _finite(row.get("storage_cost"))
+    storage_hourly = _finite(row.get("storage_cost"))
+    storage_reserve = _storage_reserve_for_row(row)
     extra = _other_storage_reserve(rows, ident) if isinstance(rows, list) and ident else None
     if (
-        ident is None or spend_value is None or rate is None or storage_monthly is None
-        or extra is None or spend_value < 0 or rate < 0
-        or storage_monthly < 0 or extra < 0
+        ident is None or spend_value is None or rate is None or storage_hourly is None
+        or storage_reserve is None or extra is None or spend_value < 0 or rate < 0
+        or storage_hourly < 0 or extra < 0
     ):
         return "inputs_unknown"
     if full_run_budget_allows(
-        spend_value, rate, storage_monthly, extra_storage_reserve=extra
+        spend_value, rate, storage_hourly, extra_storage_reserve=extra
     ):
         return "within_cap"
     if full_run_budget_allows(
-        0.0, rate, storage_monthly, extra_storage_reserve=extra
+        0.0, rate, storage_hourly, extra_storage_reserve=extra
     ):
         return "insufficient_remaining_budget"
     return "run_projection_exceeds_cap"
@@ -650,22 +710,23 @@ def classify_bootstrap_budget(
     ident = base.instance_id(row)
     spend_value = _finite(spent)
     rate = _finite(row.get("dph_total"))
-    storage_monthly = _finite(row.get("storage_cost"))
+    storage_hourly = _finite(row.get("storage_cost"))
+    storage_reserve = _storage_reserve_for_row(row)
     extra = _other_storage_reserve(rows, ident) if isinstance(rows, list) and ident else None
     active = _finite(active_hours)
     if (
-        ident is None or spend_value is None or rate is None or storage_monthly is None
-        or extra is None or active is None or spend_value < 0 or rate < 0
-        or storage_monthly < 0 or extra < 0 or active < 0
+        ident is None or spend_value is None or rate is None or storage_hourly is None
+        or storage_reserve is None or extra is None or active is None or spend_value < 0
+        or rate < 0 or storage_hourly < 0 or extra < 0 or active < 0
     ):
         return "inputs_unknown"
     if bootstrap_budget_allows(
-        spend_value, rate, storage_monthly, active_hours=active,
+        spend_value, rate, storage_hourly, active_hours=active,
         extra_storage_reserve=extra,
     ):
         return "within_cap"
     if bootstrap_budget_allows(
-        0.0, rate, storage_monthly, active_hours=active,
+        0.0, rate, storage_hourly, active_hours=active,
         extra_storage_reserve=extra,
     ):
         return "insufficient_remaining_budget"
@@ -693,12 +754,16 @@ def _validate_bootstrap_budget(
     active_hours: float = BOOTSTRAP_HOURS,
 ) -> bool:
     extra = _other_storage_reserve(rows, exclude_id)
-    return extra is not None and bootstrap_budget_allows(
-        spend,
-        row.get("dph_total"),
-        row.get("storage_cost"),
-        active_hours=active_hours,
-        extra_storage_reserve=extra,
+    return (
+        _storage_reserve_for_row(row) is not None
+        and extra is not None
+        and bootstrap_budget_allows(
+            spend,
+            row.get("dph_total"),
+            row.get("storage_cost"),
+            active_hours=active_hours,
+            extra_storage_reserve=extra,
+        )
     )
 
 
@@ -731,6 +796,7 @@ def start() -> int:
             outcome, status = "target_busy", "unverified"
             raise GateError("exact target changed before remote launch")
         row = current
+        billing_baseline_epoch = time.time()
         spend_now = base.project_charges()
         if not _validate_bootstrap_budget(
             row, spend_now, running_rows, ident,
@@ -759,6 +825,7 @@ def start() -> int:
             run_id,
             attempt,
             ident,
+            billing_baseline_epoch,
         )
         proc, key_cleanup, _ = _attach_and_remote(row, run_id, attempt, script, 180)
         if (
@@ -798,7 +865,7 @@ def start() -> int:
 def _read_remote_status_full(
     row: dict, run_id: str, attempt: str, root: str,
     session: RemoteSession | None = None,
-) -> tuple[str, str, float | None, float | None, float | None, str | None]:
+) -> tuple[str, str, float | None, float | None, float | None, float | None, float | None, str | None]:
     q = shlex.quote
     remote = f"""set -euo pipefail
 FILE={q(root + "/status.private.json")}
@@ -828,7 +895,7 @@ def number(key):
     return float(item)
 print("run_state=" + state)
 print("quality_status=" + quality)
-for name in ("started_at_epoch", "budget_baseline", "instance_rate", "storage_cost"):
+for name in ("started_at_epoch", "budget_baseline", "billing_baseline_epoch", "remaining_work_seconds", "instance_rate", "storage_cost"):
     item = number(name)
     if item is not None:
         print(name + "=" + str(item))
@@ -843,18 +910,18 @@ PY
     if session is None:
         proc, key_cleanup, _ident = _attach_and_remote(row, run_id, attempt, remote, 30)
         if proc is None or proc.returncode != 0 or key_cleanup not in {"detached", "not_found"}:
-            return "unavailable", "unavailable", None, None, None, None
+            return "unavailable", "unavailable", None, None, None, None, None, None
     else:
         proc = session.run(remote, 30)
         if proc is None or proc.returncode != 0:
-            return "unavailable", "unavailable", None, None, None, None
+            return "unavailable", "unavailable", None, None, None, None, None, None
     values = {}
     for line in proc.stdout.splitlines():
         key, separator, value = line.partition("=")
         if separator and key in {
             "run_state", "quality_status", "started_at_epoch",
-            "budget_baseline", "instance_rate", "storage_cost",
-            "forecast_total_seconds", "forecast_token",
+            "budget_baseline", "billing_baseline_epoch", "remaining_work_seconds",
+            "instance_rate", "storage_cost", "forecast_total_seconds", "forecast_token",
         }:
             values[key] = value
     state = values.get("run_state", "unavailable")
@@ -875,7 +942,9 @@ PY
         quality,
         parsed_number("started_at_epoch"),
         parsed_number("budget_baseline"),
+        parsed_number("billing_baseline_epoch"),
         parsed_number("forecast_total_seconds"),
+        parsed_number("remaining_work_seconds"),
         token,
     )
 
@@ -883,65 +952,92 @@ PY
 def _read_remote_status(
     row: dict, run_id: str, attempt: str, root: str,
     session: RemoteSession | None = None,
-) -> tuple[str, str, float | None, float | None]:
+) -> tuple[str, str, float | None, float | None, float | None]:
     values = _read_remote_status_full(row, run_id, attempt, root, session=session)
-    return values[0], values[1], values[2], values[3]
+    return values[0], values[1], values[2], values[3], values[4]
 
 
 def _write_forecast_authorization(
-    session: RemoteSession, root: str, token: str, forecast_total_seconds: float
+    session: RemoteSession,
+    root: str,
+    token: str,
+    forecast_total_seconds: float,
+    remaining_work_seconds: float | None = None,
+    authorized_at_epoch: float | None = None,
 ) -> bool:
     seconds = _finite(forecast_total_seconds)
-    if not re.fullmatch(r"[0-9a-f]{32}", token) or seconds is None or seconds <= 0:
+    remaining = _finite(remaining_work_seconds)
+    authorized_at = time.time() if authorized_at_epoch is None else _finite(authorized_at_epoch)
+    if (
+        not re.fullmatch(r"[0-9a-f]{32}", token)
+        or seconds is None or seconds <= 0
+        or remaining is None or remaining <= 0
+        or authorized_at is None or authorized_at <= 0
+    ):
         return False
     q = shlex.quote
     path = root + "/forecast-approval.private.json"
     remote = f"""set -euo pipefail
-python3 - {q(path)} {q(token)} {q(str(seconds))} <<'PY'
+python3 - {q(path)} {q(token)} {q(str(seconds))} {q(str(remaining))} {q(str(authorized_at))} <<'PY'
 import json
 import math
 import os
+import stat
 import sys
-path, token, raw_seconds = sys.argv[1:]
-seconds = float(raw_seconds)
-if not math.isfinite(seconds) or seconds <= 0:
+path, token, raw_seconds, raw_remaining, raw_authorized_at = sys.argv[1:]
+seconds, remaining, authorized_at = map(float, (raw_seconds, raw_remaining, raw_authorized_at))
+if not all(math.isfinite(x) for x in (seconds, remaining, authorized_at)) or seconds <= 0 or remaining <= 0 or authorized_at <= 0:
     raise SystemExit(2)
 value = {{
     "schema": "cnot103_full_training_forecast_approval_v1",
     "authorized": True,
     "forecast_token": token,
     "forecast_total_seconds": seconds,
+    "remaining_work_seconds": remaining,
+    "authorized_at_epoch": authorized_at,
 }}
 try:
     existing = json.load(open(path, encoding="utf-8"))
 except FileNotFoundError:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, sort_keys=True, separators=(",", ":"))
-        output.write("\\n")
-        output.flush()
-        os.fsync(output.fileno())
 except Exception:
     raise SystemExit(3)
 else:
     if (
-        existing.get("schema") != value["schema"]
+        not isinstance(existing, dict)
+        or existing.get("schema") != value["schema"]
         or existing.get("authorized") is not True
         or existing.get("forecast_token") != token
         or existing.get("forecast_total_seconds") != seconds
+        or existing.get("remaining_work_seconds") != remaining
     ):
         raise SystemExit(4)
+    try:
+        if not stat.S_ISREG(os.stat(path, follow_symlinks=False).st_mode):
+            raise SystemExit(5)
+        descriptor = os.open(
+            path, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        )
+    except OSError:
+        raise SystemExit(5)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(value, output, sort_keys=True, separators=(",", ":"))
+    output.write("\\n")
+    output.flush()
+    os.fsync(output.fileno())
 print("full_training=forecast_authorized")
 PY
 """
-    proc = session.run(remote, 30)
+    try:
+        proc = session.run(remote, 30)
+    except Exception:
+        return False
     return (
         proc is not None
         and proc.returncode == 0
-        and "full_training=forecast_authorized" in proc.stdout.splitlines()
+        and "full_training=forecast_authorized" in getattr(proc, "stdout", "").splitlines()
     )
-
 
 
 def _read_remote_owner(
@@ -1022,6 +1118,21 @@ def _find_cleanup_target(
         time.sleep(min(CLAIM_VISIBILITY_POLL_SECONDS, remaining))
 
 
+def _confirm_stopped_instance(ident: int, label: str) -> bool:
+    try:
+        rows = base.instance_rows()
+        current = next((item for item in rows if base.instance_id(item) == ident), None)
+        labeled = base.resolve_label(rows, label)
+        return (
+            current is not None
+            and current.get("label") == label
+            and (labeled is None or base.instance_id(labeled) == ident)
+            and base.probe.observed_state(current) in {"stopped", "exited"}
+        )
+    except Exception:
+        return False
+
+
 def _monitor_window(
     row: dict,
     label: str,
@@ -1031,18 +1142,20 @@ def _monitor_window(
     root: str,
     window_seconds: int,
     session: RemoteSession,
-) -> tuple[int, str, str]:
+) -> tuple[int, str, str, str]:
     host_deadline = time.monotonic() + max(1, min(int(window_seconds), MONITOR_SECONDS))
     next_budget_check = 0.0
     authorized_forecast_token: str | None = None
 
-    def stop_for_gate(outcome: str) -> tuple[int, str, str]:
+    def stop_for_gate(outcome: str) -> tuple[int, str, str, str]:
         stop_status, _key_status = base.stop_exact_label(
             label, run_id, attempt, expected_id=ident
         )
         if stop_status not in {"verified", "not_needed"}:
-            return 1, "unverified", "unverified"
-        return 1, outcome, outcome
+            return 1, "unverified", "unverified", "unverified"
+        if not _confirm_stopped_instance(ident, label):
+            return 1, "unverified", "unverified", "unverified"
+        return 1, outcome, outcome, "verified"
 
     while True:
         (
@@ -1050,27 +1163,30 @@ def _monitor_window(
             quality,
             started_at,
             budget_baseline,
+            billing_baseline_epoch,
             forecast_total_seconds,
+            remaining_work_seconds,
             forecast_token,
         ) = _read_remote_status_full(
             row, run_id, attempt, root, session=session
         )
         if state == "completed":
             if quality == "passed":
-                return 0, "completed", "completed"
-            return 1, "failed", "failed"
+                return 0, "completed", "completed", "not_attempted"
+            return 1, "failed", "failed", "not_attempted"
         if state == "budget_gate":
-            return 1, "budget_gate", "budget_gate"
+            return 1, "budget_gate", "budget_gate", "not_attempted"
         if state == "time_limit":
-            return 1, "time_limit", "time_limit"
+            return 1, "time_limit", "time_limit", "not_attempted"
         if state == "failed":
-            return 1, "failed", "failed"
+            return 1, "failed", "failed", "not_attempted"
         if state == "unavailable":
-            return 1, "remote_state_unavailable", "unavailable"
+            return 1, "remote_state_unavailable", "unavailable", "not_attempted"
 
         now_monotonic = time.monotonic()
         if (
             (forecast_total_seconds is None) != (forecast_token is None)
+            or (forecast_token is None) != (remaining_work_seconds is None)
             or (
                 forecast_token is not None
                 and not re.fullmatch(r"[0-9a-f]{32}", forecast_token)
@@ -1090,34 +1206,45 @@ def _monitor_window(
                 or base.instance_id(current) != ident
                 or base.probe.observed_state(current) != "running"
             ):
-                return 1, "unverified", "unverified"
+                return 1, "unverified", "unverified", "not_attempted"
             spend_now = base.project_charges()
+            now_epoch = time.time()
             rate = _finite(current.get("dph_total"))
             extra_storage = _other_storage_reserve(current_rows, ident)
+            projected_spend = projected_billable_spend(
+                spend_now,
+                budget_baseline,
+                billing_baseline_epoch,
+                now_epoch,
+                rate,
+            )
             if (
-                rate is None or extra_storage is None
-                or started_at is None or budget_baseline is None
+                rate is None or extra_storage is None or projected_spend is None
+                or _storage_reserve_for_row(current) is None or started_at is None
             ):
                 return stop_for_gate("budget_gate")
-            elapsed_seconds = max(0.0, time.time() - started_at)
-            elapsed_hours = elapsed_seconds / 3600.0
-            projected_spend = max(spend_now, budget_baseline + rate * elapsed_hours)
+            elapsed_seconds = max(0.0, now_epoch - started_at)
+            cleanup_reserve_seconds = MAX_STOP_SECONDS + BUDGET_POLL_SECONDS
             if forecast_total_seconds is None:
                 if elapsed_seconds >= BOOTSTRAP_SECONDS:
                     return stop_for_gate("time_limit")
                 remaining_hours = (
-                    (BOOTSTRAP_SECONDS - elapsed_seconds) / 3600.0
-                    + (MAX_STOP_SECONDS + BUDGET_POLL_SECONDS) / 3600.0
+                    (BOOTSTRAP_SECONDS - elapsed_seconds + cleanup_reserve_seconds) / 3600.0
                 )
             else:
                 if (
-                    forecast_total_seconds > MAX_RUNTIME_SECONDS
-                    or elapsed_seconds >= forecast_total_seconds
+                    remaining_work_seconds is None
+                    or forecast_total_seconds > MAX_RUNTIME_SECONDS
+                    or not full_run_time_fits(
+                        started_at,
+                        remaining_work_seconds,
+                        now_epoch,
+                        cleanup_reserve_seconds,
+                    )
                 ):
                     return stop_for_gate("time_limit")
                 remaining_hours = (
-                    (forecast_total_seconds - elapsed_seconds) / 3600.0
-                    + (MAX_STOP_SECONDS + BUDGET_POLL_SECONDS) / 3600.0
+                    (remaining_work_seconds + cleanup_reserve_seconds) / 3600.0
                 )
             if not full_run_budget_allows(
                 projected_spend,
@@ -1129,16 +1256,20 @@ def _monitor_window(
                 return stop_for_gate("budget_gate")
             if forecast_token is not None:
                 if not _write_forecast_authorization(
-                    session, root, forecast_token, forecast_total_seconds
+                    session,
+                    root,
+                    forecast_token,
+                    forecast_total_seconds,
+                    remaining_work_seconds,
+                    now_epoch,
                 ):
                     return stop_for_gate("unverified")
                 authorized_forecast_token = forecast_token
             row = current
             next_budget_check = now_monotonic + BUDGET_POLL_SECONDS
         if now_monotonic >= host_deadline:
-            return 0, "running", "running"
+            return 0, "running", "running", "not_attempted"
         time.sleep(min(POLL_SECONDS, max(1.0, host_deadline - now_monotonic)))
-
 
 
 def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
@@ -1146,6 +1277,7 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
     outcome, status = "controller_failed", "unavailable"
     session = None
     result_code = 1
+    stop_verification = "not_attempted"
     try:
         revision, run_id, attempt, root = _run_identity()
         marker = _marker()
@@ -1167,7 +1299,7 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
         ):
             outcome, status = "target_unavailable", "unavailable"
             raise GateError("remote workspace ownership is not verified")
-        result_code, outcome, status = _monitor_window(
+        result_code, outcome, status, stop_verification = _monitor_window(
             row, label, ident, run_id, attempt, root, window_seconds, session
         )
     except base.probe.ApiFailure:
@@ -1182,7 +1314,7 @@ def monitor(window_seconds: int = MONITOR_SECONDS) -> int:
             key_cleanup = session.close()
             if key_cleanup not in {"detached", "not_found"} and result_code == 0:
                 outcome, status, result_code = "api_failed", "unverified", 1
-    _summarize(checked, outcome, status)
+    _summarize(checked, outcome, status, stop_verification=stop_verification)
     return result_code
 
 def budget_check() -> int:
@@ -1213,13 +1345,14 @@ def cleanup() -> int:
     checked = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     outcome, status = "controller_failed", "unverified"
     state, quality = "unavailable", "unavailable"
+    stop_verification = "not_attempted"
     session = None
     try:
         revision, run_id, attempt, root = _run_identity()
         marker = _marker()
         row, label = _find_cleanup_target(marker, run_id, attempt)
         if row is None or label is None:
-            outcome, status = "not_needed", "not_needed"
+            outcome, status, stop_verification = "not_needed", "not_needed", "not_needed"
         elif not base.is_2x3060(row):
             outcome, status = "target_gpu_mismatch", "unverified"
         else:
@@ -1232,6 +1365,7 @@ def cleanup() -> int:
                 owned = label == run_claimed_label
                 started_at = None
                 budget_baseline = None
+                billing_baseline_epoch = None
                 if not owned and actual_state == "running":
                     # Any non-current label, including a previous attempt's
                     # label, needs the private run-and-workspace owner stamp.
@@ -1240,23 +1374,26 @@ def cleanup() -> int:
                         row, run_id, attempt, root, revision, session=session
                     )
                     if owned:
-                        state, quality, started_at, budget_baseline = _read_remote_status(
-                            row, run_id, attempt, root, session=session
-                        )
+                        (
+                            state, quality, started_at, budget_baseline,
+                            billing_baseline_epoch,
+                        ) = _read_remote_status(row, run_id, attempt, root, session=session)
                 elif not owned:
-                    outcome, status = "not_needed", "not_needed"
+                    outcome, status, stop_verification = "not_needed", "not_needed", "not_needed"
                 if owned and actual_state == "running" and session is None:
-                    state, quality, started_at, budget_baseline = _read_remote_status(
-                        row, run_id, attempt, root
-                    )
+                    (
+                        state, quality, started_at, budget_baseline,
+                        billing_baseline_epoch,
+                    ) = _read_remote_status(row, run_id, attempt, root)
                 if session is not None:
                     key_cleanup = session.close()
                     session = None
                     if key_cleanup not in {"detached", "not_found"}:
                         state, quality = "unavailable", "unavailable"
                 if not owned:
-                    outcome, status = "not_needed", "not_needed"
+                    outcome, status, stop_verification = "not_needed", "not_needed", "not_needed"
                 if owned:
+                    stop_verification = "unverified"
                     rate = _finite(row.get("dph_total"))
                     stop_status, _key_status = base.stop_exact_label(
                         label, run_id, attempt, expected_id=ident
@@ -1278,20 +1415,27 @@ def cleanup() -> int:
                         ):
                             outcome, status = "unverified", "unverified"
                         else:
+                            stop_verification = "verified"
                             spend = base.project_charges()
+                            billing_check_epoch = time.time()
                             extra = _other_storage_reserve(final_rows, ident)
-                            elapsed_hours = (
-                                max(0.0, (time.time() - started_at) / 3600.0)
-                                if started_at is not None else 0.0
-                            )
-                            baseline = budget_baseline if budget_baseline is not None else spend
-                            projected_spend = max(spend, baseline + (rate or 0.0) * elapsed_hours)
-                            if rate is None or extra is None or not full_run_budget_allows(
-                                projected_spend,
+                            projected_spend = projected_billable_spend(
+                                spend,
+                                budget_baseline,
+                                billing_baseline_epoch,
+                                billing_check_epoch,
                                 rate,
-                                final_row.get("storage_cost"),
-                                active_hours=0.0,
-                                extra_storage_reserve=extra,
+                            )
+                            if (
+                                rate is None or extra is None or projected_spend is None
+                                or _storage_reserve_for_row(final_row) is None
+                                or not full_run_budget_allows(
+                                    projected_spend,
+                                    rate,
+                                    final_row.get("storage_cost"),
+                                    active_hours=0.0,
+                                    extra_storage_reserve=extra,
+                                )
                             ):
                                 outcome, status = "budget_gate", "budget_gate"
                             elif state != "completed" or quality != "passed":
@@ -1302,21 +1446,27 @@ def cleanup() -> int:
                                 outcome, status = "accepted", "stopped"
     except base.probe.ApiFailure:
         outcome, status = "api_failed", "unverified"
+        if stop_verification != "not_needed":
+            stop_verification = "unverified"
     except (GateError, base.GateError):
         outcome, status = "unverified", "unverified"
+        if stop_verification != "not_needed":
+            stop_verification = "unverified"
     except Exception:
         outcome, status = "controller_failed", "unverified"
+        if stop_verification != "not_needed":
+            stop_verification = "unverified"
     finally:
         if session is not None:
             session.close()
-    _summarize(checked, outcome, status)
+    _summarize(checked, outcome, status, stop_verification=stop_verification)
     return 0 if outcome in {"accepted", "not_needed"} else 1
-
 def _summarize(
     checked: str,
     outcome: str,
     status: str,
     cleanup_needed: bool | None = None,
+    stop_verification: str | None = None,
 ) -> None:
     if outcome not in OUTCOMES:
         outcome = "controller_failed"
@@ -1324,9 +1474,14 @@ def _summarize(
         status = "unavailable"
     if cleanup_needed is not None and type(cleanup_needed) is not bool:
         raise GateError("cleanup output flag is invalid")
+    allowed_stop_values = {"verified", "unverified", "not_needed", "not_attempted"}
+    if stop_verification is not None and stop_verification not in allowed_stop_values:
+        stop_verification = "unverified"
     print(f"checked_at={checked}")
     print(f"query_outcome={outcome}")
     print(f"status={status}")
+    if stop_verification is not None:
+        print(f"stop_verification={stop_verification}")
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
         try:
@@ -1335,6 +1490,8 @@ def _summarize(
                 if cleanup_needed is not None:
                     value = "yes" if cleanup_needed else "no"
                     output.write(f"cleanup_needed={value}\n")
+                if stop_verification is not None:
+                    output.write(f"stop_verification={stop_verification}\n")
         except OSError:
             raise GateError("controller step output could not be written") from None
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -1347,6 +1504,8 @@ def _summarize(
                     f"- query_outcome: {outcome}\\n"
                     f"- status: {status}\\n"
                 )
+                if stop_verification is not None:
+                    summary.write(f"- stop_verification: {stop_verification}\\n")
         except OSError:
             pass
 
