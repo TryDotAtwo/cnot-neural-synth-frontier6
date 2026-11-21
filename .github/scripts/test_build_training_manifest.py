@@ -31,6 +31,8 @@ class TrainingManifestTests(unittest.TestCase):
             "b" * 64,
             "/workspace/train/checkpoints",
             False,
+            attempts=250_000,
+            target_attempts=TARGET_ATTEMPTS,
         )
         self.assertEqual([item["dimension"] for item in manifest["alphabets"]], list(WIDTHS))
         for alphabet in manifest["alphabets"]:
@@ -190,7 +192,34 @@ class TrainingManifestTests(unittest.TestCase):
                 False,
             )
 
-    def test_resume_preserves_absolute_epoch_ceiling(self):
+    def test_default_manifest_is_a_bounded_smoke_and_full_history_is_explicit(self):
+        manifest, provenance = build_manifest(
+            self.profile,
+            self.profile_bytes,
+            "/workspace/train/frozen_train_10k.json",
+            "b" * 64,
+            "/workspace/train/checkpoints",
+            False,
+        )
+        self.assertEqual(manifest["training"]["attempts"], 2)
+        self.assertEqual(manifest["training"]["target_attempts"], 2)
+        self.assertEqual(provenance["invocation_attempts"], 2)
+        self.assertEqual(provenance["target_attempts"], 2)
+
+        historical, _ = build_manifest(
+            self.profile,
+            self.profile_bytes,
+            "/workspace/train/frozen_train_10k.json",
+            "b" * 64,
+            "/workspace/train/checkpoints",
+            False,
+            attempts=250_000,
+            target_attempts=TARGET_ATTEMPTS,
+        )
+        self.assertEqual(historical["training"]["attempts"], TARGET_ATTEMPTS)
+        self.assertEqual(historical["training"]["target_attempts"], TARGET_ATTEMPTS)
+
+    def test_resume_preserves_bounded_smoke_ceiling(self):
         manifest, _ = build_manifest(
             self.profile,
             self.profile_bytes,
@@ -200,8 +229,8 @@ class TrainingManifestTests(unittest.TestCase):
             True,
         )
         self.assertTrue(manifest["resume"])
-        self.assertEqual(manifest["training"]["target_attempts"], 250_000)
-        self.assertEqual(manifest["training"]["attempts"], 250_000)
+        self.assertEqual(manifest["training"]["target_attempts"], 2)
+        self.assertEqual(manifest["training"]["attempts"], 2)
 
     def test_cli_writes_manifest_and_private_provenance(self):
         manifest, provenance = build_manifest(
@@ -219,7 +248,7 @@ class TrainingManifestTests(unittest.TestCase):
 
             _write_private_json(path, manifest)
             _write_private_json(sidecar, provenance)
-            self.assertEqual(json.loads(path.read_text())["training"]["target_attempts"], 250_000)
+            self.assertEqual(json.loads(path.read_text())["training"]["target_attempts"], 2)
             self.assertEqual(json.loads(sidecar.read_text())["profile_id"], "self-test")
 
 
