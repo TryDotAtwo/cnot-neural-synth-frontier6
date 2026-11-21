@@ -1,4 +1,4 @@
-//! Admission for read-only evaluation on a frozen dev panel.
+//! Admission for read-only evaluation on a frozen dev or test panel.
 use super::{artifacts, audit_json, field::BoundField};
 use crate::nn_training::NeuralTrainer;
 use crate::run_config::manifest::{parse_run_manifest, PinnedArtifact};
@@ -11,7 +11,7 @@ use std::{
 };
 use tch::Tensor;
 
-pub(super) struct DevCheckpoint {
+pub(super) struct PanelCheckpoint {
     pub field: BoundField,
     pub receipt: CheckpointManifest,
     pub audit: Value,
@@ -27,16 +27,20 @@ fn pinned_file(base: &Path, input: &PinnedArtifact) -> Result<(PathBuf, Vec<u8>)
     Ok((p, b))
 }
 
-pub(super) fn load_dev_checkpoint(
+pub(super) fn load_panel_checkpoint(
     path: &Path,
     training_manifest: &PinnedArtifact,
     training_result: &PinnedArtifact,
-    dev_indices: &[usize],
-) -> Result<DevCheckpoint, String> {
-    if dev_indices.is_empty()
-        || dev_indices.iter().collect::<BTreeSet<_>>().len() != dev_indices.len()
+    panel: &str,
+    panel_indices: &[usize],
+) -> Result<PanelCheckpoint, String> {
+    if !matches!(panel, "dev" | "test") {
+        return Err("evaluation panel must be dev or test".into());
+    }
+    if panel_indices.is_empty()
+        || panel_indices.iter().collect::<BTreeSet<_>>().len() != panel_indices.len()
     {
-        return Err("evaluation requires explicit distinct dev indices".into());
+        return Err("evaluation requires explicit distinct panel indices".into());
     }
     let (run_path, run_raw) = pinned_file(path, training_manifest)?;
     let (_, report_raw) = pinned_file(path, training_result)?;
@@ -67,16 +71,17 @@ pub(super) fn load_dev_checkpoint(
     let index = manifest.training.cuda_device;
     crate::torch_device::require_cuda_device(index)?;
     let data = artifacts::load(&manifest, &paths)?;
+    let expected_split = if panel == "dev" { TrainingSplit::Dev } else { TrainingSplit::Test };
     let mut widths = BTreeSet::new();
-    for &i in dev_indices {
-        let row = data
-            .dataset
-            .dev
-            .records()
-            .get(i)
-            .ok_or("dev search index out of range")?;
-        if row.split != TrainingSplit::Dev || !data.dataset.forbidden_keys.contains(&row.state) {
-            return Err("requested dev root lacks a frozen holdout identity".into());
+    for &i in panel_indices {
+        let row = match panel {
+            "dev" => data.dataset.dev.records().get(i),
+            "test" => data.dataset.test.records().get(i),
+            _ => None,
+        }
+        .ok_or("panel search index out of range")?;
+        if row.split != expected_split || !data.dataset.forbidden_keys.contains(&row.state) {
+            return Err("requested panel root lacks a frozen holdout identity".into());
         }
         widths.insert(row.state.dimension());
     }
@@ -131,10 +136,26 @@ pub(super) fn load_dev_checkpoint(
     if Tensor::stack(&finite, 0).all().int64_value(&[]) == 0 {
         return Err("search checkpoint has nonfinite weights".into());
     }
-    Ok(DevCheckpoint {
+    Ok(PanelCheckpoint {
         field,
         receipt,
         audit: report["exposure_audit"].clone(),
         device: index,
     })
+}
+
+
+pub(super) fn load_dev_checkpoint(
+    path: &Path,
+    training_manifest: &PinnedArtifact,
+    training_result: &PinnedArtifact,
+    dev_indices: &[usize],
+) -> Result<PanelCheckpoint, String> {
+    load_panel_checkpoint(
+        path,
+        training_manifest,
+        training_result,
+        "dev",
+        dev_indices,
+    )
 }

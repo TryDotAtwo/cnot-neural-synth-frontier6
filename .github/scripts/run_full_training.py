@@ -197,6 +197,270 @@ def quality_metrics(report: object) -> dict[str, Any]:
     }
 
 
+def _panel_digest(panel: str, indices: list[int], case_ids: list[str]) -> str:
+    canonical = json.dumps(
+        {"panel": panel, "indices": indices, "ids": case_ids},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def select_panel_cohorts(
+    dataset_value: object, per_width: int = 8
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(dataset_value, dict) or not isinstance(dataset_value.get("panels"), dict):
+        raise RunError("sealed dataset panels are malformed")
+    result: dict[str, dict[str, Any]] = {}
+    for panel in ("dev", "test"):
+        records = dataset_value["panels"].get(panel)
+        indices = select_dev_indices(records, per_width=per_width)
+        case_ids: list[str] = []
+        for index in indices:
+            record = records[index]
+            case_id = record.get("lineage_id") if isinstance(record, dict) else None
+            if not isinstance(case_id, str) or not case_id.strip():
+                raise RunError(f"{panel} cohort has a missing case identity")
+            case_ids.append(case_id)
+        if len(case_ids) != len(set(case_ids)):
+            raise RunError(f"{panel} cohort contains duplicate case identities")
+        result[panel] = {
+            "indices": indices,
+            "case_ids": case_ids,
+            "digest": _panel_digest(panel, indices, case_ids),
+            "case_count": len(indices),
+        }
+    return result
+
+
+def _identity_packed_rows(dimension: int) -> list[int]:
+    words_per_row = (dimension + 63) // 64
+    rows = [0] * (dimension * words_per_row)
+    for row in range(dimension):
+        rows[row * words_per_row + row // 64] |= 1 << (row % 64)
+    return rows
+
+
+def _panel_search_metrics(
+    report: object,
+    *,
+    expected_case_ids: list[str],
+    expected_panel: str,
+    expected_panel_digest: str,
+    expected_search: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(report, dict) or report.get("schema") != "cnot103_panel_search_result_v2":
+        raise RunError("panel search report schema is invalid")
+    if report.get("panel") != expected_panel:
+        raise RunError("panel search evaluated the wrong frozen split")
+    if report.get("panel_digest") != expected_panel_digest:
+        raise RunError("panel search digest differs from its frozen cohort")
+    if report.get("panel_ids") != expected_case_ids:
+        raise RunError("panel search case identities differ from the frozen cohort")
+    if len(expected_case_ids) != len(set(expected_case_ids)):
+        raise RunError("frozen panel contains duplicate case identities")
+    if report.get("search") != expected_search or report.get("head") != "qhat":
+        raise RunError("panel search budget or model head differs")
+    if report.get("feature_model_inputs") != MODEL_INPUTS:
+        raise RunError("panel search did not use all 102 model inputs")
+    audit = report.get("training_exposure_audit")
+    if not isinstance(audit, dict) or audit.get("strict_unseen") is not True:
+        raise RunError("panel search exposure audit failed")
+    rows = report.get("rows")
+    if not isinstance(rows, list) or len(rows) != len(expected_case_ids):
+        raise RunError("panel search row count differs from the frozen cohort")
+    cases: dict[str, dict[str, Any]] = {}
+    statuses = {"solved", "depth_limit", "resource_limit", "exhausted"}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") not in statuses:
+            raise RunError("panel search row is malformed")
+        case_id = row.get("case_id")
+        if not isinstance(case_id, str) or case_id not in expected_case_ids or case_id in cases:
+            raise RunError("panel search case identity is missing, duplicated, or unexpected")
+        dimension = row.get("dimension")
+        if type(dimension) is not int or dimension < 1:
+            raise RunError("panel search case dimension is invalid")
+        words_per_row = (dimension + 63) // 64
+        start = row.get("start_packed_rows")
+        if (
+            not isinstance(start, list)
+            or len(start) != dimension * words_per_row
+            or any(type(word) is not int or word < 0 or word > 0xFFFFFFFFFFFFFFFF for word in start)
+        ):
+            raise RunError("panel search original case state is malformed")
+        width = row.get("width", dimension)
+        if type(width) is not int or width != dimension:
+            raise RunError("panel search case width differs from its state")
+        word = row.get("word")
+        cost: int | None = None
+        if row["status"] == "solved":
+            if not isinstance(word, dict) or word.get("replayed") is not True:
+                raise RunError("a solved panel word lacks native replay confirmation")
+            gates = word.get("control_target")
+            cost = word.get("physical_cost")
+            if (
+                not isinstance(gates, list)
+                or type(cost) is not int
+                or cost != len(gates)
+                or cost < 0
+            ):
+                raise RunError("solved panel word physical cost differs from its gates")
+            replay = start.copy()
+            for gate in gates:
+                if (
+                    not isinstance(gate, list) or len(gate) != 2
+                    or type(gate[0]) is not int or type(gate[1]) is not int
+                    or gate[0] < 0 or gate[1] < 0
+                    or gate[0] >= dimension or gate[1] >= dimension
+                    or gate[0] == gate[1]
+                ):
+                    raise RunError("solved panel word contains an invalid physical gate")
+                control, target = gate
+                for word_index in range(words_per_row):
+                    replay[target * words_per_row + word_index] ^= replay[
+                        control * words_per_row + word_index
+                    ]
+            identity = _identity_packed_rows(dimension)
+            if replay != identity or row.get("end_packed_rows") != identity:
+                raise RunError("panel word does not replay to identity in original orientation")
+        elif word is not None or row.get("end_packed_rows") is not None:
+            raise RunError("unsolved panel row unexpectedly contains a word or endpoint")
+        cases[case_id] = {
+            "dimension": dimension,
+            "start_packed_rows": start,
+            "status": row["status"],
+            "physical_cost": cost,
+        }
+    if set(cases) != set(expected_case_ids):
+        raise RunError("panel search omitted one or more frozen cases")
+    solved_ids = [case_id for case_id in expected_case_ids if cases[case_id]["status"] == "solved"]
+    costs = [cases[case_id]["physical_cost"] for case_id in solved_ids]
+    widths: dict[int, dict[str, int]] = {}
+    for case_id in expected_case_ids:
+        dimension = cases[case_id]["dimension"]
+        row = widths.setdefault(dimension, {"case_count": 0, "solved_count": 0})
+        row["case_count"] += 1
+        if cases[case_id]["status"] == "solved":
+            row["solved_count"] += 1
+    return {
+        "case_count": len(expected_case_ids),
+        "solved_count": len(solved_ids),
+        "solved_rate": len(solved_ids) / len(expected_case_ids),
+        "solved_case_ids": solved_ids,
+        "physical_costs": costs,
+        "total_physical_cost": sum(costs),
+        "median_physical_cost": statistics.median(costs) if costs else None,
+        "cases": cases,
+        "by_width": {
+            str(width): {
+                "case_count": row["case_count"],
+                "solved_count": row["solved_count"],
+                "solved_rate": row["solved_count"] / row["case_count"],
+            }
+            for width, row in sorted(widths.items())
+        },
+    }
+
+
+def compare_quality(
+    baseline_report: object,
+    candidate_report: object,
+    *,
+    expected_case_ids: list[str],
+    expected_panel: str,
+    expected_panel_digest: str,
+    expected_search: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare paired searches on one frozen panel and identical beam budget."""
+    try:
+        baseline = _panel_search_metrics(
+            baseline_report,
+            expected_case_ids=expected_case_ids,
+            expected_panel=expected_panel,
+            expected_panel_digest=expected_panel_digest,
+            expected_search=expected_search,
+        )
+        candidate = _panel_search_metrics(
+            candidate_report,
+            expected_case_ids=expected_case_ids,
+            expected_panel=expected_panel,
+            expected_panel_digest=expected_panel_digest,
+            expected_search=expected_search,
+        )
+        for case_id in expected_case_ids:
+            before = baseline["cases"][case_id]
+            after = candidate["cases"][case_id]
+            if (
+                before["dimension"] != after["dimension"]
+                or before["start_packed_rows"] != after["start_packed_rows"]
+            ):
+                raise RunError("paired quality case differs in original orientation")
+    except RunError as exc:
+        return {"status": "invalid", "reason": str(exc)}
+
+    baseline_solved = set(baseline["solved_case_ids"])
+    candidate_solved = set(candidate["solved_case_ids"])
+    if not baseline_solved:
+        status = "inconclusive"
+        reason = "baseline solved no locked test cases"
+        paired_baseline_cost = 0
+        paired_candidate_cost = 0
+    elif not baseline_solved.issubset(candidate_solved):
+        status = "failed"
+        reason = "candidate lost one or more baseline solutions"
+        paired_baseline_cost = sum(
+            baseline["cases"][case_id]["physical_cost"] for case_id in baseline_solved
+        )
+        paired_candidate_cost = sum(
+            candidate["cases"][case_id]["physical_cost"] for case_id in baseline_solved & candidate_solved
+        )
+    else:
+        paired_baseline_cost = sum(
+            baseline["cases"][case_id]["physical_cost"] for case_id in baseline_solved
+        )
+        paired_candidate_cost = sum(
+            candidate["cases"][case_id]["physical_cost"] for case_id in baseline_solved
+        )
+        if paired_candidate_cost > paired_baseline_cost:
+            status = "failed"
+            reason = "candidate increased paired physical cost"
+        else:
+            status = "passed"
+            reason = "candidate preserved baseline solves without increasing paired physical cost"
+    widths = sorted(
+        set(baseline["by_width"]) | set(candidate["by_width"]),
+        key=int,
+    )
+    return {
+        "status": status,
+        "reason": reason,
+        "panel": expected_panel,
+        "case_count": len(expected_case_ids),
+        "baseline_solved_count": baseline["solved_count"],
+        "candidate_solved_count": candidate["solved_count"],
+        "baseline_solved_rate": baseline["solved_rate"],
+        "candidate_solved_rate": candidate["solved_rate"],
+        "paired_baseline_physical_cost": paired_baseline_cost,
+        "paired_candidate_physical_cost": paired_candidate_cost,
+        "baseline_metrics": baseline,
+        "candidate_metrics": candidate,
+        "by_width": [
+            {
+                "width": int(width),
+                "baseline_case_count": baseline["by_width"].get(width, {}).get("case_count", 0),
+                "baseline_solved_count": baseline["by_width"].get(width, {}).get("solved_count", 0),
+                "candidate_case_count": candidate["by_width"].get(width, {}).get("case_count", 0),
+                "candidate_solved_count": candidate["by_width"].get(width, {}).get("solved_count", 0),
+                "solved_delta": (
+                    candidate["by_width"].get(width, {}).get("solved_count", 0)
+                    - baseline["by_width"].get(width, {}).get("solved_count", 0)
+                ),
+            }
+            for width in widths
+        ],
+    }
+
+
 def validate_training_result(
     report: object, expected_start: int, expected_end: int
 ) -> None:
@@ -640,7 +904,7 @@ class Supervisor:
             "starting", "preparing", "benchmarking", "resuming", "baseline",
             "training", "final_quality", "completed", "failed", "budget_gate", "time_limit",
         }
-        allowed_quality = {"not_ready", "measured", "passed", "failed"}
+        allowed_quality = {"not_ready", "measured", "passed", "failed", "inconclusive", "invalid"}
         if state not in allowed_states:
             state = "failed"
         if quality is not None:
@@ -838,6 +1102,7 @@ class Supervisor:
         return shutil.disk_usage("/workspace").free / float(1024 ** 3)
 
     def _build_dataset(self) -> str:
+        """Build candidate bytes and provenance before compiling Rust tools."""
         self.status("preparing")
         if self._free_gib() < INITIAL_FREE_GIB:
             raise RunError("less than 40 GiB is free before dataset construction")
@@ -866,11 +1131,43 @@ class Supervisor:
         ]
         self._run("build_frozen_dataset", build, state="preparing")
         sha_path = self.root / DATA_SHA_RELATIVE
-        if not sha_path.is_file():
-            raise RunError("frozen train dataset SHA receipt is missing")
+        if not data_path.is_file() or not sha_path.is_file() or not receipt_path.is_file():
+            raise RunError("candidate dataset or its provenance receipt is missing")
         dataset_sha = sha_path.read_text(encoding="ascii").strip()
         if len(dataset_sha) != 64 or any(c not in "0123456789abcdef" for c in dataset_sha):
-            raise RunError("frozen train dataset SHA is malformed")
+            raise RunError("frozen train dataset SHA receipt is malformed")
+        hasher = hashlib.sha256()
+        with data_path.open("rb") as candidate:
+            for chunk in iter(lambda: candidate.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        if hasher.hexdigest() != dataset_sha:
+            raise RunError("candidate dataset bytes differ from the SHA receipt")
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise RunError("candidate dataset provenance receipt is invalid") from None
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("schema") != "cnot103_dataset_rebuild_receipt_v1"
+            or receipt.get("complete") is not False
+            or receipt.get("validation_status") != "pending"
+            or receipt.get("dataset_sha256") != dataset_sha
+            or receipt.get("dataset_bytes") != data_path.stat().st_size
+            or receipt.get("holdout_sqlite_sha256") != self.holdout_sha256
+            or receipt.get("heldout_source_revision") != self.holdout_revision
+            or receipt.get("builder_source_revision") != self.source_revision
+            or not isinstance(receipt.get("heldout_source_repository"), str)
+            or not receipt["heldout_source_repository"].strip()
+            or not isinstance(receipt.get("heldout_source_filename"), str)
+            or not receipt["heldout_source_filename"].strip()
+        ):
+            raise RunError("candidate dataset provenance does not match its pinned inputs")
+        return dataset_sha
+
+    def _validate_and_seal_dataset(self, dataset_sha: str) -> None:
+        """Use the freshly built canonical Rust loader, then seal its receipt."""
+        data_path = self.root / DATA_RELATIVE
+        receipt_path = self.root / DATA_RECEIPT_RELATIVE
         self._run(
             "validate_frozen_dataset",
             [
@@ -892,8 +1189,18 @@ class Supervisor:
             ],
             state="preparing",
         )
-        return dataset_sha
-
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise RunError("sealed dataset receipt is unreadable") from None
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("complete") is not True
+            or receipt.get("validation_status") != "rust_loader_accepted"
+            or receipt.get("dataset_sha256") != dataset_sha
+            or receipt.get("dataset_bytes") != data_path.stat().st_size
+        ):
+            raise RunError("Rust-accepted dataset receipt was not sealed")
     def _build_native(self) -> None:
         self._ensure_cargo()
         self._run(
@@ -1124,10 +1431,25 @@ class Supervisor:
         name: str,
         train_manifest: pathlib.Path,
         train_result: pathlib.Path,
-        dev_indices: list[int],
+        panel: str,
+        cohort: dict[str, Any],
     ) -> pathlib.Path:
+        if panel not in {"dev", "test"}:
+            raise RunError("search manifest panel is invalid")
+        indices = cohort.get("indices")
+        case_ids = cohort.get("case_ids")
+        panel_digest = cohort.get("digest")
+        if (
+            not isinstance(indices, list) or not indices
+            or any(type(index) is not int or index < 0 for index in indices)
+            or not isinstance(case_ids, list) or len(case_ids) != len(indices)
+            or any(not isinstance(case_id, str) or not case_id for case_id in case_ids)
+            or len(case_ids) != len(set(case_ids))
+            or panel_digest != _panel_digest(panel, indices, case_ids)
+        ):
+            raise RunError("search manifest cohort is malformed")
         value = {
-            "schema": "cnot103_dev_search_v1",
+            "schema": "cnot103_panel_search_v2",
             "training_manifest": {
                 "path": str(train_manifest),
                 "sha256": hashlib.sha256(train_manifest.read_bytes()).hexdigest(),
@@ -1136,7 +1458,10 @@ class Supervisor:
                 "path": str(train_result),
                 "sha256": hashlib.sha256(train_result.read_bytes()).hexdigest(),
             },
-            "dev_indices": dev_indices,
+            "panel": panel,
+            "panel_indices": indices,
+            "panel_ids": case_ids,
+            "panel_digest": panel_digest,
             "search": BEAM_CONFIG,
             "head": "qhat",
         }
@@ -1148,7 +1473,8 @@ class Supervisor:
         self,
         name: str,
         manifest: pathlib.Path,
-        expected_indices: list[int],
+        cohort: dict[str, Any],
+        panel: str,
     ) -> tuple[dict[str, Any], dict[str, Any], float]:
         started = time.monotonic()
         report = self._run(
@@ -1158,13 +1484,13 @@ class Supervisor:
             json_stdout=True,
         )
         elapsed = time.monotonic() - started
-        metrics = quality_metrics(report)
-        if (
-            report.get("search") != BEAM_CONFIG
-            or report.get("head") != "qhat"
-            or [row.get("dev_index") for row in report["rows"]] != expected_indices
-        ):
-            raise RunError("holdout search did not use the identical pinned budget and rows")
+        metrics = _panel_search_metrics(
+            report,
+            expected_case_ids=cohort["case_ids"],
+            expected_panel=panel,
+            expected_panel_digest=cohort["digest"],
+            expected_search=BEAM_CONFIG,
+        )
         return report, metrics, elapsed
 
     def _check_source(self) -> None:
@@ -1199,6 +1525,17 @@ class Supervisor:
             hardware = self._hardware()
             dataset_sha = self._build_dataset()
             self._build_native()
+            self._validate_and_seal_dataset(dataset_sha)
+            data_value = json.loads((self.root / DATA_RELATIVE).read_text(encoding="utf-8"))
+            panel_cohorts = select_panel_cohorts(data_value, per_width=8)
+            _write_new_private_json(
+                self.root / "reports" / "panel-cohorts.private.json",
+                {
+                    "schema": "cnot103_locked_panel_cohorts_v1",
+                    "dataset_sha256": dataset_sha,
+                    "panels": panel_cohorts,
+                },
+            )
             self.feature_coverage_summary = self._feature_coverage(dataset_sha)
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB is free for immutable checkpoints")
@@ -1219,20 +1556,25 @@ class Supervisor:
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB remains after resume proof")
 
-            data_value = json.loads((self.root / DATA_RELATIVE).read_text(encoding="utf-8"))
-            panels = data_value.get("panels") if isinstance(data_value, dict) else None
-            dev = panels.get("dev") if isinstance(panels, dict) else None
-            dev_indices = select_dev_indices(dev, per_width=8)
-            baseline_manifest = self._search_manifest(
-                "baseline_search", resume_manifest,
+            dev_cohort = panel_cohorts["dev"]
+            test_cohort = panel_cohorts["test"]
+            baseline_dev_manifest = self._search_manifest(
+                "baseline_dev_search", resume_manifest,
                 self.root / "reports" / "resume_step_2.stdout.json",
-                dev_indices,
+                "dev", dev_cohort,
             )
-            _baseline_report, baseline_metrics, baseline_search_wall = self._search(
-                "baseline_search",
-                baseline_manifest,
-                dev_indices,
+            baseline_dev_report, baseline_dev_metrics, baseline_dev_wall = self._search(
+                "baseline_dev_search", baseline_dev_manifest, dev_cohort, "dev"
             )
+            baseline_test_manifest = self._search_manifest(
+                "baseline_test_search", resume_manifest,
+                self.root / "reports" / "resume_step_2.stdout.json",
+                "test", test_cohort,
+            )
+            baseline_test_report, baseline_test_metrics, baseline_test_wall = self._search(
+                "baseline_test_search", baseline_test_manifest, test_cohort, "test"
+            )
+            baseline_search_wall = baseline_dev_wall + baseline_test_wall
             self.status("baseline", "measured")
 
             elapsed_before_full = max(0.0, time.time() - self.started_at_epoch)
@@ -1259,18 +1601,33 @@ class Supervisor:
             full_report, full_wall = self._train(
                 "full_resume", full_manifest, 2, TARGET_ATTEMPTS, "training"
             )
-            final_manifest = self._search_manifest(
-                "final_search",
+            final_dev_manifest = self._search_manifest(
+                "final_dev_search",
                 full_manifest,
                 self.root / "reports" / "full_resume.stdout.json",
-                dev_indices,
+                "dev", dev_cohort,
             )
-            _final_search_report, final_metrics, final_search_wall = self._search(
-                "final_search",
-                final_manifest,
-                dev_indices,
+            final_dev_report, final_dev_metrics, final_dev_wall = self._search(
+                "final_dev_search", final_dev_manifest, dev_cohort, "dev"
             )
-            self.quality_status = "passed"
+            final_test_manifest = self._search_manifest(
+                "final_test_search",
+                full_manifest,
+                self.root / "reports" / "full_resume.stdout.json",
+                "test", test_cohort,
+            )
+            final_test_report, final_test_metrics, final_test_wall = self._search(
+                "final_test_search", final_test_manifest, test_cohort, "test"
+            )
+            quality_comparison = compare_quality(
+                baseline_test_report,
+                final_test_report,
+                expected_case_ids=test_cohort["case_ids"],
+                expected_panel="test",
+                expected_panel_digest=test_cohort["digest"],
+                expected_search=BEAM_CONFIG,
+            )
+            self.quality_status = quality_comparison["status"]
             total_elapsed = max(0.0, time.time() - self.started_at_epoch)
             if total_elapsed > MAX_RUNTIME_SECONDS:
                 raise TimeLimit("full run exceeded the end-to-end wall-time gate")
@@ -1307,17 +1664,24 @@ class Supervisor:
                     "resume_step_wall_seconds": resume_wall,
                     "baseline_search_wall_seconds": baseline_search_wall,
                     "full_training_wall_seconds": full_wall,
-                    "final_search_wall_seconds": final_search_wall,
+                    "baseline_dev_search_wall_seconds": baseline_dev_wall,
+                    "baseline_test_search_wall_seconds": baseline_test_wall,
+                    "final_dev_search_wall_seconds": final_dev_wall,
+                    "final_test_search_wall_seconds": final_test_wall,
                     "forecasted_full_seconds_before_training": estimated_full_seconds,
                 },
                 "quality": {
-                    "panel": "pinned dev subset stratified by width",
-                    "dev_indices": dev_indices,
+                    "cohort_receipt": "reports/panel-cohorts.private.json",
+                    "dev_cohort": dev_cohort,
+                    "locked_test_cohort": test_cohort,
                     "beam_config": BEAM_CONFIG,
                     "head": "qhat",
-                    "baseline": baseline_metrics,
-                    "final": final_metrics,
-                    "same_cases_and_budget": True,
+                    "baseline_dev": baseline_dev_metrics,
+                    "final_dev_diagnostic": final_dev_metrics,
+                    "baseline_locked_test": baseline_test_metrics,
+                    "candidate_locked_test": final_test_metrics,
+                    "paired_locked_test_comparison": quality_comparison,
+                    "same_locked_cases_and_budget": True,
                 },
                 "hardware": hardware,
                 "budget": {
@@ -1327,8 +1691,11 @@ class Supervisor:
                 },
             }
             _write_new_private_json(self.private_report_path, final_report)
-            self.status("completed", "passed")
-            return 0
+            if quality_comparison["status"] == "passed":
+                self.status("completed", "passed")
+                return 0
+            self.status("failed", quality_comparison["status"])
+            return 1
         except TimeLimit as exc:
             self._private_failure(exc)
             self.status("time_limit", self.quality_status)

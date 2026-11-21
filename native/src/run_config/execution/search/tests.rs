@@ -86,16 +86,17 @@ fn compare_dev_neighborhood_coverage_with_source_providers() {
         std::env::var_os("CNOT103_SEARCH_ORACLE_INPUT").expect("fixture search manifest"),
     );
     let search: SearchManifest = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let DevCheckpoint {
+    let PanelCheckpoint {
         field,
         receipt,
         device,
         ..
-    } = load_dev_checkpoint(
+    } = load_panel_checkpoint(
         &path,
         &search.training_manifest,
         &search.training_result,
-        &search.dev_indices,
+        &search.panel,
+        &search.panel_indices,
     )
     .unwrap();
     let mut unavailable = std::collections::BTreeMap::<String, usize>::new();

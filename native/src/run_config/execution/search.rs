@@ -1,8 +1,7 @@
-//! Read-only evaluation of explicitly selected, pre-frozen dev roots. The only
-//! arguments crossing into the beam are a matrix, trained model and work policy.
+//! Read-only evaluation of explicitly selected, pre-frozen dev or test roots.
 use super::{
     artifacts,
-    evaluation::{load_dev_checkpoint, DevCheckpoint},
+    evaluation::{load_panel_checkpoint, PanelCheckpoint},
 };
 use crate::{
     device_search::{search_neural, ActionHead, BeamConfig},
@@ -10,7 +9,7 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
 #[cfg(test)]
 mod tests;
 
@@ -20,31 +19,68 @@ struct SearchManifest {
     schema: String,
     training_manifest: PinnedArtifact,
     training_result: PinnedArtifact,
-    dev_indices: Vec<usize>,
+    panel: String,
+    panel_indices: Vec<usize>,
+    panel_ids: Vec<String>,
+    panel_digest: String,
     search: BeamConfig,
     head: ActionHead,
+}
+
+fn frozen_panel_digest(panel: &str, indices: &[usize], ids: &[String]) -> String {
+    let value = json!({"panel":panel,"indices":indices,"ids":ids});
+    artifacts::sha256(
+        &serde_json::to_vec(&value).expect("panel identity JSON serialization is infallible"),
+    )
 }
 
 pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
     let raw = fs::read(path).map_err(|e| e.to_string())?;
     let search: SearchManifest = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-    if search.schema != "cnot103_dev_search_v1" {
-        return Err("unknown dev search manifest schema".into());
+    if search.schema != "cnot103_panel_search_v2" {
+        return Err("unknown panel search manifest schema".into());
     }
-    let DevCheckpoint {
+    if !matches!(search.panel.as_str(), "dev" | "test")
+        || search.panel_indices.is_empty()
+        || search.panel_indices.len() != search.panel_ids.len()
+        || search
+            .panel_indices
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != search.panel_indices.len()
+        || search.panel_ids.iter().any(|id| id.trim().is_empty())
+        || search.panel_ids.iter().collect::<BTreeSet<_>>().len() != search.panel_ids.len()
+        || frozen_panel_digest(&search.panel, &search.panel_indices, &search.panel_ids)
+            != search.panel_digest
+    {
+        return Err("panel search manifest cohort identity is invalid".into());
+    }
+    let PanelCheckpoint {
         field,
         receipt,
         audit,
         device,
-    } = load_dev_checkpoint(
+    } = load_panel_checkpoint(
         path,
         &search.training_manifest,
         &search.training_result,
-        &search.dev_indices,
+        &search.panel,
+        &search.panel_indices,
     )?;
+    let records = match search.panel.as_str() {
+        "dev" => field.dataset.dev.records(),
+        "test" => field.dataset.test.records(),
+        _ => return Err("panel search manifest panel is invalid".into()),
+    };
     let mut rows = Vec::new();
-    for &i in &search.dev_indices {
-        let record = &field.dataset.dev.records()[i];
+    for (position, &i) in search.panel_indices.iter().enumerate() {
+        let record = records
+            .get(i)
+            .ok_or("panel search index out of range")?;
+        if record.lineage_id != search.panel_ids[position] {
+            return Err("panel search case identity differs from the sealed dataset".into());
+        }
         let root = &record.state;
         let out = search_neural(
             root,
@@ -53,22 +89,56 @@ pub fn execute_dev_search_manifest(path: &Path) -> Result<Value, String> {
             search.search,
             search.head,
         )?;
+        let solved = out.word.is_some();
+        let goal = crate::MatrixState::identity(root.dimension(), root.alphabet_id())
+            .expect("validated dimension and alphabet");
+        let end_packed_rows = if solved {
+            Some(goal.packed_rows())
+        } else {
+            None
+        };
         let word = out.word.map(|gates| {
-            let goal = crate::MatrixState::identity(root.dimension(), root.alphabet_id())
-                .expect("validated dimension and alphabet");
             json!({"control_target":gates.iter().map(|g|[g.control,g.target]).collect::<Vec<_>>(),
-                "end_packed_rows":goal.packed_rows(),"physical_cost":gates.len(),"replayed":true})
+                "physical_cost":gates.len(),"replayed":true})
         });
-        rows.push(json!({"dev_index":i,"lineage":record.lineage_id,"dimension":root.dimension(),"alphabet_id":root.alphabet_id(),
-            "start_packed_rows":root.packed_rows(),"status":out.status,"word":word,"depths":out.depths,
-            "expanded":out.expanded,"generated":out.generated,"value_evaluations":out.value_evaluations,"action_evaluations":out.action_evaluations,
-            "value_slots":out.value_slots,"action_slots":out.action_slots}));
+        rows.push(json!({
+            "panel_index":i,
+            "case_id":record.lineage_id,
+            "dimension":root.dimension(),
+            "width":root.dimension(),
+            "alphabet_id":root.alphabet_id(),
+            "start_packed_rows":root.packed_rows(),
+            "end_packed_rows":end_packed_rows,
+            "status":out.status,
+            "word":word,
+            "depths":out.depths,
+            "expanded":out.expanded,
+            "generated":out.generated,
+            "value_evaluations":out.value_evaluations,
+            "action_evaluations":out.action_evaluations,
+            "value_slots":out.value_slots,
+            "action_slots":out.action_slots
+        }));
     }
-    Ok(
-        json!({"schema":"cnot103_dev_search_result_v1","search_manifest_sha256":artifacts::sha256(&raw),
-        "training_manifest_sha256":search.training_manifest.sha256,"training_result_sha256":search.training_result.sha256,"checkpoint":receipt,
-        "panel":"dev","dataset_sha256":field.dataset.sha256,"objective_sha256":field.objective.config_sha256(),"feature_registry_sha256":field.registry.contract_sha256(),
-        "training_exposure_audit":audit,"feature_model_inputs":field.selected_count,"feature_policy_id":field.objective.feature_policy().id().map_err(|e|e.to_string())?,"cuda_device":device,
-        "search":search.search,"head":search.head,"rows":rows}),
-    )
+    Ok(json!({
+        "schema":"cnot103_panel_search_result_v2",
+        "search_manifest_sha256":artifacts::sha256(&raw),
+        "training_manifest_sha256":search.training_manifest.sha256,
+        "training_result_sha256":search.training_result.sha256,
+        "checkpoint":receipt,
+        "panel":search.panel,
+        "panel_indices":search.panel_indices,
+        "panel_ids":search.panel_ids,
+        "panel_digest":search.panel_digest,
+        "dataset_sha256":field.dataset.sha256,
+        "objective_sha256":field.objective.config_sha256(),
+        "feature_registry_sha256":field.registry.contract_sha256(),
+        "training_exposure_audit":audit,
+        "feature_model_inputs":field.selected_count,
+        "feature_policy_id":field.objective.feature_policy().id().map_err(|e|e.to_string())?,
+        "cuda_device":device,
+        "search":search.search,
+        "head":search.head,
+        "rows":rows
+    }))
 }

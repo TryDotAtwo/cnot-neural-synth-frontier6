@@ -281,12 +281,14 @@ class QualityComparisonTests(unittest.TestCase):
     @staticmethod
     def solved(case_id, cost):
         identity = [1, 2, 4]
-        gates = [[0, 1] for _ in range(cost)]
+        base_gate = [0, 1] if case_id.endswith("a") else [0, 2]
+        gates = [base_gate.copy() for _ in range(cost)]
         start = identity.copy()
-        for _control, _target in reversed(gates):
-            start[0] ^= start[1]
+        start[base_gate[1]] ^= start[base_gate[0]]
         return {
             "case_id": case_id,
+            "dimension": 3,
+            "width": 3,
             "status": "solved",
             "start_packed_rows": start,
             "end_packed_rows": identity,
@@ -301,8 +303,10 @@ class QualityComparisonTests(unittest.TestCase):
     def unsolved(case_id):
         return {
             "case_id": case_id,
+            "dimension": 3,
+            "width": 3,
             "status": "depth_limit",
-            "start_packed_rows": [3, 2, 4],
+            "start_packed_rows": [1, 3, 4] if case_id.endswith("a") else [1, 2, 5],
             "end_packed_rows": None,
             "word": None,
         }
@@ -328,17 +332,18 @@ class QualityComparisonTests(unittest.TestCase):
             self.report(candidate_rows, search=candidate_search),
             expected_case_ids=["case-a", "case-b"],
             expected_panel="test",
+            expected_panel_digest="a" * 64,
             expected_search=training.BEAM_CONFIG,
         )
 
     def test_valid_candidate_passes_and_rows_are_paired_by_case_id(self):
         result = self.compare(
-            [self.solved("case-a", 2), self.unsolved("case-b")],
+            [self.solved("case-a", 3), self.unsolved("case-b")],
             [self.solved("case-b", 1), self.solved("case-a", 1)],
         )
         self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["baseline_solved"], 1)
-        self.assertEqual(result["candidate_solved"], 2)
+        self.assertEqual(result["baseline_solved_count"], 1)
+        self.assertEqual(result["candidate_solved_count"], 2)
 
     def test_valid_but_worse_candidate_fails(self):
         result = self.compare(
@@ -357,7 +362,7 @@ class QualityComparisonTests(unittest.TestCase):
     def test_same_solved_count_on_different_cases_fails(self):
         result = self.compare(
             [self.solved("case-a", 2), self.unsolved("case-b")],
-            [self.unsolved("case-a"), self.solved("case-b", 2)],
+            [self.unsolved("case-a"), self.solved("case-b", 3)],
         )
         self.assertEqual(result["status"], "failed")
 
@@ -448,8 +453,18 @@ class CleanBootstrapTests(unittest.TestCase):
                 digest = hashlib.sha256(data_path.read_bytes()).hexdigest()
                 (root / training.DATA_SHA_RELATIVE).write_text(digest + "\n", encoding="ascii")
                 (root / training.DATA_RECEIPT_RELATIVE).write_text(
-                    json.dumps({"complete": False, "validation_status": "pending",
-                                "dataset_sha256": digest}),
+                    json.dumps({
+                    "schema": "cnot103_dataset_rebuild_receipt_v1",
+                    "complete": False,
+                    "validation_status": "pending",
+                    "dataset_sha256": digest,
+                    "dataset_bytes": len(b"tiny-candidate"),
+                    "holdout_sqlite_sha256": "c" * 64,
+                    "heldout_source_revision": "b" * 40,
+                    "builder_source_revision": "a" * 40,
+                    "heldout_source_repository": "TryDotAtwo/cnot-neural-synth-frontier6",
+                    "heldout_source_filename": "synthetic.sqlite",
+                }),
                     encoding="utf-8",
                 )
             elif name == "cargo_release_build":
