@@ -7,6 +7,8 @@ from run_full_training import (
     validate_training_result,
     validate_feature_coverage,
     validate_feature_coverage_preflight,
+    estimate_full_run_seconds,
+    forecast_approval_matches,
 )
 
 
@@ -239,6 +241,34 @@ class FeatureCoverageTests(unittest.TestCase):
                 expected_profile_sha256="c" * 64,
                 expected_profile_context_widths={"labeled_cuts": [10]},
             )
+
+class ForecastGateTests(unittest.TestCase):
+    def test_runtime_forecast_reserves_the_final_equal_budget_search(self):
+        estimate = estimate_full_run_seconds(
+            elapsed_before_full=100.0,
+            setup_seconds=2.0,
+            update_seconds=0.5,
+            remaining_updates=10,
+            checkpoint_reserve_seconds=3.0,
+            baseline_search_seconds=11.0,
+            final_search_reserve_seconds=11.0,
+            forecast_safety_seconds=5.0,
+        )
+        self.assertEqual(estimate, 137.0)
+
+    def test_forecast_approval_must_match_run_token_and_estimate(self):
+        approval = {
+            "schema": "cnot103_full_training_forecast_approval_v1",
+            "authorized": True,
+            "forecast_token": "a" * 32,
+            "forecast_total_seconds": 1234.0,
+        }
+        self.assertTrue(forecast_approval_matches(approval, "a" * 32, 1234.0))
+        self.assertFalse(forecast_approval_matches(approval, "b" * 32, 1234.0))
+        self.assertFalse(forecast_approval_matches(approval, "a" * 32, 1235.0))
+        approval["authorized"] = False
+        self.assertFalse(forecast_approval_matches(approval, "a" * 32, 1234.0))
+
 
 if __name__ == "__main__":
     unittest.main()

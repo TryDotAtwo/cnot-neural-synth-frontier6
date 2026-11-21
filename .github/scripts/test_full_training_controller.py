@@ -27,6 +27,16 @@ class FullTrainingBudgetTests(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertFalse(full_run_budget_allows(*values))
 
+    def test_bounded_pilot_budget_can_fit_when_full_run_projection_does_not(self):
+        spent = 5.0
+        rate = 0.30
+        storage = 0.06
+
+        self.assertFalse(full_run_budget_allows(spent, rate, storage))
+        self.assertTrue(controller.bootstrap_budget_allows(spent, rate, storage))
+        self.assertFalse(controller.bootstrap_budget_allows(19.0, rate, storage))
+
+
     def test_summary_exports_status_and_cleanup_flag_to_github_step_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
@@ -358,6 +368,25 @@ class FullRunBudgetDiagnosisTests(unittest.TestCase):
         self.assertEqual(
             controller.classify_full_run_budget(row, [row], spent=0.0),
             "inputs_unknown",
+        )
+
+
+    def test_budget_diagnostic_exposes_separate_bootstrap_and_full_run_gates(self):
+        row = self.target()
+        with (
+            patch.object(controller, "_marker", return_value={
+                "resume_existing_label": row["label"],
+            }),
+            patch.object(controller.base, "instance_rows", return_value=[row]),
+            patch.object(controller.base, "project_charges", return_value=5.0),
+            patch.object(controller, "_other_storage_reserve", return_value=0.0),
+            patch.object(controller, "_summarize_budget") as summarize,
+        ):
+            self.assertEqual(controller.budget_check(), 0)
+
+        self.assertEqual(
+            summarize.call_args.args[2:],
+            ("insufficient_remaining_budget", "within_cap"),
         )
 
 
