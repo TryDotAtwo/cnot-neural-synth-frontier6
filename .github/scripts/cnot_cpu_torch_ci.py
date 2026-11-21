@@ -35,22 +35,42 @@ def _target_matches(target: dict[str, Any], target_name: str | None, artifact_ki
     raise ValueError("unknown artifact kind")
 
 
-def discover_test_executable(artifact_dir: str | pathlib.Path, prefix: str) -> str | None:
-    """Find one Cargo test harness when JSON omits its executable field."""
+def discover_test_executable(
+    artifact_dir: str | pathlib.Path,
+    expected_tests: list[str],
+    prefix: str | None = None,
+) -> str | None:
+    """Find the unique executable that actually exposes the expected named tests."""
     root = pathlib.Path(artifact_dir)
     try:
         candidates = [
-            path for path in root.iterdir()
+            path for path in root.rglob("*")
             if path.is_file()
-            and path.name.startswith(prefix)
             and not path.suffix
+            and (prefix is None or path.name.startswith(prefix))
             and os.access(path, os.X_OK)
         ]
     except OSError:
         return None
-    candidates.sort()
-    return str(candidates[0]) if len(candidates) == 1 else None
-
+    matches: list[pathlib.Path] = []
+    for path in sorted(candidates):
+        try:
+            listing = subprocess.run(
+                [str(path), "--list"], capture_output=True, text=True, timeout=10, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if listing.returncode != 0:
+            continue
+        available = {
+            line.rsplit(": ", 1)[0]
+            for line in listing.stdout.splitlines()
+            if line.endswith(": test")
+        }
+        if expected_tests and not set(expected_tests).issubset(available):
+            continue
+        matches.append(path)
+    return str(matches[0]) if len(matches) == 1 else None
 
 def _area_for_span(span: dict[str, Any]) -> str:
     filename = str(span.get("file_name", "")).replace("\\\\", "/").lower()
@@ -335,9 +355,13 @@ def command_compile(args: argparse.Namespace) -> int:
     if (
         evidence["status"] == "compile_failed_artifact_missing"
         and args.artifact_dir
-        and args.artifact_prefix
+        and (args.expected_test or args.artifact_prefix)
     ):
-        executable = discover_test_executable(args.artifact_dir, args.artifact_prefix)
+        executable = discover_test_executable(
+            args.artifact_dir,
+            args.expected_test or [],
+            args.artifact_prefix,
+        )
         if executable is not None:
             evidence = {
                 "status": "compiled",
@@ -399,6 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--binary-file", required=True)
     compile_parser.add_argument("--artifact-dir")
     compile_parser.add_argument("--artifact-prefix")
+    compile_parser.add_argument("--expected-test", nargs="+", default=[])
     compile_parser.add_argument("--output", default=os.environ.get("GITHUB_OUTPUT"))
     compile_parser.set_defaults(run=command_compile)
 

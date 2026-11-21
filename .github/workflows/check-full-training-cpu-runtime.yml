@@ -74,7 +74,7 @@ jobs:
             --cargo-json "$cargo_json" --cargo-exit "$cargo_status" \
             --artifact-kind lib_test --binary-file "$binary_file" \
             --artifact-dir "$RUNNER_TEMP/cnot103-torch-target/debug/deps" \
-            --artifact-prefix cnot103_native- --output "$GITHUB_OUTPUT"
+            --artifact-prefix cnot103_native- --expected-test device_search::runtime::tests::v13_budget_is_charged_before_nearest_and_identity_depth_rules_hold --output "$GITHUB_OUTPUT"
 
       - name: Run the named v13 runtime regressions on CPU tensors
         id: v13

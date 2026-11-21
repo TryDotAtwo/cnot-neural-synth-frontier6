@@ -7,28 +7,30 @@ from cnot_cpu_torch_ci import compile_evidence, discover_test_executable, gate_r
 
 
 class CpuTorchCiTests(unittest.TestCase):
-    def test_fallback_finds_one_executable_test_harness(self):
+    def test_fallback_finds_harness_by_its_named_test(self):
         with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "cnot103_native-abc123"
-            target.write_bytes(b"test harness")
+            target = Path(directory) / "opaque-harness"
+            target.write_text("#!/usr/bin/env python3\nprint('named_case: test')\n", encoding="utf-8")
             target.chmod(0o755)
             self.assertEqual(
-                discover_test_executable(directory, "cnot103_native-"),
+                discover_test_executable(directory, ["named_case"]),
                 str(target),
             )
 
-    def test_fallback_rejects_ambiguous_test_harnesses(self):
+    def test_fallback_rejects_ambiguous_harnesses_for_the_same_test(self):
         with tempfile.TemporaryDirectory() as directory:
-            paths = [
-                Path(directory) / "cnot103_native-abc123",
-                Path(directory) / "cnot103_native-def456",
-            ]
+            paths = [Path(directory) / "opaque-a", Path(directory) / "opaque-b"]
             for target in paths:
-                target.write_bytes(b"test harness")
+                target.write_text("#!/usr/bin/env python3\nprint('named_case: test')\n", encoding="utf-8")
                 target.chmod(0o755)
-            self.assertIsNone(
-                discover_test_executable(directory, "cnot103_native-")
-            )
+            self.assertIsNone(discover_test_executable(directory, ["named_case"]))
+
+    def test_fallback_ignores_executables_without_the_expected_test(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "unrelated-harness"
+            target.write_text("#!/usr/bin/env python3\nprint('other_case: test')\n", encoding="utf-8")
+            target.chmod(0o755)
+            self.assertIsNone(discover_test_executable(directory, ["named_case"]))
 
     def test_compile_receipt_requires_the_expected_executable_artifact(self):
         messages = [
