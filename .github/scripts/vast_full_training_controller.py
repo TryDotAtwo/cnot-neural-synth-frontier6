@@ -960,7 +960,7 @@ def cleanup() -> int:
         if session is not None:
             session.close()
     _summarize(checked, outcome, status)
-    return 0 if outcome == "accepted" else 1
+    return 0 if outcome in {"accepted", "not_needed"} else 1
 
 def _summarize(
     checked: str,
