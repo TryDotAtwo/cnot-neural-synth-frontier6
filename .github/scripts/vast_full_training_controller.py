@@ -493,7 +493,7 @@ def classify_full_run_budget(row: object, rows: object, spent: object) -> str:
     if full_run_budget_allows(
         0.0, rate, storage_monthly, extra_storage_reserve=extra
     ):
-        return "prior_spend_exceeds_cap"
+        return "insufficient_remaining_budget"
     return "run_projection_exceeds_cap"
 
 
@@ -1003,7 +1003,7 @@ def _summarize(
 
 def _summarize_budget(checked: str, outcome: str, budget_status: str) -> None:
     allowed_statuses = {
-        "within_cap", "prior_spend_exceeds_cap", "run_projection_exceeds_cap",
+        "within_cap", "insufficient_remaining_budget", "run_projection_exceeds_cap",
         "inputs_unknown", "target_missing", "target_ambiguous", "target_mismatch",
         "unavailable",
     }
