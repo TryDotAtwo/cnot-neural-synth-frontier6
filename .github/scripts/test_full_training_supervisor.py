@@ -1020,8 +1020,8 @@ class MeasurementCurveTests(unittest.TestCase):
     @staticmethod
     def valid_spec():
         return {
-            "schema": "cnot103_measurement_experiment_v2",
-            "experiment_id": "learning-curve-complete-dev-v2",
+            "schema": "cnot103_measurement_experiment_v3",
+            "experiment_id": "learning-curve-complete-dev-v3",
             "bindings": {
                 "source": "workflow_head_sha",
                 "dataset": "sealed_dataset_sha256",
@@ -1040,6 +1040,11 @@ class MeasurementCurveTests(unittest.TestCase):
                 "input_slots": 102,
                 "batch_size": 4,
                 "feature_schema": "runtime_packet_layout_v25",
+            },
+            "speed_pilot": {
+                "attempt_cap": 32,
+                "mode": "independent_discard_only",
+                "requires_all_updates_accepted": True,
             },
             "training": {
                 "seed": 202611200001,
@@ -1066,8 +1071,9 @@ class MeasurementCurveTests(unittest.TestCase):
         loader = getattr(training, "load_measurement_spec", None)
         self.assertTrue(callable(loader), "measurement spec loader is missing")
         spec = loader()
-        self.assertEqual(spec["schema"], "cnot103_measurement_experiment_v2")
-        self.assertEqual(spec["experiment_id"], "learning-curve-complete-dev-v2")
+        self.assertEqual(spec["schema"], "cnot103_measurement_experiment_v3")
+        self.assertEqual(spec["experiment_id"], "learning-curve-complete-dev-v3")
+        self.assertEqual(spec["speed_pilot"]["attempt_cap"], 32)
         self.assertEqual(spec["splits"]["locked_test"], "after_complete_dev_sweep")
         historical_spec = (
             pathlib.Path(__file__).resolve().parents[1]
@@ -1077,6 +1083,11 @@ class MeasurementCurveTests(unittest.TestCase):
         self.assertEqual(
             json.loads(historical_spec.read_text(encoding="utf-8"))["schema"],
             "cnot103_measurement_experiment_v1",
+        )
+        preserved_v2 = historical_spec.with_name("learning-curve-complete-dev-v2.json")
+        self.assertEqual(
+            json.loads(preserved_v2.read_text(encoding="utf-8"))["schema"],
+            "cnot103_measurement_experiment_v2",
         )
         self.assertEqual(spec["training"]["max_attempts"], 512)
         self.assertEqual(spec["training"]["accepted_milestones"], [8, 32, 128, 512])
@@ -1101,6 +1112,10 @@ class MeasurementCurveTests(unittest.TestCase):
         over_spend["resource_limits"]["max_total_usd"] = 20.01
         with self.assertRaises(RunError):
             validate(over_spend)
+        wrong_pilot = self.valid_spec()
+        wrong_pilot["speed_pilot"]["attempt_cap"] = 500
+        with self.assertRaises(RunError):
+            validate(wrong_pilot)
 
     def test_training_progress_delta_reports_attempts_accepts_rejects_and_examples(self):
         delta = getattr(training, "training_progress_delta", None)
@@ -1118,6 +1133,84 @@ class MeasurementCurveTests(unittest.TestCase):
             "accepted_examples": 20,
             "rejected_examples": 4,
         })
+
+    def test_training_progress_delta_uses_observed_examples_for_a_tail_batch(self):
+        delta = training.training_progress_delta(
+            {
+                "attempted": 0, "accepted": 0, "rejected": 0,
+                "examples_seen": 0, "accepted_examples": 0, "rejected_examples": 0,
+            },
+            {
+                "attempted": 2, "accepted": 2, "rejected": 0,
+                "examples_seen": 5, "accepted_examples": 5, "rejected_examples": 0,
+            },
+            batch_size=4,
+        )
+        self.assertEqual(delta["attempted_updates"], 2)
+        self.assertEqual(delta["examples_seen"], 5)
+        self.assertEqual(delta["accepted_examples"], 5)
+
+    def test_malformed_measurement_spec_stops_before_dataset_or_optimizer_bootstrap(self):
+        supervisor = Supervisor.__new__(Supervisor)
+        supervisor.source = pathlib.Path("unused-source")
+        supervisor.status = unittest.mock.Mock()
+        supervisor._private_failure = unittest.mock.Mock()
+        supervisor._check_source = unittest.mock.Mock()
+        supervisor._build_dataset = unittest.mock.Mock()
+        supervisor._build_cpu_native = unittest.mock.Mock()
+        supervisor._build_native = unittest.mock.Mock()
+        supervisor._benchmark = unittest.mock.Mock()
+        supervisor._hardware = unittest.mock.Mock()
+        with patch.object(training, "load_measurement_spec", side_effect=RunError("bad spec")):
+            result = supervisor.run()
+        self.assertEqual(result, 1)
+        supervisor._check_source.assert_called_once_with()
+        supervisor._build_dataset.assert_not_called()
+        supervisor._build_cpu_native.assert_not_called()
+        supervisor._build_native.assert_not_called()
+        supervisor._benchmark.assert_not_called()
+        supervisor._hardware.assert_not_called()
+        supervisor._private_failure.assert_called_once()
+
+    def test_rejected_update_writes_rereadable_partial_receipt_and_withholds_test(self):
+        saved = []
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "partial.json"
+
+            def persist_partial(receipt):
+                path.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+                saved.append(receipt)
+
+            locked_test_calls = []
+            result = training.run_measurement_sweep(
+                [4],
+                initial_progress={"attempted": 0, "accepted": 0, "rejected": 0},
+                max_attempts=4,
+                train_to=lambda milestone, start: {
+                    "start_progress": start,
+                    "end_progress": {"attempted": 4, "accepted": 3, "rejected": 1},
+                    "checkpoint": {"sha256": "b" * 64},
+                    "training_wall_seconds": 1.0,
+                },
+                search_dev=lambda _report: {"wall_seconds": 0.1},
+                compare_dev=lambda _report, _dev: {"status": "tie"},
+                persist_receipt=lambda _receipt: self.fail("incomplete milestone must not persist as complete"),
+                locked_test=lambda selected: locked_test_calls.append(selected),
+                initial_checkpoint={"sha256": "a" * 64, "path": "checkpoints/step-000000.json"},
+                persist_partial_receipt=persist_partial,
+            )
+            reread = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "partial")
+        self.assertIsNone(result["locked_test"])
+        self.assertEqual(locked_test_calls, [])
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(reread["schema"], "cnot103_learning_curve_partial_v1")
+        self.assertEqual(reread["failed_stage"], "training_incomplete")
+        self.assertEqual(reread["last_valid_progress"], {"attempted": 0, "accepted": 0, "rejected": 0})
+        self.assertEqual(reread["last_valid_checkpoint"]["sha256"], "a" * 64)
+        self.assertEqual(reread["observed_progress"], {"attempted": 4, "accepted": 3, "rejected": 1})
+
+
 
     def test_all_dev_checkpoints_run_before_one_locked_test_and_keep_first_gain(self):
         sweep = getattr(training, "run_measurement_sweep", None)
