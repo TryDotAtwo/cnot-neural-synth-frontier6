@@ -899,6 +899,11 @@ class CleanBootstrapTests(unittest.TestCase):
         root = parent / "run"
         source = root / "source"
         source.mkdir(parents=True)
+        source_spec = source / training.MEASUREMENT_SPEC_RELATIVE
+        source_spec.parent.mkdir(parents=True)
+        source_spec.write_text(
+            json.dumps(training.load_measurement_spec()), encoding="utf-8"
+        )
         real_resolve = pathlib.Path.resolve
 
         def map_workspace(path, *args, **kwargs):
