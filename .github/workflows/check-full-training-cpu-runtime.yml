@@ -1,6 +1,15 @@
 name: CNOT compiled CPU runtime, resume, and profile parser
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+    outputs:
+      checked_sha:
+        description: Exact source commit checked by this reusable workflow
+        value: ${{ jobs.cpu-torch.outputs.checked_sha }}
   push:
     branches:
       - codex/full-feature-train-workflow
@@ -19,6 +28,8 @@ permissions:
 
 jobs:
   cpu-torch:
+    outputs:
+      checked_sha: ${{ steps.source_revision.outputs.checked_sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -27,6 +38,21 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+      - name: Verify the checked-out source commit
+        id: source_revision
+        env:
+          EXPECTED_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          echo "checked_sha=$actual_sha" >> "$GITHUB_OUTPUT"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo 'source_revision=stale'
+            exit 1
+          fi
+          echo 'source_revision=matched'
 
       - name: Set up Python
         uses: actions/setup-python@v5

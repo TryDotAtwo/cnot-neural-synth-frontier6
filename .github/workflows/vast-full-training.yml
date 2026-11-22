@@ -16,47 +16,59 @@ permissions:
   contents: read
 
 jobs:
+  source_manifest:
+    name: Required full-training manifest checks
+    uses: ./.github/workflows/check-full-training-manifest.yml
+    with:
+      source_sha: ${{ github.sha }}
+
+  source_cpu_runtime:
+    name: Required CPU runtime, resume and profile checks
+    uses: ./.github/workflows/check-full-training-cpu-runtime.yml
+    with:
+      source_sha: ${{ github.sha }}
+
+  source_cuda_build:
+    name: Required native CUDA build and link
+    uses: ./.github/workflows/check-full-training-cuda-build.yml
+    with:
+      source_sha: ${{ github.sha }}
+
   source_preflight:
+    name: Gate all exact-source checks
+    needs: [source_manifest, source_cpu_runtime, source_cuda_build]
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
+    outputs:
+      status: ${{ steps.gate.outputs.status }}
     steps:
-      - name: Wait for source checks on this exact revision
+      - name: Check out this run's source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require three successful checks for the same source SHA
+        id: gate
         env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ github.sha }}
-          TARGET_BRANCH: ${{ github.ref_name }}
+          EXPECTED_SHA: ${{ github.sha }}
+          MANIFEST_RESULT: ${{ needs.source_manifest.result }}
+          MANIFEST_SHA: ${{ needs.source_manifest.outputs.checked_sha }}
+          CPU_RUNTIME_RESULT: ${{ needs.source_cpu_runtime.result }}
+          CPU_RUNTIME_SHA: ${{ needs.source_cpu_runtime.outputs.checked_sha }}
+          CUDA_BUILD_RESULT: ${{ needs.source_cuda_build.result }}
+          CUDA_BUILD_SHA: ${{ needs.source_cuda_build.outputs.checked_sha }}
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 1200))
-          while (( SECONDS < deadline )); do
-            if ! run_info="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/check-full-training-manifest.yml/runs" \
-              -f head_sha="$TARGET_SHA" \
-              -f branch="$TARGET_BRANCH" \
-              -F per_page=10 \
-              --jq '[.workflow_runs[]? | select(.head_sha == env.TARGET_SHA) | {status, conclusion}] | first // empty' \
-              2>/dev/null)"; then
-              echo "source_validation=unavailable"
-              exit 1
-            fi
-            if [[ -n "$run_info" ]]; then
-              run_status="$(jq -r '.status // empty' <<<"$run_info")"
-              conclusion="$(jq -r '.conclusion // empty' <<<"$run_info")"
-              if [[ "$run_status" == "completed" ]]; then
-                if [[ "$conclusion" == "success" ]]; then
-                  echo "source_validation=passed"
-                  exit 0
-                fi
-                echo "source_validation=failed"
-                exit 1
-              fi
-            fi
-            sleep 15
-          done
-          echo "source_validation=timeout"
-          exit 1
+          python3 .github/scripts/full_training_source_gate.py \
+            --expected-sha "$EXPECTED_SHA" \
+            --manifest-result "$MANIFEST_RESULT" --manifest-sha "$MANIFEST_SHA" \
+            --cpu-runtime-result "$CPU_RUNTIME_RESULT" --cpu-runtime-sha "$CPU_RUNTIME_SHA" \
+            --cuda-build-result "$CUDA_BUILD_RESULT" --cuda-build-sha "$CUDA_BUILD_SHA" \
+            --output "$GITHUB_OUTPUT"
 
   start:
     needs: source_preflight
+    if: ${{ needs.source_preflight.outputs.status == 'passed' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
