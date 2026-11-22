@@ -28,13 +28,44 @@ class FullTrainingSupervisorTests(unittest.TestCase):
             root = pathlib.Path(temp)
             manifests = root / "manifests"
             reports = root / "reports"
+            data = root / "data"
             manifests.mkdir()
             reports.mkdir()
-            training_manifest = manifests / "training.json"
-            training_manifest.write_text('{"schema":"test"}', encoding="utf-8")
+            data.mkdir()
 
             checkpoint_sha = "a" * 64
-            dataset_sha = "d" * 64
+            indices = [3, 9]
+            case_ids = ["test-case-a", "test-case-b"]
+            records = [
+                {
+                    "lineage_id": (
+                        case_ids[0] if index == indices[0]
+                        else case_ids[1] if index == indices[1]
+                        else f"other-{index}"
+                    ),
+                    "state": {
+                        "n": 2,
+                        "alphabet_id": "all_to_all_unit_cnot:2",
+                        "packed_rows": [1, 3] if index == 3 else [3, 2] if index == 9 else [1, 2],
+                    },
+                }
+                for index in range(10)
+            ]
+            dataset_path = data / "frozen.json"
+            dataset_path.write_text(
+                json.dumps({"schema": "synthetic", "panels": {"test": records}}, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            dataset_sha = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
+            training_manifest = manifests / "training.json"
+            training_manifest.write_text(
+                json.dumps({
+                    "schema": "cnot103_training_run_v1",
+                    "dataset": {"path": str(dataset_path), "sha256": dataset_sha},
+                }, sort_keys=True),
+                encoding="utf-8",
+            )
+
             training_result = reports / "training-result.json"
             training_result.write_text(
                 json.dumps({
@@ -44,11 +75,9 @@ class FullTrainingSupervisorTests(unittest.TestCase):
                     "model_parameters": training.MODEL_PARAMETERS,
                     "feature_model_inputs": training.MODEL_INPUTS,
                     "dataset_sha256": dataset_sha,
-                }),
+                }, sort_keys=True),
                 encoding="utf-8",
             )
-            indices = [3, 9]
-            case_ids = ["test-case-a", "test-case-b"]
             panel_digest = training._panel_digest("test", indices, case_ids)
             search = dict(training.BEAM_CONFIG)
             search_manifest = manifests / "locked-test-search.json"
@@ -69,10 +98,78 @@ class FullTrainingSupervisorTests(unittest.TestCase):
                     "panel_digest": panel_digest,
                     "search": search,
                     "head": "qhat",
-                }),
+                }, sort_keys=True),
                 encoding="utf-8",
             )
 
+            roots = []
+            for index, case_id in zip(indices, case_ids):
+                dimension, alphabet_id, packed_rows = training._packed_state_rows(
+                    records[index]["state"]
+                )
+                roots.append({
+                    "panel_index": index,
+                    "case_id": case_id,
+                    "dimension": dimension,
+                    "alphabet_id": alphabet_id,
+                    "start_packed_rows": packed_rows,
+                })
+            baseline_search_manifest = manifests / "baseline-test-hamming.json"
+            baseline_search_manifest.write_text(
+                json.dumps({
+                    "schema": "cnot103_hamming_search_v1",
+                    "source_revision": "e" * 40,
+                    "dataset": {"path": str(dataset_path), "sha256": dataset_sha},
+                    "panel": "test",
+                    "panel_indices": indices,
+                    "panel_ids": case_ids,
+                    "panel_roots": roots,
+                    "panel_digest": panel_digest,
+                    "runtime_contract": "native_device_search_v13",
+                    "search": search,
+                }, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            training_manifest_sha = hashlib.sha256(training_manifest.read_bytes()).hexdigest()
+            training_result_sha = hashlib.sha256(training_result.read_bytes()).hexdigest()
+            candidate_search_sha = hashlib.sha256(search_manifest.read_bytes()).hexdigest()
+            baseline_search_sha = hashlib.sha256(baseline_search_manifest.read_bytes()).hexdigest()
+            common_metrics = {
+                "case_count": len(indices),
+                "panel_indices": indices,
+                "panel_ids": case_ids,
+                "panel_digest": panel_digest,
+            }
+            comparison = {
+                "status": "length_gain",
+                "panel": "test",
+                "case_count": len(indices),
+                "baseline_head": "hamming",
+                "candidate_head": "qhat",
+                "baseline_metrics": {
+                    **common_metrics,
+                    "receipt_pins": {
+                        "search_manifest_sha256": baseline_search_sha,
+                        "dataset_sha256": dataset_sha,
+                        "source_revision": "e" * 40,
+                        "runtime_contract": "native_device_search_v13",
+                        "training_manifest_sha256": None,
+                        "training_result_sha256": None,
+                        "checkpoint_sha256": None,
+                    },
+                },
+                "candidate_metrics": {
+                    **common_metrics,
+                    "receipt_pins": {
+                        "search_manifest_sha256": candidate_search_sha,
+                        "dataset_sha256": dataset_sha,
+                        "training_manifest_sha256": training_manifest_sha,
+                        "training_result_sha256": training_result_sha,
+                        "checkpoint_sha256": checkpoint_sha,
+                    },
+                },
+            }
             kwargs = {
                 "root": root,
                 "source_revision": "e" * 40,
@@ -81,15 +178,17 @@ class FullTrainingSupervisorTests(unittest.TestCase):
                 "training_manifest_path": training_manifest,
                 "training_result_path": training_result,
                 "search_manifest_path": search_manifest,
+                "baseline_search_manifest_path": baseline_search_manifest,
                 "expected_panel": "test",
                 "expected_panel_indices": indices,
                 "expected_panel_ids": case_ids,
                 "expected_panel_digest": panel_digest,
                 "expected_search": search,
-                "locked_test_comparison": {"status": "length_gain"},
+                "locked_test_comparison": comparison,
             }
+
             handoff = training.build_multigpu_beam_handoff(**kwargs)
-            self.assertEqual(handoff["schema"], "cnot103_multigpu_beam_handoff_v2")
+            self.assertEqual(handoff["schema"], "cnot103_multigpu_beam_handoff_v3")
             self.assertEqual(handoff["producer_source_revision"], "e" * 40)
             self.assertRegex(handoff["producer_emitter_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(
@@ -107,13 +206,31 @@ class FullTrainingSupervisorTests(unittest.TestCase):
             self.assertEqual(handoff["locked_test_status"], "length_gain")
             self.assertEqual(
                 handoff["search_manifest"]["sha256"],
-                hashlib.sha256(search_manifest.read_bytes()).hexdigest(),
+                candidate_search_sha,
+            )
+            self.assertEqual(
+                handoff["baseline_search_manifest"]["sha256"],
+                baseline_search_sha,
             )
 
             wrong_checkpoint = dict(kwargs)
             wrong_checkpoint["checkpoint_sha256"] = "b" * 64
             with self.assertRaises(RunError):
                 training.build_multigpu_beam_handoff(**wrong_checkpoint)
+
+            malformed_baseline = json.loads(baseline_search_manifest.read_text(encoding="utf-8"))
+            malformed_baseline["panel_ids"] = list(reversed(case_ids))
+            baseline_search_manifest.write_text(
+                json.dumps(malformed_baseline, sort_keys=True), encoding="utf-8"
+            )
+            updated_comparison = json.loads(json.dumps(comparison))
+            updated_comparison["baseline_metrics"]["receipt_pins"]["search_manifest_sha256"] = (
+                hashlib.sha256(baseline_search_manifest.read_bytes()).hexdigest()
+            )
+            malformed_baseline_args = dict(kwargs)
+            malformed_baseline_args["locked_test_comparison"] = updated_comparison
+            with self.assertRaises(RunError):
+                training.build_multigpu_beam_handoff(**malformed_baseline_args)
 
             changed_search = json.loads(search_manifest.read_text(encoding="utf-8"))
             changed_search["panel_ids"] = list(reversed(case_ids))
