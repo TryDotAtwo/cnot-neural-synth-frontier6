@@ -980,6 +980,7 @@ class CleanBootstrapTests(unittest.TestCase):
             return {}, {"receipt_pins": {}}, 0.01
 
         with (
+            patch.object(training, "load_measurement_spec", return_value=training.load_measurement_spec()),
             patch.object(supervisor, "_check_source"),
             patch.object(supervisor, "_hardware", return_value={"torch_cuda_devices": 2}),
             patch.object(supervisor, "_free_gib", return_value=100.0),
