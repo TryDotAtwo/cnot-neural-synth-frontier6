@@ -282,5 +282,36 @@ class TrainingManifestTests(unittest.TestCase):
                     gpu_count=invalid_count,
                 )
 
+
+    def test_cli_self_test_accepts_one_gpu(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "single-gpu.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("build_training_manifest.py")),
+                    "--self-test",
+                    "--gpu-count",
+                    "1",
+                    "--output",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("manifest_build=pass", result.stdout)
+            manifest = json.loads(output.read_text())
+            provenance = json.loads(
+                output.with_suffix(output.suffix + ".provenance.json").read_text()
+            )
+            self.assertEqual(manifest["training"]["cuda_devices"], [0])
+            self.assertEqual(provenance["gpu_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

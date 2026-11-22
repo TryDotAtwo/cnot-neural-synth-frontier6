@@ -490,7 +490,6 @@ def main() -> int:
             if (
                 args.attempts != INVOCATION_ATTEMPTS
                 or args.target_attempts != DEFAULT_TARGET_ATTEMPTS
-                or args.gpu_count != 2
             ):
                 raise ValueError("self-test attempt arguments")
             profile = _self_test_profile()
