@@ -19,6 +19,7 @@ on:
       - '.github/training-profiles/**'
       - '.github/training-experiments/**'
       - '.github/workflows/**'
+      - '.cargo/**'
       - 'native/**'
       - Cargo.lock
       - Cargo.toml
@@ -56,15 +57,12 @@ jobs:
         id: loader_scope
         env:
           EVENT_NAME: ${{ github.event_name }}
+          SOURCE_SHA_INPUT: ${{ inputs.source_sha || '' }}
           BEFORE_SHA: ${{ github.event.before || '' }}
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            loader_required="$(python3 .github/scripts/full_training_loader_paths.py --before "$BEFORE_SHA" --after "$SOURCE_SHA")"
-          else
-            loader_required=true
-          fi
+          loader_required="$(python3 .github/scripts/full_training_loader_paths.py --source-sha-input "$SOURCE_SHA_INPUT" --event-name "$EVENT_NAME" --before "$BEFORE_SHA" --after "$SOURCE_SHA")"
           echo "loader_required=$loader_required" >> "$GITHUB_OUTPUT"
           echo "rust_loader_required=$loader_required"
 

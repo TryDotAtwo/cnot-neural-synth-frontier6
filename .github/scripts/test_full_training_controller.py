@@ -1168,14 +1168,61 @@ class StableApprovedTargetTests(unittest.TestCase):
         )
         self.assertNotIn("  source_preflight:", workflow)
         self.assertNotIn("full_training_source_gate.py", workflow)
+        job_lines = workflow.splitlines()
+        job_headers = [
+            (index, line.strip()[:-1])
+            for index, line in enumerate(job_lines)
+            if line.startswith("  ") and not line.startswith("    ") and line.endswith(":")
+        ]
+        job_blocks = {}
+        for position, (start, job_id) in enumerate(job_headers):
+            end = job_headers[position + 1][0] if position + 1 < len(job_headers) else len(job_lines)
+            job_blocks[job_id] = job_lines[start:end]
+        job_ids = set(job_blocks)
         for job, reusable in (
             ("source_manifest", "check-full-training-manifest.yml"),
             ("source_cpu_runtime", "check-full-training-cpu-runtime.yml"),
             ("source_cuda_build", "check-full-training-cuda-build.yml"),
         ):
-            block = workflow.split(f"  {job}:\n", 1)[1].split("\n  ", 1)[0]
+            block = "\n".join(job_blocks[job])
             self.assertIn(f"uses: ./.github/workflows/{reusable}", block)
             self.assertIn("source_sha: ${{ github.sha }}", block)
+        for job_id, block in job_blocks.items():
+            for line_index, line in enumerate(block):
+                if not line.startswith("    needs:"):
+                    continue
+                value = line.partition(":")[2].strip()
+                if value.startswith("[") and value.endswith("]"):
+                    needed = [item.strip() for item in value[1:-1].split(",") if item.strip()]
+                elif value:
+                    needed = [value]
+                else:
+                    needed = []
+                    for following in block[line_index + 1:]:
+                        if following.startswith("      - "):
+                            needed.append(following.strip()[2:].strip())
+                        elif following.strip() and not following.startswith("      "):
+                            break
+                self.assertTrue(set(needed).issubset(job_ids), f"{job_id} references missing needs: {needed}")
+        manifest_workflow = (
+            Path(__file__).resolve().parents[1]
+            / "workflows"
+            / "check-full-training-manifest.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("'.cargo/**'", manifest_workflow)
+        self.assertIn("SOURCE_SHA_INPUT: ${{ inputs.source_sha || '' }}", manifest_workflow)
+        self.assertIn("--source-sha-input", manifest_workflow)
+        from full_training_loader_paths import loader_validation_required_for_paths
+        self.assertFalse(
+            loader_validation_required_for_paths(
+                [".github/workflows/unrelated.yml", ".github/scripts/unrelated.py", "docs/model.md"]
+            )
+        )
+        self.assertTrue(
+            loader_validation_required_for_paths(
+                ["native/src/frozen_data.rs", "Cargo.lock", ".cargo/config.toml"]
+            )
+        )
         from full_training_loader_paths import loader_validation_required_for_paths
         self.assertFalse(
             loader_validation_required_for_paths(

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
+from pathlib import Path
 from typing import Iterable
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -30,7 +31,9 @@ def loader_validation_required_for_paths(paths: Iterable[str]) -> bool:
     return False
 
 
-def loader_validation_required_for_range(before: str, after: str) -> bool:
+def loader_validation_required_for_range(
+    before: str, after: str, *, cwd: str | Path | None = None
+) -> bool:
     """Fail closed to a full loader check when a push range cannot be inspected."""
     if not isinstance(before, str) or not isinstance(after, str):
         return True
@@ -40,22 +43,44 @@ def loader_validation_required_for_range(before: str, after: str) -> bool:
         return True
     try:
         completed = subprocess.run(
-            ["git", "diff", "--name-only", before, after],
+            ["git", "diff", "--no-renames", "--name-only", before, after],
             check=True,
             capture_output=True,
             text=True,
+            cwd=cwd,
         )
     except (OSError, subprocess.CalledProcessError):
         return True
     return loader_validation_required_for_paths(completed.stdout.splitlines())
 
 
+def loader_validation_required(
+    *,
+    source_sha_input: str,
+    event_name: str,
+    before: str,
+    after: str,
+) -> bool:
+    """Run the full check for explicit reusable/manual calls; scope only ordinary pushes."""
+    if source_sha_input or event_name != "push":
+        return True
+    return loader_validation_required_for_range(before, after)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--source-sha-input", default="")
+    parser.add_argument("--event-name", required=True)
     parser.add_argument("--before", required=True)
     parser.add_argument("--after", required=True)
     args = parser.parse_args()
-    print("true" if loader_validation_required_for_range(args.before, args.after) else "false")
+    required = loader_validation_required(
+        source_sha_input=args.source_sha_input,
+        event_name=args.event_name,
+        before=args.before,
+        after=args.after,
+    )
+    print("true" if required else "false")
     return 0
 
 
