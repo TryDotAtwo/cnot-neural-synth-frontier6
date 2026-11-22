@@ -18,18 +18,11 @@ impl RunManifest {
                 "attempts, batch_size, and checkpoint_every_attempts must be positive; target_attempts, when set, must be positive".into(),
             );
         }
-        if !self.training.cuda_devices.is_empty()
-            && (self.training.cuda_devices.len() != 2
-                || self.training.cuda_devices[0] != self.training.cuda_device
-                || self.training.cuda_devices[0] == self.training.cuda_devices[1])
-        {
-            return Err(
-                "cuda_devices must name two distinct devices, with cuda_device as the master".into(),
-            );
-        }
-        if self.training.cuda_devices.len() == 2 && self.training.batch_size < 2 {
-            return Err("two CUDA devices require batch_size of at least two".into());
-        }
+        validate_cuda_devices(
+            self.training.cuda_device,
+            &self.training.cuda_devices,
+            self.training.batch_size,
+        )?;
         if self.feature_policy.schema_id.trim().is_empty() {
             return Err("feature_policy.schema_id must be nonempty".into());
         }
@@ -117,6 +110,32 @@ impl RunManifest {
     }
 }
 
+fn validate_cuda_devices(
+    master: usize,
+    devices: &[usize],
+    batch_size: usize,
+) -> Result<(), String> {
+    if devices.is_empty() {
+        return Ok(());
+    }
+    if !matches!(devices.len(), 1 | 2)
+        || devices[0] != master
+        || devices
+            .iter()
+            .enumerate()
+            .any(|(index, device)| devices[..index].contains(device))
+    {
+        return Err(
+            "cuda_devices must name one or two distinct devices, with cuda_device as the master"
+                .into(),
+        );
+    }
+    if devices.len() == 2 && batch_size < 2 {
+        return Err("two CUDA devices require batch_size of at least two".into());
+    }
+    Ok(())
+}
+
 pub(super) fn validate_sha256(value: &str, label: &str) -> Result<(), String> {
     if value.len() != 64
         || !value
@@ -128,4 +147,24 @@ pub(super) fn validate_sha256(value: &str, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cuda_device_tests {
+    use super::validate_cuda_devices;
+
+    #[test]
+    fn accepts_single_dual_and_legacy_device_selection() {
+        assert!(validate_cuda_devices(0, &[0], 4).is_ok());
+        assert!(validate_cuda_devices(0, &[0, 1], 4).is_ok());
+        assert!(validate_cuda_devices(0, &[], 4).is_ok());
+    }
+
+    #[test]
+    fn rejects_mismatched_duplicate_oversized_and_underbatched_selections() {
+        assert!(validate_cuda_devices(0, &[1], 4).is_err());
+        assert!(validate_cuda_devices(0, &[0, 0], 4).is_err());
+        assert!(validate_cuda_devices(0, &[0, 1, 2], 4).is_err());
+        assert!(validate_cuda_devices(0, &[0, 1], 1).is_err());
+    }
 }

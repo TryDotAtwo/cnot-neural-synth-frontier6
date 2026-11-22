@@ -267,7 +267,10 @@ def build_manifest(
     resume: bool,
     attempts: int = INVOCATION_ATTEMPTS,
     target_attempts: int = DEFAULT_TARGET_ATTEMPTS,
+    gpu_count: int = 2,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if type(gpu_count) is not int or gpu_count not in (1, 2):
+        raise ValueError("GPU count must be one or two")
     contexts = validate_profile(profile)
     _validate_run_inputs(
         dataset_path, dataset_sha256, checkpoint_dir, resume, attempts, target_attempts
@@ -280,7 +283,7 @@ def build_manifest(
         "training": {
             "seed": 202611200001,
             "cuda_device": 0,
-            "cuda_devices": [0, 1],
+            "cuda_devices": list(range(gpu_count)),
             "attempts": attempts,
             "target_attempts": target_attempts,
             "batch_size": BATCH_SIZE,
@@ -341,6 +344,7 @@ def build_manifest(
         "model_input_slots": MODEL_INPUT_COUNT,
         "invocation_attempts": attempts,
         "target_attempts": target_attempts,
+        "gpu_count": gpu_count,
     }
     return manifest, provenance
 
@@ -473,6 +477,7 @@ def main() -> int:
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--attempts", type=int, default=INVOCATION_ATTEMPTS)
     parser.add_argument("--target-attempts", type=int, default=DEFAULT_TARGET_ATTEMPTS)
+    parser.add_argument("--gpu-count", type=int, choices=(1, 2), default=2)
     parser.add_argument("--output", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--self-test", action="store_true")
@@ -482,7 +487,11 @@ def main() -> int:
         if args.self_test:
             if any((args.profile, args.dataset_path, args.dataset_sha256, args.checkpoint_dir, args.resume)):
                 raise ValueError("self-test arguments")
-            if args.attempts != INVOCATION_ATTEMPTS or args.target_attempts != DEFAULT_TARGET_ATTEMPTS:
+            if (
+                args.attempts != INVOCATION_ATTEMPTS
+                or args.target_attempts != DEFAULT_TARGET_ATTEMPTS
+                or args.gpu_count != 2
+            ):
                 raise ValueError("self-test attempt arguments")
             profile = _self_test_profile()
             profile_bytes = json.dumps(profile, sort_keys=True).encode("utf-8")
@@ -518,6 +527,7 @@ def main() -> int:
             resume,
             args.attempts,
             args.target_attempts,
+            args.gpu_count,
         )
         output_path = pathlib.Path(args.output)
         provenance_path = output_path.with_suffix(output_path.suffix + ".provenance.json")

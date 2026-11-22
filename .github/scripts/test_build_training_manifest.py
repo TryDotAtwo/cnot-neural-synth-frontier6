@@ -252,5 +252,35 @@ class TrainingManifestTests(unittest.TestCase):
             self.assertEqual(json.loads(sidecar.read_text())["profile_id"], "self-test")
 
 
+    def test_one_and_two_gpu_manifests_are_explicit_and_invalid_counts_fail(self):
+        for gpu_count, expected_devices in ((1, [0]), (2, [0, 1])):
+            manifest, provenance = build_manifest(
+                self.profile,
+                self.profile_bytes,
+                "/workspace/train/frozen_train_10k.json",
+                "b" * 64,
+                "/workspace/train/checkpoints",
+                False,
+                attempts=1,
+                target_attempts=1,
+                gpu_count=gpu_count,
+            )
+            self.assertEqual(manifest["training"]["cuda_devices"], expected_devices)
+            self.assertEqual(provenance["gpu_count"], gpu_count)
+
+        for invalid_count in (0, 3, True):
+            with self.assertRaises(ValueError):
+                build_manifest(
+                    self.profile,
+                    self.profile_bytes,
+                    "/workspace/train/frozen_train_10k.json",
+                    "b" * 64,
+                    "/workspace/train/checkpoints",
+                    False,
+                    attempts=1,
+                    target_attempts=1,
+                    gpu_count=invalid_count,
+                )
+
 if __name__ == "__main__":
     unittest.main()
