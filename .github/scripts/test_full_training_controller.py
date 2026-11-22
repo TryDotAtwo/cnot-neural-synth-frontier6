@@ -498,6 +498,27 @@ class BillingProjectionTests(unittest.TestCase):
         )
         self.assertAlmostEqual(projected, 5.8)
 
+    def test_unattributed_project_charges_in_the_same_interval_still_close_budget_gate(self):
+        projected = controller.projected_billable_spend(
+            invoice_now=19.5,
+            invoice_baseline=5.0,
+            billing_baseline_epoch=1_000.0,
+            now_epoch=4_600.0,
+            instance_rate=0.20,
+            invoice_lag_buffer_seconds=0.0,
+        )
+        # The provider invoice is project-wide; spend from other resources is
+        # included conservatively when task-level attribution is unavailable.
+        self.assertEqual(projected, 19.5)
+        self.assertFalse(controller.full_run_budget_allows(
+            projected,
+            0.20,
+            0.0,
+            active_hours=3.0,
+            storage_hours=0.0,
+            extra_storage_reserve=0.0,
+        ))
+
     def test_missing_or_future_invoice_snapshot_fails_closed(self):
         self.assertIsNone(controller.projected_billable_spend(1, 1, 2_000, 1_000, 0.2))
         self.assertIsNone(controller.projected_billable_spend(None, 1, 1_000, 2_000, 0.2))
