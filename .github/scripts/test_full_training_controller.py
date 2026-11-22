@@ -1156,6 +1156,11 @@ class StableApprovedTargetTests(unittest.TestCase):
             )
         self.assertTrue("timeout-minutes: 300" in workflow)
         self.assertTrue("  finalize:\n    if: always()" in workflow)
+        self.assertNotIn("source_preflight", workflow)
+        self.assertIn(
+            "    needs:\n      - source_manifest\n      - source_cpu_runtime\n      - source_cuda_build\n      - start",
+            workflow,
+        )
         self.assertFalse("needs.start.outputs.cleanup_needed" in workflow)
         self.assertIn(
             "  start:\n    needs: [source_manifest, source_cpu_runtime, source_cuda_build]",
