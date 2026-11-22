@@ -1,7 +1,7 @@
 use cnot103_native::{
     all_feature_specs, register_general_compiler_bounds, schema::ProviderMetadata, CnotAlphabet,
     FeatureComputation, FeatureId, FeaturePolicy, FeatureProducer, FeatureRegistry, FeatureRole,
-    FeatureSpec, FeatureValue, MatrixState,
+    FeatureSpec, FeatureValue, MatrixState, FEATURE_COUNT, MODEL_INPUT_COUNT,
 };
 
 struct DynamicPairFeature(FeatureSpec);
