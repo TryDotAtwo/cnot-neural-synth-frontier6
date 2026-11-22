@@ -496,6 +496,53 @@ class ForecastGateTests(unittest.TestCase):
         )
         self.assertEqual(estimate, 126.0)
 
+    def test_delayed_forecast_approval_near_deadline_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            started = 10_000.0
+            now = started + training.MAX_RUNTIME_SECONDS - 500.0
+            snapshot = {
+                "schema": "cnot103_campaign_billing_snapshot_v1",
+                "instance_id": "123",
+                "billing_baseline_project_spend_usd": 1.0,
+                "projected_project_spend_usd": 1.1,
+                "billing_baseline_epoch": started,
+                "captured_at_epoch": now,
+                "active_rate_usd_per_hour": 0.2,
+                "post_stop_storage_reserve_usd": 0.1,
+                "other_storage_reserve_usd": 0.0,
+                "transfer_reserve_usd": 0.05,
+                "stop_poll_reserve_usd": 0.01,
+            }
+            approval = {
+                "schema": "cnot103_full_training_forecast_approval_v1",
+                "authorized": True,
+                "forecast_token": "a" * 32,
+                "forecast_total_seconds": 150_000.0,
+                "remaining_work_seconds": 100.0,
+                "authorized_at_epoch": now - 1.0,
+                "billing_snapshot": snapshot,
+            }
+            (root / "forecast-approval.private.json").write_text(
+                json.dumps(approval), encoding="utf-8"
+            )
+            supervisor = Supervisor.__new__(Supervisor)
+            supervisor.root = root
+            supervisor.started_at_epoch = started
+            supervisor.deadline = started + training.MAX_RUNTIME_SECONDS
+            supervisor.bootstrap_deadline_epoch = now + 120.0
+            supervisor.forecast_total_seconds = 150_000.0
+            supervisor.remaining_work_seconds = 100.0
+            supervisor.forecast_token = "a" * 32
+            supervisor.full_run_authorized = False
+            supervisor.billing_snapshot = None
+
+            with patch.object(training.time, "time", return_value=now):
+                with self.assertRaises(training.TimeLimit):
+                    supervisor._await_forecast_approval()
+
+            self.assertFalse(supervisor.full_run_authorized)
+
     def test_forecast_approval_must_match_run_token_and_estimate(self):
         approval = {
             "schema": "cnot103_full_training_forecast_approval_v1",
@@ -1446,6 +1493,25 @@ class MeasurementCurveTests(unittest.TestCase):
             cleanup_reserve_seconds=3.0,
         )
         self.assertEqual(remaining, 127.0)
+
+    def test_completed_hamming_baseline_is_counted_only_in_elapsed_forecast(self):
+        forecast = getattr(training, "estimate_measurement_campaign_forecast", None)
+        self.assertTrue(callable(forecast), "campaign forecast composition is missing")
+        # elapsed=111 includes 100 seconds of prior work and the completed
+        # 11-second Hamming dev baseline. Only the future locked pair is 17s.
+        remaining, campaign_total = forecast(
+            elapsed_before_forecast=111.0,
+            setup_seconds=2.0,
+            remaining_attempts=40,
+            seconds_per_attempt=2.0,
+            future_dev_evaluations=2,
+            dev_search_seconds=11.0,
+            locked_search_seconds=17.0,
+            checkpoint_reserve_seconds=5.0,
+            cleanup_reserve_seconds=3.0,
+        )
+        self.assertEqual(remaining, 131.0)
+        self.assertEqual(campaign_total, 242.0)
 
 
 if __name__ == "__main__":

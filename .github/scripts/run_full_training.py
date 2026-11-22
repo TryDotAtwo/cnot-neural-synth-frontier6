@@ -585,6 +585,52 @@ def estimate_measurement_remaining_work_seconds(
     )
 
 
+def estimate_measurement_campaign_forecast(
+    *,
+    elapsed_before_forecast: float,
+    setup_seconds: float,
+    remaining_attempts: int,
+    seconds_per_attempt: float,
+    future_dev_evaluations: int,
+    dev_search_seconds: float,
+    locked_search_seconds: float,
+    checkpoint_reserve_seconds: float,
+    cleanup_reserve_seconds: float,
+) -> tuple[float, float]:
+    """Combine prior elapsed time with only work that remains.
+
+    Completed baseline/dev work belongs in elapsed_before_forecast. This
+    function intentionally accepts no completed-search duration to prevent
+    adding it to both elapsed and remaining time.
+    """
+    if (
+        isinstance(elapsed_before_forecast, bool)
+        or not isinstance(elapsed_before_forecast, (int, float))
+        or not math.isfinite(elapsed_before_forecast)
+        or elapsed_before_forecast < 0
+        or isinstance(setup_seconds, bool)
+        or not isinstance(setup_seconds, (int, float))
+        or not math.isfinite(setup_seconds)
+        or setup_seconds < 0
+        or type(future_dev_evaluations) is not int
+        or future_dev_evaluations < 0
+    ):
+        raise RunError("learning-curve campaign forecast elapsed/setup inputs are invalid")
+    remaining = (
+        float(setup_seconds) * future_dev_evaluations
+        + estimate_measurement_remaining_work_seconds(
+            remaining_attempts=remaining_attempts,
+            seconds_per_attempt=seconds_per_attempt,
+            future_dev_evaluations=future_dev_evaluations,
+            dev_search_seconds=dev_search_seconds,
+            locked_search_seconds=locked_search_seconds,
+            checkpoint_reserve_seconds=checkpoint_reserve_seconds,
+            cleanup_reserve_seconds=cleanup_reserve_seconds,
+        )
+    )
+    return remaining, float(elapsed_before_forecast) + remaining
+
+
 def forecast_approval_matches(
     value: object,
     token: str,
@@ -2882,9 +2928,9 @@ class Supervisor:
             locked_search_reserve_seconds = (
                 estimated_locked_hamming_seconds + estimated_locked_candidate_seconds
             )
-            remaining_work_seconds = (
-                setup_seconds * len(future_milestones)
-                + estimate_measurement_remaining_work_seconds(
+            remaining_work_seconds, estimated_full_seconds = estimate_measurement_campaign_forecast(
+                elapsed_before_forecast=elapsed_before_full,
+                setup_seconds=setup_seconds,
                 remaining_attempts=remaining_updates,
                 seconds_per_attempt=update_seconds / PILOT_ATTEMPTS,
                 future_dev_evaluations=len(future_milestones),
@@ -2894,9 +2940,7 @@ class Supervisor:
                     CHECKPOINT_WRITE_RESERVE_SECONDS * len(future_milestones)
                 ),
                 cleanup_reserve_seconds=FORECAST_SAFETY_SECONDS,
-                )
             )
-            estimated_full_seconds = elapsed_before_full + remaining_work_seconds
             self.remaining_work_seconds = float(remaining_work_seconds)
             self.forecast_total_seconds = float(estimated_full_seconds)
             self.forecast_token = secrets.token_hex(16)
