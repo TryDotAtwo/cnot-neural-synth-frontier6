@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -846,6 +847,7 @@ def build_multigpu_beam_handoff(
         "schema": "cnot103_multigpu_beam_handoff_v1",
         "consumer": "MultiGPUBeamSearch",
         "producer_source_revision": source_revision,
+        "producer_emitter_sha256": multigpu_handoff_emitter_sha256(),
         "accepted_updates": accepted_updates,
         "checkpoint_sha256": checkpoint_sha256,
         "model": {
@@ -867,6 +869,15 @@ def build_multigpu_beam_handoff(
         "locked_test_status": locked_test_comparison["status"],
         "locked_test_comparison_sha256": hashlib.sha256(comparison_raw).hexdigest(),
     }
+
+
+def multigpu_handoff_emitter_sha256() -> str:
+    """Hash the exact producer function that writes consumer handoff receipts."""
+    try:
+        source = inspect.getsource(build_multigpu_beam_handoff)
+    except (OSError, TypeError):
+        raise RunError("MultiGPUBeamSearch handoff emitter source is unavailable") from None
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 def _packed_state_rows(state: object) -> tuple[int, str, list[int]]:
@@ -1145,6 +1156,7 @@ def _panel_search_metrics(
         "search_wall_seconds": sum(cases[case_id]["wall_seconds"] for case_id in expected_case_ids),
         "cases": cases,
         "panel_indices": expected_panel_indices,
+        "panel_ids": expected_case_ids,
         "panel_digest": expected_panel_digest,
         "receipt_pins": dict(expected_receipt_pins),
         "by_width": {

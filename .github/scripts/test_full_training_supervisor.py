@@ -90,6 +90,12 @@ class FullTrainingSupervisorTests(unittest.TestCase):
             }
             handoff = training.build_multigpu_beam_handoff(**kwargs)
             self.assertEqual(handoff["schema"], "cnot103_multigpu_beam_handoff_v1")
+            self.assertEqual(handoff["producer_source_revision"], "e" * 40)
+            self.assertRegex(handoff["producer_emitter_sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                handoff["producer_emitter_sha256"],
+                training.multigpu_handoff_emitter_sha256(),
+            )
             self.assertEqual(handoff["accepted_updates"], 8)
             self.assertEqual(handoff["checkpoint_sha256"], checkpoint_sha)
             self.assertEqual(handoff["dataset_sha256"], dataset_sha)
@@ -590,6 +596,8 @@ class QualityComparisonTests(unittest.TestCase):
         self.assertEqual(result["baseline_solved_count"], 2)
         self.assertEqual(result["candidate_solved_count"], 2)
         self.assertAlmostEqual(result["relative_paired_cost_reduction"], 2 / 3)
+        self.assertEqual(result["baseline_metrics"]["panel_ids"], self.CASE_IDS)
+        self.assertEqual(result["candidate_metrics"]["panel_ids"], self.CASE_IDS)
 
     def test_same_paired_length_and_new_solution_is_coverage_gain(self):
         result = self.compare(
