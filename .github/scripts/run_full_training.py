@@ -321,9 +321,7 @@ def load_measurement_spec(path: pathlib.Path | str | None = None) -> dict[str, A
     spec_path = (
         pathlib.Path(path)
         if path is not None
-        else pathlib.Path(__file__).resolve().parents[1]
-        / "training-experiments"
-        / "learning-curve-complete-dev-v2.json"
+        else pathlib.Path(__file__).resolve().parents[2] / MEASUREMENT_SPEC_RELATIVE
     )
     try:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
