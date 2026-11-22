@@ -22,7 +22,7 @@ from typing import Any
 from build_training_manifest import context_widths as manifest_context_widths
 
 TARGET_ATTEMPTS = 512
-PILOT_ATTEMPTS = 500
+PILOT_ATTEMPTS = 32
 BATCH_SIZE = 4
 MODEL_PARAMETERS = 136_421_807
 MODEL_INPUTS = 102
@@ -33,7 +33,7 @@ CHECKPOINT_FREE_GIB = 24
 INITIAL_FREE_GIB = 40
 MAX_RUNTIME_SECONDS = 47 * 3600 + 45 * 60
 MAX_TOTAL_USD = 20.0
-MEASUREMENT_SPEC_RELATIVE = ".github/training-experiments/learning-curve-complete-dev-v2.json"
+MEASUREMENT_SPEC_RELATIVE = ".github/training-experiments/learning-curve-complete-dev-v3.json"
 FORECAST_CLEANUP_RESERVE_SECONDS = 10 * 60
 FORECAST_AUTHORIZATION_MAX_AGE_SECONDS = 6 * 60
 FORECAST_APPROVAL_WAIT_SECONDS = 20 * 60
@@ -197,11 +197,40 @@ def _validated_progress(value: object, label: str) -> dict[str, int]:
         counts[name] = item
     if counts["attempted"] != counts["accepted"] + counts["rejected"]:
         raise RunError(f"{label} progress counters do not balance")
+    example_fields = ("examples_seen", "accepted_examples", "rejected_examples")
+    present = [name in value for name in example_fields]
+    if any(present) and not all(present):
+        raise RunError(f"{label} example counters are incomplete")
+    if all(present):
+        for name in example_fields:
+            item = value.get(name)
+            if type(item) is not int or item < 0:
+                raise RunError(f"{label} example counter is malformed")
+            counts[name] = item
+        if counts["examples_seen"] != counts["accepted_examples"] + counts["rejected_examples"]:
+            raise RunError(f"{label} example counters do not balance")
     return counts
 
 
+def _progress_example_totals(progress: dict[str, int], batch_size: int) -> dict[str, int]:
+    value = _validated_progress(progress, "example-total")
+    if type(batch_size) is not int or batch_size < 1:
+        raise RunError("training batch size is invalid")
+    if "examples_seen" in value:
+        return {
+            "examples_seen": value["examples_seen"],
+            "accepted_examples": value["accepted_examples"],
+            "rejected_examples": value["rejected_examples"],
+        }
+    return {
+        "examples_seen": value["attempted"] * batch_size,
+        "accepted_examples": value["accepted"] * batch_size,
+        "rejected_examples": value["rejected"] * batch_size,
+    }
+
+
 def validate_measurement_spec(spec: object) -> dict[str, Any]:
-    if not isinstance(spec, dict) or spec.get("schema") != "cnot103_measurement_experiment_v2":
+    if not isinstance(spec, dict) or spec.get("schema") != "cnot103_measurement_experiment_v3":
         raise RunError("measurement experiment schema is invalid")
     experiment_id = spec.get("experiment_id")
     if (
@@ -236,6 +265,13 @@ def validate_measurement_spec(spec: object) -> dict[str, Any]:
         or model.get("feature_schema") != "runtime_packet_layout_v25"
     ):
         raise RunError("measurement experiment model contract differs")
+    pilot = spec.get("speed_pilot")
+    if pilot != {
+        "attempt_cap": PILOT_ATTEMPTS,
+        "mode": "independent_discard_only",
+        "requires_all_updates_accepted": True,
+    }:
+        raise RunError("measurement experiment speed-pilot contract differs")
     training = spec.get("training")
     if not isinstance(training, dict) or training.get("seed") != 202611200001:
         raise RunError("measurement experiment training seed differs")
@@ -313,13 +349,23 @@ def training_progress_delta(
         deltas[name] = end[name] - start[name]
     if deltas["attempted"] != deltas["accepted"] + deltas["rejected"]:
         raise RunError("training progress delta counters do not balance")
+    start_examples = _progress_example_totals(start, batch_size)
+    end_examples = _progress_example_totals(end, batch_size)
+    example_deltas = {
+        name: end_examples[name] - start_examples[name]
+        for name in ("examples_seen", "accepted_examples", "rejected_examples")
+    }
+    if any(value < 0 for value in example_deltas.values()):
+        raise RunError("training example progress moved backwards")
+    if example_deltas["examples_seen"] != (
+        example_deltas["accepted_examples"] + example_deltas["rejected_examples"]
+    ):
+        raise RunError("training example progress delta does not balance")
     return {
         "attempted_updates": deltas["attempted"],
         "accepted_updates": deltas["accepted"],
         "rejected_updates": deltas["rejected"],
-        "examples_seen": deltas["attempted"] * batch_size,
-        "accepted_examples": deltas["accepted"] * batch_size,
-        "rejected_examples": deltas["rejected"] * batch_size,
+        **example_deltas,
     }
 
 
@@ -335,6 +381,8 @@ def run_measurement_sweep(
     locked_test,
     batch_size: int = BATCH_SIZE,
     initial_training_wall_seconds: float = 0.0,
+    initial_checkpoint: dict[str, Any] | None = None,
+    persist_partial_receipt=None,
 ) -> dict[str, Any]:
     if (
         type(max_attempts) is not int or not 1 <= max_attempts <= TARGET_ATTEMPTS
@@ -352,65 +400,114 @@ def run_measurement_sweep(
         raise RunError("initial progress exceeds the experiment attempt cap")
     if any(value <= current["accepted"] for value in milestones):
         raise RunError("learning-curve milestone is not ahead of initial progress")
+    current_checkpoint = None
+    if initial_checkpoint is not None:
+        sha = initial_checkpoint.get("sha256") if isinstance(initial_checkpoint, dict) else None
+        if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{64}", sha) is None:
+            raise RunError("initial learning-curve checkpoint SHA-256 is invalid")
+        current_checkpoint = dict(initial_checkpoint)
 
     measurements: list[dict[str, Any]] = []
     cumulative_training_wall = float(initial_training_wall_seconds)
     selected: dict[str, Any] | None = None
     test_result: dict[str, Any] | None = None
 
+    def partial(stage: str, error: BaseException, observed_progress=None):
+        partial_receipt = {
+            "schema": "cnot103_learning_curve_partial_v1",
+            "status": "partial",
+            "failed_stage": stage,
+            "error_type": type(error).__name__,
+            "last_valid_progress": dict(current),
+            "last_valid_checkpoint": current_checkpoint,
+            "observed_progress": observed_progress,
+            "attempted_updates": current["attempted"],
+            "accepted_updates": current["accepted"],
+            "rejected_updates": current["rejected"],
+            **_progress_example_totals(current, batch_size),
+            "cumulative_training_wall_seconds": cumulative_training_wall,
+            "measurements": list(measurements),
+        }
+        if persist_partial_receipt is not None:
+            persist_partial_receipt(partial_receipt)
+        return {
+            "schema": "cnot103_learning_curve_v2",
+            "status": "partial",
+            "measurements": list(measurements),
+            "selected": selected,
+            "locked_test": None,
+            "final_progress": dict(current),
+            "partial": partial_receipt,
+        }
+
     for index, milestone in enumerate(milestones, start=1):
-        training_result = train_to(milestone, dict(current))
+        try:
+            training_result = train_to(milestone, dict(current))
+        except Exception as exc:
+            return partial("training", exc)
         if not isinstance(training_result, dict):
-            raise RunError("learning-curve training callback returned a malformed result")
-        start = _validated_progress(training_result.get("start_progress"), "milestone start")
-        end = _validated_progress(training_result.get("end_progress"), "milestone end")
+            return partial("training_result_validation", RunError("training callback returned malformed data"))
+        try:
+            start = _validated_progress(training_result.get("start_progress"), "milestone start")
+            end = _validated_progress(training_result.get("end_progress"), "milestone end")
+        except RunError as exc:
+            return partial("training_progress_validation", exc)
         if start != current:
-            raise RunError("resumed training did not start at the prior checkpoint progress")
+            return partial("resume_validation", RunError("resumed training did not start at prior checkpoint progress"))
         delta = training_progress_delta(start, end, batch_size=batch_size)
-        if (
-            end["accepted"] != milestone
-            or end["attempted"] > max_attempts
-            or delta["rejected_updates"] != 0
-        ):
-            raise RunError("training milestone did not reach its exact accepted-update target")
         checkpoint = training_result.get("checkpoint")
         checkpoint_sha = checkpoint.get("sha256") if isinstance(checkpoint, dict) else None
-        if (
-            not isinstance(checkpoint_sha, str) or len(checkpoint_sha) != 64
-            or any(char not in "0123456789abcdef" for char in checkpoint_sha)
-        ):
-            raise RunError("learning-curve checkpoint SHA-256 is missing or invalid")
+        if not isinstance(checkpoint_sha, str) or re.fullmatch(r"[0-9a-f]{64}", checkpoint_sha) is None:
+            return partial("checkpoint_validation", RunError("milestone checkpoint SHA-256 is missing or invalid"),
+                           observed_progress=end)
         training_wall = training_result.get("training_wall_seconds")
         if (
             isinstance(training_wall, bool) or not isinstance(training_wall, (int, float))
             or not math.isfinite(training_wall) or training_wall < 0
         ):
-            raise RunError("learning-curve training time is invalid")
-        dev_result = search_dev(training_result)
-        if not isinstance(dev_result, dict):
-            raise RunError("learning-curve dev search returned a malformed result")
-        dev_wall = dev_result.get("wall_seconds")
+            return partial("training_time_validation", RunError("milestone training time is invalid"),
+                           observed_progress=end)
         if (
-            isinstance(dev_wall, bool) or not isinstance(dev_wall, (int, float))
-            or not math.isfinite(dev_wall) or dev_wall < 0
+            end["accepted"] != milestone
+            or end["attempted"] > max_attempts
+            or delta["rejected_updates"] != 0
         ):
-            raise RunError("learning-curve dev search time is invalid")
-        comparison = compare_dev(training_result, dev_result)
-        if not isinstance(comparison, dict):
-            raise RunError("learning-curve dev comparison is malformed")
-        comparison_status = comparison.get("status")
-        if comparison_status not in QUALITY_GAIN_STATUSES | {"tie", "no_practical_gain"}:
-            raise RunError("learning-curve dev comparison did not produce a valid decision")
+            return partial("training_incomplete", RunError(
+                "training milestone did not reach its exact accepted-update target"
+            ), observed_progress=end)
+
+        current = end
+        current_checkpoint = dict(checkpoint)
+        try:
+            dev_result = search_dev(training_result)
+            if not isinstance(dev_result, dict):
+                raise RunError("learning-curve dev search returned malformed data")
+            dev_wall = dev_result.get("wall_seconds")
+            if (
+                isinstance(dev_wall, bool) or not isinstance(dev_wall, (int, float))
+                or not math.isfinite(dev_wall) or dev_wall < 0
+            ):
+                raise RunError("learning-curve dev search time is invalid")
+            comparison = compare_dev(training_result, dev_result)
+            if not isinstance(comparison, dict):
+                raise RunError("learning-curve dev comparison is malformed")
+            comparison_status = comparison.get("status")
+            if comparison_status not in QUALITY_GAIN_STATUSES | {
+                "tie", "no_practical_gain", "inconclusive"
+            }:
+                raise RunError("learning-curve dev comparison did not produce a valid decision")
+        except Exception as exc:
+            return partial("dev_evaluation", exc)
+
         cumulative_training_wall += float(training_wall)
+        totals = _progress_example_totals(end, batch_size)
         receipt = {
             "schema": "cnot103_learning_curve_milestone_v1",
             "milestone_index": index,
             "accepted_updates": milestone,
             "attempted_updates": end["attempted"],
             "rejected_updates": end["rejected"],
-            "examples_seen": end["attempted"] * batch_size,
-            "accepted_examples": end["accepted"] * batch_size,
-            "rejected_examples": end["rejected"] * batch_size,
+            **totals,
             "training_wall_seconds": float(training_wall),
             "cumulative_training_wall_seconds": cumulative_training_wall,
             "dev_wall_seconds": float(dev_wall),
@@ -420,20 +517,29 @@ def run_measurement_sweep(
             "comparison": comparison,
             "dev_metrics": dev_result.get("metrics"),
         }
-        persist_receipt(receipt)
+        try:
+            persist_receipt(receipt)
+        except Exception as exc:
+            return partial("persist_milestone", exc)
         measurements.append(receipt)
-        current = end
         if selected is None and comparison_status in QUALITY_GAIN_STATUSES:
             selected = receipt
 
     if selected is not None:
-        test_result = locked_test(selected)
-        if not isinstance(test_result, dict):
-            raise RunError("locked-test callback returned a malformed result")
+        try:
+            test_result = locked_test(selected)
+            if not isinstance(test_result, dict):
+                raise RunError("locked-test callback returned malformed data")
+        except Exception as exc:
+            return partial("locked_test", exc)
 
+    status = "gain_selected" if selected is not None else (
+        "inconclusive" if any(row["comparison_status"] == "inconclusive" for row in measurements)
+        else "no_practical_gain"
+    )
     return {
         "schema": "cnot103_learning_curve_v2",
-        "status": "gain_selected" if selected is not None else "no_practical_gain",
+        "status": status,
         "measurements": measurements,
         "selected": selected,
         "locked_test": test_result,
@@ -1314,6 +1420,13 @@ def validate_benchmark(report: object, attempts: int = PILOT_ATTEMPTS) -> tuple[
         raise RunError("benchmark exposure audit failed")
     if not isinstance(last_step, dict) or last_step.get("accepted") is not True:
         raise RunError("benchmark optimizer update was rejected")
+    progress = _validated_progress(report.get("progress"), "benchmark")
+    if (
+        progress["attempted"] != attempts
+        or progress["accepted"] != attempts
+        or progress["rejected"] != 0
+    ):
+        raise RunError("benchmark attempt, accepted-update, or rejection counters differ")
     update_seconds = report.get("update_seconds")
     setup_seconds = report.get("setup_seconds")
     if (
@@ -1719,7 +1832,7 @@ class Supervisor:
             "starting", "preparing", "benchmarking", "resuming", "baseline",
             "training", "final_quality", "completed", "failed", "budget_gate", "time_limit",
         }
-        allowed_quality = {"not_ready", "measured", "passed", "length_gain", "coverage_gain", "combined_gain", "tie", "no_practical_gain", "failed", "inconclusive", "invalid"}
+        allowed_quality = {"not_ready", "measured", "passed", "length_gain", "coverage_gain", "combined_gain", "tie", "no_practical_gain", "failed", "inconclusive", "invalid", "partial"}
         if state not in allowed_states:
             state = "failed"
         if quality is not None:
@@ -2486,6 +2599,16 @@ class Supervisor:
         try:
             self.status("starting")
             self._check_source()
+            spec_path = self.source / MEASUREMENT_SPEC_RELATIVE
+            measurement_spec = load_measurement_spec(spec_path)
+            spec_bytes = spec_path.read_bytes()
+            measurement_spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
+            if (
+                measurement_spec["training"]["max_attempts"] != TARGET_ATTEMPTS
+                or measurement_spec["resource_limits"]["max_active_seconds"] != MAX_RUNTIME_SECONDS
+                or measurement_spec["speed_pilot"]["attempt_cap"] != PILOT_ATTEMPTS
+            ):
+                raise RunError("measurement spec differs from the supervisor's active limits")
             dataset_sha = self._build_dataset()
             self._build_cpu_native()
             self._validate_and_seal_dataset(dataset_sha)
@@ -2600,16 +2723,6 @@ class Supervisor:
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB is free for immutable checkpoints")
             update_seconds, setup_seconds, benchmark_report, benchmark_wall = self._benchmark(dataset_sha)
-
-            spec_path = self.source / MEASUREMENT_SPEC_RELATIVE
-            measurement_spec = load_measurement_spec(spec_path)
-            spec_bytes = spec_path.read_bytes()
-            measurement_spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
-            if (
-                measurement_spec["training"]["max_attempts"] != TARGET_ATTEMPTS
-                or measurement_spec["resource_limits"]["max_active_seconds"] != MAX_RUNTIME_SECONDS
-            ):
-                raise RunError("measurement spec differs from the supervisor's active limits")
 
             fresh_manifest = self._build_manifest(
                 "fresh_step_1", dataset_sha, 1, TARGET_ATTEMPTS, False
