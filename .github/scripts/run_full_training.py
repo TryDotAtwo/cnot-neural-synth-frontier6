@@ -722,6 +722,7 @@ def build_multigpu_beam_handoff(
     training_manifest_path: pathlib.Path,
     training_result_path: pathlib.Path,
     search_manifest_path: pathlib.Path,
+    baseline_search_manifest_path: pathlib.Path,
     expected_panel: str,
     expected_panel_indices: list[int],
     expected_panel_ids: list[str],
@@ -800,8 +801,25 @@ def build_multigpu_beam_handoff(
         training_result_path, "training result"
     )
     search_path, search_ref = artifact_ref(search_manifest_path, "panel search manifest")
+    baseline_search_path, baseline_search_ref = artifact_ref(
+        baseline_search_manifest_path, "baseline Hamming search manifest"
+    )
+    training_manifest = read_json(train_manifest_path, "training manifest")
     result = read_json(train_result_path, "training result")
     search_manifest = read_json(search_path, "panel search manifest")
+    baseline_search_manifest = read_json(
+        baseline_search_path, "baseline Hamming search manifest"
+    )
+
+    def resolve_inside_run(value: object, base: pathlib.Path, name: str) -> pathlib.Path:
+        resolved = resolve_pinned_path(value, base, name)
+        try:
+            resolved.relative_to(root_path)
+        except ValueError:
+            raise RunError(f"{name} resolves outside the private run root") from None
+        if not resolved.is_file():
+            raise RunError(f"{name} is not a regular file")
+        return resolved
 
     progress = result.get("end_progress")
     checkpoint = result.get("checkpoint")
@@ -840,11 +858,92 @@ def build_multigpu_beam_handoff(
     ):
         raise RunError("panel-v2 search manifest differs from the locked test or training pins")
 
+    training_dataset = training_manifest.get("dataset")
+    baseline_dataset = baseline_search_manifest.get("dataset")
+    if (
+        training_manifest.get("schema") != "cnot103_training_run_v1"
+        or not isinstance(training_dataset, dict)
+        or not isinstance(baseline_dataset, dict)
+        or baseline_search_manifest.get("schema") != "cnot103_hamming_search_v1"
+        or baseline_search_manifest.get("source_revision") != source_revision
+        or baseline_dataset.get("sha256") != result.get("dataset_sha256")
+        or baseline_search_manifest.get("panel") != expected_panel
+        or baseline_search_manifest.get("panel_indices") != expected_panel_indices
+        or baseline_search_manifest.get("panel_ids") != expected_panel_ids
+        or baseline_search_manifest.get("panel_digest") != expected_panel_digest
+        or baseline_search_manifest.get("runtime_contract") != "native_device_search_v13"
+        or baseline_search_manifest.get("search") != expected_search
+        or not isinstance(baseline_search_manifest.get("panel_roots"), list)
+        or len(baseline_search_manifest["panel_roots"]) != len(expected_panel_indices)
+    ):
+        raise RunError("baseline Hamming manifest differs from the locked test panel or search")
+
+    training_dataset_path = resolve_inside_run(
+        training_dataset.get("path"), train_manifest_path.parent, "training dataset"
+    )
+    baseline_dataset_path = resolve_inside_run(
+        baseline_dataset.get("path"), baseline_search_path.parent, "baseline dataset"
+    )
+    if (
+        training_dataset_path != baseline_dataset_path
+        or training_dataset.get("sha256") != result.get("dataset_sha256")
+        or baseline_dataset.get("sha256") != result.get("dataset_sha256")
+    ):
+        raise RunError("baseline Hamming manifest dataset pin differs from the training result")
+
+    for index, case_id, panel_root in zip(
+        expected_panel_indices, expected_panel_ids, baseline_search_manifest["panel_roots"]
+    ):
+        if (
+            not isinstance(panel_root, dict)
+            or panel_root.get("panel_index") != index
+            or panel_root.get("case_id") != case_id
+        ):
+            raise RunError("baseline Hamming manifest roots differ from the ordered test panel")
+
+    comparison_metrics = {
+        "baseline_metrics": {
+            "search_manifest_sha256": baseline_search_ref["sha256"],
+            "dataset_sha256": result["dataset_sha256"],
+            "source_revision": source_revision,
+            "runtime_contract": "native_device_search_v13",
+            "training_manifest_sha256": None,
+            "training_result_sha256": None,
+            "checkpoint_sha256": None,
+        },
+        "candidate_metrics": {
+            "search_manifest_sha256": search_ref["sha256"],
+            "dataset_sha256": result["dataset_sha256"],
+            "training_manifest_sha256": train_manifest_ref["sha256"],
+            "training_result_sha256": train_result_ref["sha256"],
+            "checkpoint_sha256": checkpoint_sha256,
+        },
+    }
+    if (
+        locked_test_comparison.get("panel") != expected_panel
+        or locked_test_comparison.get("baseline_head") != "hamming"
+        or locked_test_comparison.get("candidate_head") != "qhat"
+        or locked_test_comparison.get("case_count") != len(expected_panel_indices)
+    ):
+        raise RunError("locked-test comparison does not use the pinned panel and scorers")
+    for name, expected_pins in comparison_metrics.items():
+        metrics = locked_test_comparison.get(name)
+        pins = metrics.get("receipt_pins") if isinstance(metrics, dict) else None
+        if (
+            not isinstance(metrics, dict)
+            or metrics.get("panel_indices") != expected_panel_indices
+            or metrics.get("panel_ids") != expected_panel_ids
+            or metrics.get("panel_digest") != expected_panel_digest
+            or metrics.get("case_count") != len(expected_panel_indices)
+            or pins != expected_pins
+        ):
+            raise RunError(f"locked-test {name} is not bound to its search manifest")
+
     comparison_raw = json.dumps(
         locked_test_comparison, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return {
-        "schema": "cnot103_multigpu_beam_handoff_v2",
+        "schema": "cnot103_multigpu_beam_handoff_v3",
         "consumer": "MultiGPUBeamSearch",
         "producer_source_revision": source_revision,
         "producer_emitter_sha256": multigpu_handoff_emitter_sha256(),
@@ -860,6 +959,7 @@ def build_multigpu_beam_handoff(
         "training_manifest": train_manifest_ref,
         "training_result": train_result_ref,
         "search_manifest": search_ref,
+        "baseline_search_manifest": baseline_search_ref,
         "panel": expected_panel,
         "panel_indices": list(expected_panel_indices),
         "panel_ids": list(expected_panel_ids),
@@ -3034,6 +3134,7 @@ class Supervisor:
                     training_manifest_path=record["manifest"],
                     training_result_path=record["result_path"],
                     search_manifest_path=candidate_manifest,
+                    baseline_search_manifest_path=baseline_test_manifest,
                     expected_panel="test",
                     expected_panel_indices=test_cohort["indices"],
                     expected_panel_ids=test_cohort["case_ids"],
