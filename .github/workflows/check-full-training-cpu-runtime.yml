@@ -123,6 +123,16 @@ jobs:
               device_search::runtime::tests::cpu_hamming_baseline_runs_through_the_same_search_runtime_and_replays \
             --output "$GITHUB_OUTPUT"
 
+      - name: Check K4 Bellman sampling and exact-minimum gap on synthetic CPU tensors
+        id: bellman_audit
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+        run: |
+          set -euo pipefail
+          cargo test --locked --features torch --lib bellman::audit::tests:: -- --nocapture
+
       - name: Verify the 102-feature and missing-status model input ABI
         id: model_input_contract
         if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}

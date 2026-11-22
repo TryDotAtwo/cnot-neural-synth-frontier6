@@ -7,6 +7,10 @@
 
 #[cfg(feature = "cuda")]
 pub mod device;
+#[path = "bellman/device/sampling.rs"]
+pub(super) mod sampling;
+mod audit;
+pub(crate) use audit::{compare_sampled_vs_full_bellman, SampledVsFullBellmanAudit};
 mod fingerprint;
 mod recompute;
 mod selection;

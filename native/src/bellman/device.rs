@@ -7,7 +7,7 @@ use crate::model::{DeviceFeatureEntry, DeviceFeaturePacket, FieldOutput, FusionD
 use crate::CnotAlphabet;
 use tch::{Device, Kind, Reduction, Tensor};
 mod layout;
-mod sampling;
+use super::sampling;
 pub(crate) use layout::RecordLayout;
 
 /// Static record classification is checked against the resident matrix. A terminal
