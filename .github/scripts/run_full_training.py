@@ -844,7 +844,7 @@ def build_multigpu_beam_handoff(
         locked_test_comparison, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return {
-        "schema": "cnot103_multigpu_beam_handoff_v1",
+        "schema": "cnot103_multigpu_beam_handoff_v2",
         "consumer": "MultiGPUBeamSearch",
         "producer_source_revision": source_revision,
         "producer_emitter_sha256": multigpu_handoff_emitter_sha256(),
@@ -3077,6 +3077,7 @@ class Supervisor:
                     "selected": curve_result["selected"],
                     "locked_test": None,
                     "multi_gpu_beam_handoff": None,
+                    "producer_emitter_sha256": None,
                     "locked_test_comparison": {
                         "status": "not_run",
                         "reason": "locked test is withheld for a partial learning curve",
@@ -3145,6 +3146,12 @@ class Supervisor:
                 "multi_gpu_beam_handoff": (
                     curve_result["locked_test"].get("consumer_handoff")
                     if isinstance(curve_result["locked_test"], dict) else None
+                ),
+                "producer_emitter_sha256": (
+                    curve_result["locked_test"].get("consumer_handoff", {}).get("producer_emitter_sha256")
+                    if isinstance(curve_result["locked_test"], dict)
+                    and isinstance(curve_result["locked_test"].get("consumer_handoff"), dict)
+                    else None
                 ),
                 "locked_test_comparison": quality_comparison,
                 "dev_panel_digest": dev_cohort["digest"],

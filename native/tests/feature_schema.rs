@@ -26,6 +26,50 @@ impl FeatureProducer for DynamicPairFeature {
     }
 }
 
+#[cfg(feature = "torch")]
+#[test]
+fn model_input_contract_has_102_slots_and_h07_stays_post_forward() {
+    use cnot103_native::model::DeviceFeatureStatus;
+    use cnot103_native::schema::{
+        all_model_input_specs, FEATURE_ID_MANIFEST_ID, FEATURE_LAYOUT_ID,
+        H07_POST_FORWARD_DIAGNOSTIC_ID, MISSING_TOKEN_LAYOUT_ID,
+    };
+
+    assert_eq!(FEATURE_COUNT, 103);
+    assert_eq!(MODEL_INPUT_COUNT, 102);
+    assert_eq!(FEATURE_ID_MANIFEST_ID, "cnot_feature_ids_a01_i11_v1");
+    assert_eq!(FEATURE_LAYOUT_ID, "runtime_packet_layout_v24");
+    assert_eq!(MISSING_TOKEN_LAYOUT_ID, "runtime_packet_layout_v25");
+
+    let all = all_feature_specs();
+    let inputs = all_model_input_specs();
+    let expected: Vec<_> = all.iter()
+        .filter(|spec| spec.id != H07_POST_FORWARD_DIAGNOSTIC_ID)
+        .cloned()
+        .collect();
+    assert_eq!(all.len(), FEATURE_COUNT);
+    assert_eq!(inputs.len(), MODEL_INPUT_COUNT);
+    assert_eq!(inputs, expected);
+    assert!(!inputs.iter().any(|spec| spec.id == H07_POST_FORWARD_DIAGNOSTIC_ID));
+
+    let policy = cnot103_native::FeaturePolicy::all_model_inputs(MISSING_TOKEN_LAYOUT_ID);
+    assert_eq!(
+        policy.enabled_ids,
+        inputs.iter().map(|spec| spec.id).collect::<Vec<_>>()
+    );
+
+    assert_eq!(DeviceFeatureStatus::NotRequested as u8, 0);
+    assert_eq!(DeviceFeatureStatus::Computed as u8, 1);
+    assert_eq!(DeviceFeatureStatus::Inapplicable as u8, 2);
+    assert_eq!(DeviceFeatureStatus::Unsupported as u8, 3);
+    assert_eq!(DeviceFeatureStatus::ResourceLimit as u8, 4);
+    assert_eq!(cnot103_native::FeatureStatus::Computed.as_str(), "computed");
+    assert_eq!(cnot103_native::FeatureStatus::Inapplicable.as_str(), "inapplicable");
+    assert_eq!(cnot103_native::FeatureStatus::Unsupported.as_str(), "unsupported");
+    assert_eq!(cnot103_native::FeatureStatus::ResourceLimit.as_str(), "resource_limit");
+    assert_eq!(cnot103_native::FeatureStatus::NotRequested.as_str(), "not_requested");
+}
+
 #[test]
 fn d03_uses_the_source_ordered_pair_three_channel_layout() {
     let id = FeatureId::new(b'D', 3).unwrap();

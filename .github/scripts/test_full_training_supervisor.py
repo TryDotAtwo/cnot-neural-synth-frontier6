@@ -89,7 +89,7 @@ class FullTrainingSupervisorTests(unittest.TestCase):
                 "locked_test_comparison": {"status": "length_gain"},
             }
             handoff = training.build_multigpu_beam_handoff(**kwargs)
-            self.assertEqual(handoff["schema"], "cnot103_multigpu_beam_handoff_v1")
+            self.assertEqual(handoff["schema"], "cnot103_multigpu_beam_handoff_v2")
             self.assertEqual(handoff["producer_source_revision"], "e" * 40)
             self.assertRegex(handoff["producer_emitter_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(
