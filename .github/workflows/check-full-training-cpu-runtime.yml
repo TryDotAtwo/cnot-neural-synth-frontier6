@@ -143,6 +143,16 @@ jobs:
           set -euo pipefail
           cargo test --locked --features torch --test feature_schema model_input_contract_has_102_slots_and_h07_stays_post_forward -- --exact
 
+      - name: Verify v25 distinguishes a computed zero from an unsupported input
+        id: model_missing_token
+        if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}
+        working-directory: native
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-torch-target
+        run: |
+          set -euo pipefail
+          cargo test --locked --features torch --test model_layout v25_missing_status_token_distinguishes_computed_zero_from_unsupported -- --exact
+
       - name: Compile the fresh-process resume test binary
         id: compile_resume
         if: ${{ always() && !cancelled() && steps.torch.outcome == 'success' }}

@@ -103,6 +103,151 @@ fn dynamic_model_fixture(
     (variables, model, registry, policy, packet)
 }
 
+struct ZeroOrUnavailableFeature {
+    spec: FeatureSpec,
+    status: Option<cnot103_native::FeatureStatus>,
+}
+
+impl FeatureProducer for ZeroOrUnavailableFeature {
+    fn spec(&self) -> &FeatureSpec {
+        &self.spec
+    }
+
+    fn symmetry_contract(&self) -> &str {
+        "exact_relabel"
+    }
+
+    fn compute(&self, state: &MatrixState, _policy: &FeaturePolicy) -> FeatureComputation {
+        if let Some(status) = self.status {
+            FeatureComputation::Unavailable {
+                status,
+                reason: "fixture_status_is_unavailable".into(),
+            }
+        } else {
+            let n = state.dimension() as usize;
+            FeatureComputation::Computed(FeatureValue {
+                shape: vec![n, n, 3],
+                values: vec![0.0; n * n * 3],
+                token_valid: Vec::new(),
+                incidence: Vec::new(),
+            })
+        }
+    }
+}
+
+fn v25_status_fixture(
+    status: Option<cnot103_native::FeatureStatus>,
+) -> (FeatureRegistry, FeaturePolicy, FeaturePacket) {
+    let id = FeatureId::new(b'I', 11).unwrap();
+    let mut spec = all_feature_specs()[id.index()].clone();
+    spec.role = FeatureRole::Pair;
+    spec.channels = 3;
+    spec.wire_roles.clear();
+    spec = spec.with_provider_metadata(
+        cnot103_native::schema::ProviderMetadata::new(
+            "full_labeled_matrix",
+            "fixture_i11_zero_or_unsupported_v1",
+            "exact",
+            "T1",
+        )
+        .dependencies(["M"]),
+    );
+
+    let mut registry = FeatureRegistry::new();
+    registry
+        .register(Box::new(ZeroOrUnavailableFeature { spec, status }))
+        .unwrap();
+    let alphabet = CnotAlphabet::all_to_all_unit(2).unwrap();
+    let mut state = MatrixState::identity(2, alphabet.id()).unwrap();
+    state
+        .apply_cnot(CnotGate {
+            control: 0,
+            target: 1,
+        })
+        .unwrap();
+    let policy = FeaturePolicy {
+        enabled_ids: vec![id],
+        seed: 0,
+        schema_id: cnot103_native::schema::MISSING_TOKEN_LAYOUT_ID.into(),
+        solver_assisted: false,
+        symmetry_contract: "exact_relabel".into(),
+        evaluations: None,
+        max_bytes: None,
+    };
+    let packet = registry.build(&[state], &policy).unwrap();
+    (registry, policy, packet)
+}
+
+#[test]
+fn v25_missing_status_token_distinguishes_computed_zero_from_unsupported() {
+    tch::set_num_threads(1);
+    let (registry, policy, computed_zero) = v25_status_fixture(None);
+    let (_, unsupported_policy, unsupported) =
+        v25_status_fixture(Some(cnot103_native::FeatureStatus::Unsupported));
+    let (_, limited_policy, resource_limited) =
+        v25_status_fixture(Some(cnot103_native::FeatureStatus::ResourceLimit));
+    let feature_id = FeatureId::new(b'I', 11).unwrap();
+
+    assert_eq!(policy.id().unwrap(), unsupported_policy.id().unwrap());
+    assert_eq!(policy.id().unwrap(), limited_policy.id().unwrap());
+    assert_eq!(
+        computed_zero.feature(feature_id).status,
+        vec![cnot103_native::FeatureStatus::Computed]
+    );
+    assert_eq!(computed_zero.feature(feature_id).values, vec![0.0; 12]);
+    assert_eq!(
+        unsupported.feature(feature_id).status,
+        vec![cnot103_native::FeatureStatus::Unsupported]
+    );
+    assert_eq!(unsupported.feature(feature_id).available, vec![0]);
+    assert_eq!(
+        resource_limited.feature(feature_id).status,
+        vec![cnot103_native::FeatureStatus::ResourceLimit]
+    );
+    assert_eq!(resource_limited.feature(feature_id).available, vec![0]);
+
+    tch::manual_seed(20261122);
+    let variables = VarStore::new(Device::Cpu);
+    let model = FusionDistanceField::new_for_policy(
+        &variables.root(),
+        &registry,
+        &policy,
+        Device::Cpu,
+        ModelConfig {
+            wire_dim: 8,
+            pair_dim: 4,
+            structural_blocks: 1,
+            attention_heads: 2,
+            feedforward_dim: 16,
+            fusion_blocks: 1,
+            basis_proposal_hidden_dim: 8,
+        },
+    )
+    .unwrap();
+
+    let token_weight = variables.variables()["stem.missing_status.weight"].size();
+    assert_eq!(token_weight, [8, 3]);
+    let computed_output = model.forward(&computed_zero).unwrap().value;
+    let unsupported_output = model.forward(&unsupported).unwrap().value;
+    let resource_limited_output = model.forward(&resource_limited).unwrap().value;
+    assert!(
+        (&computed_output - &unsupported_output)
+            .abs()
+            .max()
+            .double_value(&[])
+            > 1e-6,
+        "v25 must preserve the distinction between a computed zero and an unsupported feature"
+    );
+    assert!(
+        (unsupported_output - resource_limited_output)
+            .abs()
+            .max()
+            .double_value(&[])
+            > 1e-6,
+        "v25 must encode unsupported and resource-limited reasons differently"
+    );
+}
+
 #[test]
 fn model_uses_only_selected_features_with_their_registered_shapes() {
     let (variables, model, _registry, _policy, packet) = dynamic_model_fixture(Device::Cpu);
