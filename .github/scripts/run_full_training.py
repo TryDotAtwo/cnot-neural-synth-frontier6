@@ -1026,6 +1026,18 @@ def multigpu_handoff_emitter_sha256() -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
+def _legacy_handoff_projection(locked_test_result: object) -> tuple[dict[str, Any] | None, object | None]:
+    """Project historical receipt aliases from the single locked-test handoff object."""
+    if not isinstance(locked_test_result, dict):
+        return None, None
+    handoff = locked_test_result.get("consumer_handoff")
+    if handoff is None:
+        return None, None
+    if not isinstance(handoff, dict):
+        raise RunError("locked-test consumer handoff is malformed")
+    return handoff, handoff.get("producer_emitter_sha256")
+
+
 def _packed_state_rows(state: object) -> tuple[int, str, list[int]]:
     if not isinstance(state, dict):
         raise RunError("frozen panel state is malformed")
@@ -3206,6 +3218,10 @@ class Supervisor:
                 initial_checkpoint=resume_report.get("checkpoint"),
                 persist_partial_receipt=persist_partial_curve_receipt,
             )
+            locked_test_result = curve_result.get("locked_test")
+            consumer_handoff, producer_emitter_sha256 = _legacy_handoff_projection(
+                locked_test_result
+            )
             if curve_result["status"] == "partial":
                 partial_curve = {
                     "schema": "cnot103_learning_curve_campaign_v1",
@@ -3220,9 +3236,9 @@ class Supervisor:
                     "curve_status": "partial",
                     "measurements": curve_result["measurements"],
                     "selected": curve_result["selected"],
-                    "locked_test": None,
-                    "multi_gpu_beam_handoff": None,
-                    "producer_emitter_sha256": None,
+                    "locked_test": locked_test_result,
+                    "multi_gpu_beam_handoff": consumer_handoff,
+                    "producer_emitter_sha256": producer_emitter_sha256,
                     "locked_test_comparison": {
                         "status": "not_run",
                         "reason": "locked test is withheld for a partial learning curve",
@@ -3287,17 +3303,9 @@ class Supervisor:
                 "curve_status": curve_result["status"],
                 "measurements": curve_result["measurements"],
                 "selected": curve_result["selected"],
-                "locked_test": curve_result["locked_test"],
-                "multi_gpu_beam_handoff": (
-                    curve_result["locked_test"].get("consumer_handoff")
-                    if isinstance(curve_result["locked_test"], dict) else None
-                ),
-                "producer_emitter_sha256": (
-                    curve_result["locked_test"].get("consumer_handoff", {}).get("producer_emitter_sha256")
-                    if isinstance(curve_result["locked_test"], dict)
-                    and isinstance(curve_result["locked_test"].get("consumer_handoff"), dict)
-                    else None
-                ),
+                "locked_test": locked_test_result,
+                "multi_gpu_beam_handoff": consumer_handoff,
+                "producer_emitter_sha256": producer_emitter_sha256,
                 "locked_test_comparison": quality_comparison,
                 "dev_panel_digest": dev_cohort["digest"],
                 "locked_test_panel_digest": test_cohort["digest"],
@@ -3386,10 +3394,7 @@ class Supervisor:
                     "baseline_locked_test": baseline_test_metrics,
                     "candidate_locked_test": final_test_metrics,
                     "paired_locked_test_comparison": quality_comparison,
-                    "multi_gpu_beam_handoff": (
-                        curve_result["locked_test"].get("consumer_handoff")
-                        if isinstance(curve_result["locked_test"], dict) else None
-                    ),
+                    "multi_gpu_beam_handoff": consumer_handoff,
                     "same_locked_cases_and_budget": True,
                 },
                 "hardware": hardware,

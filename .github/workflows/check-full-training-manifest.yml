@@ -10,6 +10,7 @@ on:
       checked_sha:
         description: Exact source commit checked by this reusable workflow
         value: ${{ jobs.source.outputs.checked_sha }}
+  workflow_dispatch:
   push:
     branches:
       - codex/full-feature-train-workflow
@@ -36,6 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
       - name: Verify the checked-out source commit
         id: source_revision
         env:
@@ -50,6 +52,22 @@ jobs:
           fi
           echo 'source_revision=matched'
 
+      - name: Classify changed paths for the Rust loader
+        id: loader_scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            loader_required="$(python3 .github/scripts/full_training_loader_paths.py --before "$BEFORE_SHA" --after "$SOURCE_SHA")"
+          else
+            loader_required=true
+          fi
+          echo "loader_required=$loader_required" >> "$GITHUB_OUTPUT"
+          echo "rust_loader_required=$loader_required"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -59,6 +77,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Validate the real CPU Rust loader on a clean synthetic fixture
+        if: ${{ steps.loader_scope.outputs.loader_required == 'true' }}
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/cnot103-source-target
           CNOT103_TEST_FIXTURE_PATH: ${{ runner.temp }}/cnot103-loader-fixture.json
@@ -77,7 +96,7 @@ jobs:
           python3 -m unittest discover -s .github/scripts -p 'test_vast_rent_rebuild_dataset.py' -v
           python3 -m unittest discover -s .github/scripts -p 'test_full_training_supervisor.py' -v
           python3 -m unittest discover -s .github/scripts -p 'test_cnot_cpu_torch_ci.py' -v
-          python3 -m unittest discover -s .github/scripts -p 'test_full_training_source_gate.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_full_training_loader_paths.py' -v
 
       - name: Parse affected workflow YAML
         run: |

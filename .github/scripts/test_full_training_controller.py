@@ -1157,6 +1157,31 @@ class StableApprovedTargetTests(unittest.TestCase):
         self.assertTrue("timeout-minutes: 300" in workflow)
         self.assertTrue("  finalize:\n    if: always()" in workflow)
         self.assertFalse("needs.start.outputs.cleanup_needed" in workflow)
+        self.assertIn(
+            "  start:\n    needs: [source_manifest, source_cpu_runtime, source_cuda_build]",
+            workflow,
+        )
+        self.assertNotIn("  source_preflight:", workflow)
+        self.assertNotIn("full_training_source_gate.py", workflow)
+        for job, reusable in (
+            ("source_manifest", "check-full-training-manifest.yml"),
+            ("source_cpu_runtime", "check-full-training-cpu-runtime.yml"),
+            ("source_cuda_build", "check-full-training-cuda-build.yml"),
+        ):
+            block = workflow.split(f"  {job}:\n", 1)[1].split("\n  ", 1)[0]
+            self.assertIn(f"uses: ./.github/workflows/{reusable}", block)
+            self.assertIn("source_sha: ${{ github.sha }}", block)
+        from full_training_loader_paths import loader_validation_required_for_paths
+        self.assertFalse(
+            loader_validation_required_for_paths(
+                [".github/workflows/unrelated.yml", ".github/scripts/unrelated.py", "docs/model.md"]
+            )
+        )
+        self.assertTrue(
+            loader_validation_required_for_paths(
+                ["native/src/frozen_data.rs", "Cargo.lock", ".cargo/config.toml"]
+            )
+        )
         launch = controller._launch_script(
             "/workspace/test", "a" * 40, "b" * 40, "c" * 64, 1.0, 0.0,
             2.0, 3.0, "123", "1", 123, 4.0,

@@ -23,6 +23,19 @@ from run_full_training import (
 
 
 class FullTrainingSupervisorTests(unittest.TestCase):
+    def test_handoff_legacy_receipt_aliases_reuse_one_canonical_payload(self):
+        canonical = {"producer_emitter_sha256": "a" * 64}
+        projected, emitter_sha = training._legacy_handoff_projection(
+            {"status": "evaluated", "consumer_handoff": canonical}
+        )
+        self.assertIs(projected, canonical)
+        self.assertEqual(emitter_sha, canonical["producer_emitter_sha256"])
+        self.assertEqual((None, None), training._legacy_handoff_projection(None))
+        with self.assertRaises(RunError):
+            training._legacy_handoff_projection(
+                {"status": "evaluated", "consumer_handoff": ["malformed"]}
+            )
+
     def test_multigpu_handoff_pins_locked_panel_checkpoint_and_search(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

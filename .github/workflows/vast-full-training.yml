@@ -34,41 +34,8 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
 
-  source_preflight:
-    name: Gate all exact-source checks
-    needs: [source_manifest, source_cpu_runtime, source_cuda_build]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      status: ${{ steps.gate.outputs.status }}
-    steps:
-      - name: Check out this run's source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Require three successful checks for the same source SHA
-        id: gate
-        env:
-          EXPECTED_SHA: ${{ github.sha }}
-          MANIFEST_RESULT: ${{ needs.source_manifest.result }}
-          MANIFEST_SHA: ${{ needs.source_manifest.outputs.checked_sha }}
-          CPU_RUNTIME_RESULT: ${{ needs.source_cpu_runtime.result }}
-          CPU_RUNTIME_SHA: ${{ needs.source_cpu_runtime.outputs.checked_sha }}
-          CUDA_BUILD_RESULT: ${{ needs.source_cuda_build.result }}
-          CUDA_BUILD_SHA: ${{ needs.source_cuda_build.outputs.checked_sha }}
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/full_training_source_gate.py \
-            --expected-sha "$EXPECTED_SHA" \
-            --manifest-result "$MANIFEST_RESULT" --manifest-sha "$MANIFEST_SHA" \
-            --cpu-runtime-result "$CPU_RUNTIME_RESULT" --cpu-runtime-sha "$CPU_RUNTIME_SHA" \
-            --cuda-build-result "$CUDA_BUILD_RESULT" --cuda-build-sha "$CUDA_BUILD_SHA" \
-            --output "$GITHUB_OUTPUT"
-
   start:
-    needs: source_preflight
-    if: ${{ needs.source_preflight.outputs.status == 'passed' }}
+    needs: [source_manifest, source_cpu_runtime, source_cuda_build]
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
