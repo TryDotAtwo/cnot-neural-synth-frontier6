@@ -1204,6 +1204,12 @@ class StableApprovedTargetTests(unittest.TestCase):
                         elif following.strip() and not following.startswith("      "):
                             break
                 self.assertTrue(set(needed).issubset(job_ids), f"{job_id} references missing needs: {needed}")
+        for relative in ("check-full-training-cpu-runtime.yml", "check-full-training-cuda-build.yml"):
+            source_check = (
+                Path(__file__).resolve().parents[1] / "workflows" / relative
+            ).read_text(encoding="utf-8")
+            self.assertIn("\n  workflow_call:\n", source_check)
+            self.assertIn("\n  workflow_dispatch:\n", source_check)
         manifest_workflow = (
             Path(__file__).resolve().parents[1]
             / "workflows"

@@ -10,6 +10,7 @@ on:
       checked_sha:
         description: Exact source commit checked by this reusable workflow
         value: ${{ jobs.cpu-torch.outputs.checked_sha }}
+  workflow_dispatch:
   push:
     branches:
       - codex/full-feature-train-workflow
