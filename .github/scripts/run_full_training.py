@@ -2384,7 +2384,12 @@ class Supervisor:
             json_stdout=True,
         )
         elapsed = time.monotonic() - started
-        validate_training_result(report, expected_start, expected_end)
+        try:
+            validate_training_result(report, expected_start, expected_end)
+        except RunError as exc:
+            if isinstance(report, dict):
+                exc.observed_progress = report.get("end_progress")
+            raise
         return report, elapsed
 
     def _hamming_search_manifest(
@@ -2723,6 +2728,8 @@ class Supervisor:
             if self._free_gib() < CHECKPOINT_FREE_GIB:
                 raise RunError("less than 24 GiB is free for immutable checkpoints")
             update_seconds, setup_seconds, benchmark_report, benchmark_wall = self._benchmark(dataset_sha)
+            pilot_progress = _validated_progress(benchmark_report.get("progress"), "speed-pilot")
+            pilot_examples = _progress_example_totals(pilot_progress, BATCH_SIZE)
 
             fresh_manifest = self._build_manifest(
                 "fresh_step_1", dataset_sha, 1, TARGET_ATTEMPTS, False
@@ -2792,6 +2799,10 @@ class Supervisor:
                     "model": measurement_spec["model"],
                     "pilot": {
                         "attempts": PILOT_ATTEMPTS,
+                        "attempted_updates": pilot_progress["attempted"],
+                        "accepted_updates": pilot_progress["accepted"],
+                        "rejected_updates": pilot_progress["rejected"],
+                        **pilot_examples,
                         "fresh_end_progress": fresh_report["end_progress"],
                         "resume_end_progress": resume_report["end_progress"],
                         "setup_seconds": setup_seconds,
@@ -2943,6 +2954,27 @@ class Supervisor:
                 )
                 _write_new_private_json(path, value)
 
+            def persist_partial_curve_receipt(receipt: dict[str, Any]) -> None:
+                captured_at = time.time()
+                value = {
+                    **receipt,
+                    "source_revision": self.source_revision,
+                    "holdout_revision": self.holdout_revision,
+                    "holdout_sha256": self.holdout_sha256,
+                    "dataset_sha256": dataset_sha,
+                    "measurement_spec_sha256": measurement_spec_sha256,
+                    "experiment_id": measurement_spec["experiment_id"],
+                    "model": measurement_spec["model"],
+                    "search": measurement_spec["search"],
+                    "dev_panel_digest": dev_cohort["digest"],
+                    "campaign_elapsed_seconds": max(0.0, captured_at - self.started_at_epoch),
+                    "billing_snapshot": self.billing_snapshot,
+                    "actual_cost_status": "awaiting_confirmed_controller_invoice_after_stop",
+                }
+                _write_new_private_json(
+                    self.root / "reports" / "learning-curve-partial.private.json", value
+                )
+
             def run_locked_test(selected: dict[str, Any]) -> dict[str, Any]:
                 nonlocal baseline_test_report, baseline_test_metrics, baseline_test_wall
                 nonlocal candidate_test_report, candidate_test_metrics, candidate_test_wall
@@ -3008,7 +3040,44 @@ class Supervisor:
                 persist_receipt=persist_milestone_receipt, locked_test=run_locked_test,
                 batch_size=measurement_spec["model"]["batch_size"],
                 initial_training_wall_seconds=fresh_wall + resume_wall,
+                initial_checkpoint=resume_report.get("checkpoint"),
+                persist_partial_receipt=persist_partial_curve_receipt,
             )
+            if curve_result["status"] == "partial":
+                partial_curve = {
+                    "schema": "cnot103_learning_curve_campaign_v1",
+                    "source_revision": self.source_revision,
+                    "holdout_revision": self.holdout_revision,
+                    "holdout_sha256": self.holdout_sha256,
+                    "dataset_sha256": dataset_sha,
+                    "measurement_spec_sha256": measurement_spec_sha256,
+                    "experiment_id": measurement_spec["experiment_id"],
+                    "accepted_milestones": measurement_spec["training"]["accepted_milestones"],
+                    "status": "partial",
+                    "curve_status": "partial",
+                    "measurements": curve_result["measurements"],
+                    "selected": curve_result["selected"],
+                    "locked_test": None,
+                    "multi_gpu_beam_handoff": None,
+                    "locked_test_comparison": {
+                        "status": "not_run",
+                        "reason": "locked test is withheld for a partial learning curve",
+                    },
+                    "partial": curve_result["partial"],
+                    "dev_panel_digest": dev_cohort["digest"],
+                    "locked_test_panel_digest": test_cohort["digest"],
+                    "model": measurement_spec["model"],
+                    "search": measurement_spec["search"],
+                    "campaign_elapsed_seconds": max(0.0, time.time() - self.started_at_epoch),
+                    "billing_snapshot": self.billing_snapshot,
+                    "actual_cost_status": "awaiting_confirmed_controller_invoice_after_stop",
+                }
+                _write_new_private_json(
+                    self.root / "reports" / "learning-curve.private.json", partial_curve
+                )
+                self.status("failed", "partial")
+                return 1
+
             final_milestone = curve_result["measurements"][-1]["accepted_updates"]
             final_measurement = training_runs[final_milestone]
             full_report = final_measurement["report"]
@@ -3026,15 +3095,20 @@ class Supervisor:
                     self.quality_status = quality_comparison["status"]
                 elif quality_comparison.get("status") in {"tie", "no_practical_gain"}:
                     self.quality_status = "no_practical_gain"
+                elif quality_comparison.get("status") == "inconclusive":
+                    self.quality_status = "inconclusive"
                 else:
-                    raise RunError("locked-test comparison is inconclusive or invalid")
+                    raise RunError("locked-test comparison is invalid")
             else:
                 quality_comparison = {
                     "status": "not_run",
                     "reason": "locked test withheld because no dev checkpoint passed the frozen threshold",
                     "dev_status": dev_quality_comparison["status"],
                 }
-                self.quality_status = "no_practical_gain"
+                self.quality_status = (
+                    "inconclusive" if curve_result["status"] == "inconclusive"
+                    else "no_practical_gain"
+                )
 
             curve_receipt = {
                 "schema": "cnot103_learning_curve_campaign_v1",
@@ -3098,7 +3172,9 @@ class Supervisor:
                     "attempted_updates": full_report["end_progress"]["attempted"],
                     "accepted_updates": full_report["end_progress"]["accepted"],
                     "rejected_updates": full_report["end_progress"]["rejected"],
-                    "examples_seen": full_report["end_progress"]["attempted"] * BATCH_SIZE,
+                    "examples_seen": _progress_example_totals(
+                        full_report["end_progress"], BATCH_SIZE
+                    )["examples_seen"],
                     "checkpoint_states_observed": 2 + len(curve_result["measurements"]),
                     "checkpoint_free_space_gate_gib": CHECKPOINT_FREE_GIB,
                     "checkpoint_interval_attempts": CHECKPOINT_INTERVAL,
@@ -3108,6 +3184,8 @@ class Supervisor:
                     "pilot_update_seconds": update_seconds,
                     "pilot_setup_seconds": setup_seconds,
                     "pilot_process_wall_seconds": benchmark_wall,
+                    "pilot_progress": pilot_progress,
+                    "pilot_examples": pilot_examples,
                     "fresh_step_wall_seconds": fresh_wall,
                     "resume_step_wall_seconds": resume_wall,
                     "baseline_search_wall_seconds": baseline_search_wall,
@@ -3152,7 +3230,9 @@ class Supervisor:
                 },
             }
             _write_new_private_json(self.private_report_path, final_report)
-            if self.quality_status in QUALITY_GAIN_STATUSES or self.quality_status == "no_practical_gain":
+            if self.quality_status in QUALITY_GAIN_STATUSES or self.quality_status in {
+                "no_practical_gain", "inconclusive"
+            }:
                 self.status("completed", self.quality_status)
                 return 0
             self.status("failed", self.quality_status)
