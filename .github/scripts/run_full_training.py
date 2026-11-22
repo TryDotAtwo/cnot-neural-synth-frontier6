@@ -442,7 +442,7 @@ def run_measurement_sweep(
         try:
             training_result = train_to(milestone, dict(current))
         except Exception as exc:
-            return partial("training", exc)
+            return partial("training", exc, getattr(exc, "observed_progress", None))
         if not isinstance(training_result, dict):
             return partial("training_result_validation", RunError("training callback returned malformed data"))
         try:
@@ -452,7 +452,10 @@ def run_measurement_sweep(
             return partial("training_progress_validation", exc)
         if start != current:
             return partial("resume_validation", RunError("resumed training did not start at prior checkpoint progress"))
-        delta = training_progress_delta(start, end, batch_size=batch_size)
+        try:
+            delta = training_progress_delta(start, end, batch_size=batch_size)
+        except RunError as exc:
+            return partial("training_progress_validation", exc, observed_progress=end)
         checkpoint = training_result.get("checkpoint")
         checkpoint_sha = checkpoint.get("sha256") if isinstance(checkpoint, dict) else None
         if not isinstance(checkpoint_sha, str) or re.fullmatch(r"[0-9a-f]{64}", checkpoint_sha) is None:
@@ -476,6 +479,7 @@ def run_measurement_sweep(
 
         current = end
         current_checkpoint = dict(checkpoint)
+        cumulative_training_wall += float(training_wall)
         try:
             dev_result = search_dev(training_result)
             if not isinstance(dev_result, dict):
@@ -497,7 +501,6 @@ def run_measurement_sweep(
         except Exception as exc:
             return partial("dev_evaluation", exc)
 
-        cumulative_training_wall += float(training_wall)
         totals = _progress_example_totals(end, batch_size)
         receipt = {
             "schema": "cnot103_learning_curve_milestone_v1",
@@ -2767,14 +2770,19 @@ class Supervisor:
             locked_search_reserve_seconds = (
                 estimated_locked_hamming_seconds + estimated_locked_candidate_seconds
             )
-            remaining_work_seconds = setup_seconds + estimate_measurement_remaining_work_seconds(
+            remaining_work_seconds = (
+                setup_seconds * len(future_milestones)
+                + estimate_measurement_remaining_work_seconds(
                 remaining_attempts=remaining_updates,
                 seconds_per_attempt=update_seconds / PILOT_ATTEMPTS,
                 future_dev_evaluations=len(future_milestones),
                 dev_search_seconds=smoke_qhat_dev_wall,
                 locked_search_seconds=locked_search_reserve_seconds,
-                checkpoint_reserve_seconds=CHECKPOINT_WRITE_RESERVE_SECONDS,
+                checkpoint_reserve_seconds=(
+                    CHECKPOINT_WRITE_RESERVE_SECONDS * len(future_milestones)
+                ),
                 cleanup_reserve_seconds=FORECAST_SAFETY_SECONDS,
+                )
             )
             estimated_full_seconds = elapsed_before_full + remaining_work_seconds
             self.remaining_work_seconds = float(remaining_work_seconds)
