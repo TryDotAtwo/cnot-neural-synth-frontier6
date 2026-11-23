@@ -34,7 +34,7 @@ from run_full_training import (
 
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_CHECKPOINT_FILE = re.compile(r"^step-([0-9]{12})-([0-9a-f]{64})\\.qcp$")
+_CHECKPOINT_FILE = re.compile(r"^step-([0-9]{12})-([0-9a-f]{64})\.qcp$")
 
 
 def _sha256_file(path: pathlib.Path) -> str:
@@ -152,7 +152,7 @@ def _validate_manifest(
         or policy.get("schema_id") != FEATURE_SCHEMA
     ):
         raise RunError("one-GPU manifest differs from the full-model smoke contract")
-    serialized = (json.dumps(manifest, sort_keys=True, indent=2) + "\\n").encode("utf-8")
+    serialized = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode("utf-8")
     manifest_sha256 = hashlib.sha256(serialized).hexdigest()
     if (
         provenance.get("profile_sha256") != profile_sha256
@@ -174,6 +174,7 @@ def _run_native(
     step: int,
     repo_root: pathlib.Path,
 ) -> dict[str, Any]:
+    log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     stdout_path = log_dir / f"step-{step}.stdout.json"
     stderr_path = log_dir / f"step-{step}.stderr.log"
     started = time.monotonic()
