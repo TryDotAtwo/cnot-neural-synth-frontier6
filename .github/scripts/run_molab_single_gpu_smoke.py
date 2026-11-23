@@ -22,6 +22,7 @@ from build_training_manifest import (
     BATCH_SIZE,
     FEATURE_SCHEMA,
     MODEL_INPUT_COUNT,
+    MODEL_ARCHITECTURE,
     _write_private_json,
 )
 from run_full_training import (
@@ -144,7 +145,7 @@ def _validate_manifest(
         or training.get("cuda_devices") != [0]
         or training.get("batch_size") != BATCH_SIZE
         or not isinstance(model, dict)
-        or model.get("structural_blocks") != STRUCTURAL_BLOCKS
+        or model != MODEL_ARCHITECTURE
         or not isinstance(dataset, dict)
         or dataset.get("path") != str(dataset_path)
         or dataset.get("sha256") != dataset_sha256

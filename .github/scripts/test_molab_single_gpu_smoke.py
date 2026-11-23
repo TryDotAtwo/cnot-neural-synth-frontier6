@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build_training_manifest import BATCH_SIZE, FEATURE_SCHEMA, MODEL_INPUT_COUNT
+from build_training_manifest import BATCH_SIZE, FEATURE_SCHEMA, MODEL_ARCHITECTURE, MODEL_INPUT_COUNT
 from run_full_training import MODEL_INPUTS, MODEL_PARAMETERS, STRUCTURAL_BLOCKS, RunError
 from run_molab_single_gpu_smoke import run_molab_single_gpu_smoke
 
@@ -43,7 +43,7 @@ class MolabSingleGpuSmokeTests(unittest.TestCase):
                 "cuda_devices": [0],
                 "batch_size": BATCH_SIZE,
             },
-            "model": {"structural_blocks": STRUCTURAL_BLOCKS},
+            "model": MODEL_ARCHITECTURE.copy(),
             "feature_policy": {"schema_id": FEATURE_SCHEMA},
         }
         serialized = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode("utf-8")
@@ -155,6 +155,30 @@ class MolabSingleGpuSmokeTests(unittest.TestCase):
         with self.assertRaises(RunError):
             self._run()
         self.assertEqual(marker.read_text(encoding="utf-8"), "existing owner data")
+        self.assertEqual(self.runner_calls, [])
+
+    def test_changed_model_architecture_is_rejected_before_native_training(self):
+        def wrong_architecture_builder(*args):
+            manifest, provenance = self._manifest_builder(*args)
+            manifest["model"]["wire_dim"] = 32
+            serialized = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode("utf-8")
+            provenance["manifest_sha256"] = hashlib.sha256(serialized).hexdigest()
+            return manifest, provenance
+
+        with self.assertRaises(RunError):
+            self._run(manifest_builder=wrong_architecture_builder)
+        self.assertFalse(self.checkpoint_dir.exists())
+        self.assertEqual(self.runner_calls, [])
+
+    def test_input_slot_provenance_mismatch_is_rejected_before_native_training(self):
+        def wrong_slot_builder(*args):
+            manifest, provenance = self._manifest_builder(*args)
+            provenance["model_input_slots"] = MODEL_INPUT_COUNT - 1
+            return manifest, provenance
+
+        with self.assertRaises(RunError):
+            self._run(manifest_builder=wrong_slot_builder)
+        self.assertFalse(self.checkpoint_dir.exists())
         self.assertEqual(self.runner_calls, [])
 
     def test_two_gpu_manifest_is_rejected_before_native_training(self):

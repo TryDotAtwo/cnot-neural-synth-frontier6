@@ -24,6 +24,15 @@ TARGET_ATTEMPTS = 250_000  # Historical maximum, only used when explicitly reque
 DEFAULT_TARGET_ATTEMPTS = 2
 INVOCATION_ATTEMPTS = 2
 BATCH_SIZE = 4
+MODEL_ARCHITECTURE: dict[str, int] = {
+    "wire_dim": 744,
+    "pair_dim": 186,
+    "structural_blocks": 8,
+    "attention_heads": 8,
+    "feedforward_dim": 1488,
+    "fusion_blocks": 2,
+    "basis_proposal_hidden_dim": 256,
+}
 CHECKPOINT_EVERY = 25_000
 PROFILE_SCHEMA = "cnot103_feature_context_profile_v2"
 SOURCE_REPOSITORY = "TryDotAtwo/cnot-neural-synth-frontier6"
@@ -295,15 +304,7 @@ def build_manifest(
             "evaluations": None,
             "max_bytes": None,
         },
-        "model": {
-            "wire_dim": 744,
-            "pair_dim": 186,
-            "structural_blocks": 8,
-            "attention_heads": 8,
-            "feedforward_dim": 1488,
-            "fusion_blocks": 2,
-            "basis_proposal_hidden_dim": 256,
-        },
+        "model": dict(MODEL_ARCHITECTURE),
         "optimizer": {
             "learning_rate": 0.0001,
             "beta1": 0.9,
