@@ -1548,14 +1548,21 @@ def compare_quality(
 
 
 def validate_training_result(
-    report: object, expected_start: int, expected_end: int
+    report: object,
+    expected_start: int,
+    expected_end: int,
+    expected_cuda_devices: tuple[int, ...] = (0, 1),
 ) -> None:
+    if not isinstance(expected_cuda_devices, tuple) or not expected_cuda_devices or any(
+        type(device) is not int or device < 0 for device in expected_cuda_devices
+    ) or len(set(expected_cuda_devices)) != len(expected_cuda_devices):
+        raise RunError("expected CUDA device contract is invalid")
     if not isinstance(report, dict) or report.get("schema") != "cnot103_training_result_v1":
         raise RunError("training report schema is invalid")
     if (
         report.get("model_parameters") != MODEL_PARAMETERS
         or report.get("feature_model_inputs") != MODEL_INPUTS
-        or report.get("cuda_devices") != [0, 1]
+        or report.get("cuda_devices") != list(expected_cuda_devices)
     ):
         raise RunError("training model, input, or GPU contract differs")
     start = report.get("start_progress")
