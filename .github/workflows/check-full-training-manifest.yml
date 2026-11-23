@@ -82,6 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path native/Cargo.toml --lib frozen_data::tests::export_cpu_validator_fixture_for_ci
+          cargo test --locked --manifest-path native/Cargo.toml --lib cuda_discovery_tests
           cargo build --locked --manifest-path native/Cargo.toml --bin cnot103-validate-data
           fixture_sha256="$(cat "$RUNNER_TEMP/cnot103-loader-fixture.sha256")"
           "$CARGO_TARGET_DIR/debug/cnot103-validate-data" --test-fixture "$CNOT103_TEST_FIXTURE_PATH" "$fixture_sha256"

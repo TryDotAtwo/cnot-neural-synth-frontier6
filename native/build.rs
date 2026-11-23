@@ -1,5 +1,8 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+#[path = "build_support/cuda_discovery.rs"]
+mod cuda_discovery;
 use std::process::Command;
 
 fn main() {
@@ -48,6 +51,7 @@ fn main() {
         "CUDA_PATH",
         "CUDA_HOME",
         "CUDAToolkit_ROOT",
+        "CUDA_TOOLKIT_ROOT_DIR",
         "CUDACXX",
         "CMAKE_CUDA_COMPILER",
         "CNOT103_CUDA_ARCHITECTURES",
@@ -65,6 +69,9 @@ fn main() {
     let mut config = cmake::Config::new("cuda");
     config.define("CMAKE_BUILD_TYPE", "Release");
     config.define("BUILD_TESTING", "OFF");
+    if let Some(root) = cuda_roots().into_iter().next() {
+        config.define("CUDAToolkit_ROOT", root.display().to_string());
+    }
     config.define(
         "CMAKE_PREFIX_PATH",
         torch_cmake_prefix().display().to_string(),
@@ -132,45 +139,23 @@ fn torch_cmake_prefix() -> PathBuf {
 fn cuda_runtime_lib_dir() -> Option<PathBuf> {
     let target_os = env::var("CARGO_CFG_TARGET_OS").ok()?;
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").ok()?;
-    let candidates: &[&str] = match (target_os.as_str(), target_arch.as_str()) {
-        ("windows", "x86_64") => &["lib/x64", "lib"],
-        ("windows", "x86") => &["lib/Win32", "lib"],
-        ("linux", "x86_64") => &["lib64", "targets/x86_64-linux/lib", "lib"],
-        ("linux", "aarch64") => &["lib64", "targets/aarch64-linux/lib", "lib"],
-        ("macos", _) => &["lib"],
-        _ => return None,
-    };
-    for root in cuda_roots() {
-        if let Some(path) = candidates
-            .iter()
-            .map(|relative| root.join(relative))
-            .find(|path| path.is_dir())
-        {
-            return Some(path);
-        }
-    }
-    None
+    cuda_discovery::find_runtime_lib_dir(&cuda_roots(), &target_os, &target_arch)
 }
 
 fn cuda_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for name in ["CUDA_PATH", "CUDA_HOME", "CUDAToolkit_ROOT"] {
-        if let Some(value) = env::var_os(name) {
-            let path = PathBuf::from(value);
-            if path.is_dir() && !roots.contains(&path) {
-                roots.push(path);
-            }
-        }
-    }
-    for name in ["CUDACXX", "CMAKE_CUDA_COMPILER"] {
-        if let Some(value) = env::var_os(name) {
-            if let Some(root) = Path::new(&value).parent().and_then(Path::parent) {
-                let root = root.to_owned();
-                if root.is_dir() && !roots.contains(&root) {
-                    roots.push(root);
-                }
-            }
-        }
-    }
-    roots
+    let explicit = env::var_os("CUDAToolkit_ROOT")
+        .or_else(|| env::var_os("CUDA_TOOLKIT_ROOT_DIR"))
+        .map(PathBuf::from);
+    let compiler = env::var_os("CMAKE_CUDA_COMPILER")
+        .or_else(|| env::var_os("CUDACXX"))
+        .map(PathBuf::from);
+    let home = env::var_os("CUDA_HOME").map(PathBuf::from);
+    let path = env::var_os("CUDA_PATH").map(PathBuf::from);
+
+    cuda_discovery::ordered_toolkit_roots(
+        explicit.as_deref(),
+        compiler.as_deref(),
+        home.as_deref(),
+        path.as_deref(),
+    )
 }

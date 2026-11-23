@@ -1,5 +1,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(test)]
+#[path = "../build_support/cuda_discovery.rs"]
+mod cuda_discovery_tests;
+
 pub mod alphabet;
 pub mod basis_gradient;
 pub mod bilinear;
